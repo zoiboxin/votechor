@@ -1,7 +1,7 @@
 'use client'
-// Cinematic overlay — subtle vignette + animated film grain during play.
+// Cinematic overlay — vignette + animated film grain + zone-entry tint during play.
 // Skipped when reducedEffects is on. Pure CSS, pointer-events-none.
-import { useGameStore } from '@/lib/game-store'
+import { useGameStore, ZONE_ACCENTS } from '@/lib/game-store'
 
 export default function CinematicOverlay() {
   const uiMode = useGameStore((s) => s.uiMode)
@@ -11,12 +11,21 @@ export default function CinematicOverlay() {
   const health = useGameStore((s) => s.hud.health)
   const maxHealth = useGameStore((s) => s.hud.maxHealth)
   const cinematic = useGameStore((s) => s.hud.cinematic)
+  const zoneName = useGameStore((s) => s.hud.zoneName)
 
   if (uiMode !== 'playing' || reduced) return null
   const lowHealth = health / Math.max(1, maxHealth) < 0.3
+  const zoneAccent = ZONE_ACCENTS[zoneName] ?? '#c96f4a'
 
   return (
     <>
+      {/* zone-entry tint wash — re-keyed per zone so the CSS animation replays on entry;
+          vc-zonetint ends at opacity 0 so the wash vanishes until the next zone */}
+      <div
+        key={zoneName}
+        className="pointer-events-none fixed inset-0 z-20"
+        style={{ background: `radial-gradient(ellipse at center, transparent 30%, ${zoneAccent}26 100%)`, animation: 'vc-zonetint 2.4s ease-out forwards' }}
+      />
       {/* vignette — deepens when low health */}
       <div
         className="pointer-events-none fixed inset-0 z-20 transition-opacity duration-700"

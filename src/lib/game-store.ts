@@ -10,7 +10,16 @@ export interface Notification { id: number; text: string; kind: 'info' | 'captur
 
 export interface SquadMember { id: string; name: string; health: number; detained: boolean; dazed: boolean; archetype: string; distance: number }
 
-export interface CompassMarker { kind: 'token' | 'checkpoint' | 'boss' | 'chai' | 'squad'; deg: number; dist: number }
+export interface CompassMarker { kind: 'token' | 'checkpoint' | 'boss' | 'chai' | 'firstaid' | 'squad'; deg: number; dist: number }
+
+/** Zone accent colors — used by the HUD banner and the zone-entry vignette tint. */
+export const ZONE_ACCENTS: Record<string, string> = {
+  'Protest Plaza': '#c96f4a',
+  'Chowk Market': '#b85c3e',
+  'Security Checkpoint': '#7f9a8c',
+  'Grand Avenue': '#c9a86a',
+  'Government District': '#8c1f28',
+}
 
 export interface HudState {
   health: number
@@ -41,6 +50,7 @@ export interface HudState {
   score: number
   compass: { yawDeg: number; markers: CompassMarker[] }
   cinematic: boolean
+  spectating: string | null // teammate name when camera follows them while detained
 }
 
 export interface BossHud {
@@ -117,6 +127,8 @@ export interface GameState {
   joinError: string | null
   roomCode: string | null
   matchMode: 'solo' | 'multiplayer' | null
+  photoMode: boolean
+  photoFilter: number // 0 = off, 1 = poster, 2 = vintage, 3 = noir
 
   setUIMode: (m: UIMode) => void
   setMenuScreen: (s: MenuScreen) => void
@@ -136,6 +148,8 @@ export interface GameState {
   setJoining: (v: boolean, err?: string | null) => void
   setRoomCode: (c: string | null) => void
   setMatchMode: (m: 'solo' | 'multiplayer' | null) => void
+  setPhotoMode: (v: boolean) => void
+  setPhotoFilter: (i: number) => void
 }
 
 const defaultHud: HudState = {
@@ -149,6 +163,7 @@ const defaultHud: HudState = {
   revivedProgress: null, carryingBallot: false, score: 0,
   compass: { yawDeg: 0, markers: [] },
   cinematic: false,
+  spectating: null,
 }
 
 const defaultBoss: BossHud = {
@@ -184,6 +199,8 @@ export const useGameStore = create<GameState>((set) => ({
   joinError: null,
   roomCode: null,
   matchMode: null,
+  photoMode: false,
+  photoFilter: 0,
 
   setUIMode: (m) => set({ uiMode: m }),
   setMenuScreen: (s) => set({ menuScreen: s }),
@@ -205,6 +222,8 @@ export const useGameStore = create<GameState>((set) => ({
   setJoining: (v, err = null) => set({ joining: v, joinError: err }),
   setRoomCode: (c) => set({ roomCode: c }),
   setMatchMode: (m) => set({ matchMode: m }),
+  setPhotoMode: (v) => set({ photoMode: v }),
+  setPhotoFilter: (i) => set({ photoFilter: ((i % 4) + 4) % 4 }),
 }))
 
 // ---- controller bridge: UI calls these, engine registers handlers ----
@@ -219,6 +238,9 @@ export interface UIActions {
   sendEmote: (emote: string) => void
   sendQuickMessage: (id: number) => void
   respawnRequest: () => void
+  photoToggle: () => void
+  photoFilter: () => void
+  photoSnapshot: () => void
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }

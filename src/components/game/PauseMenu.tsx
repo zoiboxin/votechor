@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
-import { Play, Settings, BookOpen, LogOut, Vote } from 'lucide-react'
+import { Play, Settings, BookOpen, LogOut, Vote, Camera } from 'lucide-react'
 import { motion } from 'framer-motion'
 import SettingsPanel from './SettingsPanel'
 import HowToPlay from './HowToPlay'
@@ -48,6 +48,16 @@ export default function PauseMenu() {
         <div className="space-y-2.5">
           <button onClick={resume} className={`${btn} bg-[#2e6e4e] text-[#f5efdc]`}>
             <Play className="h-5 w-5 shrink-0" strokeWidth={2.6} /> Resume Protest
+          </button>
+          <button
+            onClick={() => {
+              resume()
+              // defer so photo mode engages after the mode is back to 'playing'
+              setTimeout(() => uiActions().photoToggle(), 60)
+            }}
+            className={`${btn} bg-[#f2c14e] text-[#1c1a17] hover:bg-[#eab940]`}
+          >
+            <Camera className="h-5 w-5 shrink-0" strokeWidth={2.6} /> Photo Mode
           </button>
           <button onClick={() => setSettingsOpen(true)} className={`${btn} bg-[#f5efdc] text-[#1c1a17] hover:bg-[#efe6c8]`}>
             <Settings className="h-5 w-5 shrink-0" strokeWidth={2.6} /> Settings

@@ -102,9 +102,14 @@ export class Game {
   private reviveTargetId: string | null = null
   private bossActiveLocal = false
   private bossCinematic = { active: false, t: 0, fired: false }
+  private photoMode = false
+  private photoKeyHandler: ((e: KeyboardEvent) => void) | null = null
+  private canvasEl: HTMLCanvasElement | null = null
+  private spectateName: string | null = null
 
   async boot(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
+    this.canvasEl = canvas
     this.engine = new Engine(canvas)
     this.physics.setColliders(this.world.colliders)
     this.worldRenderer = new WorldRenderer(this.world, 'high')
@@ -206,8 +211,18 @@ export class Game {
       sendEmote: (emote) => this.playEmote(emote),
       sendQuickMessage: (id) => { this.net.quickMsg(id); this.store.notify(QUICK_MESSAGES[id] ?? '', 'squad') },
       respawnRequest: () => {},
+      photoToggle: () => this.togglePhotoMode(),
+      photoFilter: () => this.cyclePhotoFilter(),
+      photoSnapshot: () => this.takeSnapshot(),
     })
 
+    this.ensurePhotoKeyHandler()
+    // speech bubbles hide when the speaker is occluded from the camera
+    this.npcs.bubbles.occlusionCheck = (x, y, z) =>
+      this.physics.raycastBlocked(
+        this.engine.camera.position.x, this.engine.camera.position.y, this.engine.camera.position.z,
+        x, y, z,
+      )
     this.engine.start()
     AudioManager.resume()
     AudioManager.startCrowd()
@@ -334,10 +349,12 @@ export class Game {
 
   leaveMatch() {
     if (this.matchEnded) return
+    this.exitPhotoMode(false)
     this.net.leave()
     this.running = false
     this.input.setEnabled(false)
     this.clearOnboarding()
+    this.npcs.bubbles.clear()
     AudioManager.setTheme('menu')
     AudioManager.setCrowdLevel(0.25)
     const st = useGameStore.getState()
@@ -436,6 +453,7 @@ export class Game {
   private onCapture(playerId: string, until: number, message: string) {
     if (!this.player) return
     if (playerId === this.net.playerId || this.offline) {
+      this.exitPhotoMode(false)
       this.player.detain()
       this.stats.detentions++
       this.detainUntil = until
@@ -487,7 +505,7 @@ export class Game {
     const store = useGameStore.getState()
     switch (a) {
       case 'pause':
-        if (store.uiMode === 'playing') { store.setUIMode('paused'); this.input.setEnabled(false) }
+        if (store.uiMode === 'playing') { this.exitPhotoMode(false); store.setUIMode('paused'); this.input.setEnabled(false) }
         else if (store.uiMode === 'paused') { store.setUIMode('playing'); this.input.setEnabled(true) }
         break
       case 'jump': this.pendingOneShot = 'jump'; break
@@ -625,8 +643,12 @@ export class Game {
     this.worldTime += dt
     this.matchTime += dt
 
-    // input
+    // input — apply look deltas to the camera rig (mouse/touch orbit)
     const [ldx, ldy] = this.input.consumeLook()
+    this.camRig.yaw -= ldx
+    this.camRig.pitch = this.photoMode
+      ? Math.max(-0.2, Math.min(1.25, this.camRig.pitch + ldy))
+      : Math.max(-0.55, Math.min(1.15, this.camRig.pitch + ldy))
     const oneShot = this.pendingOneShot
     this.pendingOneShot = null
     const boosted = this.worldTime < this.player.speedBoostUntil
@@ -917,15 +939,29 @@ export class Game {
     const playing = store.uiMode === 'playing'
     if (playing) {
       this.player.render(dt)
-      this.npcs.update(dt, 1, this.worldTime)
+      this.npcs.update(dt, 1, this.worldTime, this.player.pos.x, this.player.pos.z)
       this.items.update(dt, this.worldTime, this.worldTime)
+    } else {
+      this.npcs.update(dt, 1, this.worldTime)
     }
 
-    // camera
-    const focus = this.player.pos
-    if (!this.bossCinematic.active) {
-      const [ldx, ldy] = playing ? [0, 0] : [0, 0]
-      this.camRig.update(dt, focus, ldx, ldy)
+    // camera — spectate a live teammate while detained; photo mode orbits the player
+    let focus: THREE.Vector3 = this.player.pos
+    this.spectateName = null
+    if (this.player.isDetained) {
+      let bestDist = Infinity
+      for (const [, r] of this.remotePlayers) {
+        if (r.detained) continue
+        const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
+        if (d < bestDist) { bestDist = d; focus = r.rig.group.position; this.spectateName = r.name }
+      }
+    }
+    if (this.photoMode) {
+      this.camRig.yaw -= dt * 0.1 // slow cinematic drift when the mouse is still
+      this.camRig.targetDistance = 7.2
+      this.camRig.update(dt, focus, 0, 0)
+    } else if (!this.bossCinematic.active) {
+      this.camRig.update(dt, focus, 0, 0)
     }
     this.engine.trackSun(focus)
     const fog = this.engine.scene.fog as THREE.Fog
@@ -1015,6 +1051,16 @@ export class Game {
       if (d < 90 && (!bestTok || d < bestTok.d)) bestTok = { d, x: it.def.x, z: it.def.z }
     }
     if (bestTok) markers.push({ kind: 'token', ...rel(bestTok.x, bestTok.z) })
+    // hurt? point to the nearest first-aid kit
+    if (p.health < 45) {
+      let bestFa: { d: number; x: number; z: number } | null = null
+      for (const it of this.items.items) {
+        if (it.taken || it.def.type !== 'firstaid') continue
+        const d = Math.hypot(it.def.x - p.pos.x, it.def.z - p.pos.z)
+        if (d < 130 && (!bestFa || d < bestFa.d)) bestFa = { d, x: it.def.x, z: it.def.z }
+      }
+      if (bestFa) markers.push({ kind: 'firstaid', ...rel(bestFa.x, bestFa.z) })
+    }
     // next unactivated checkpoint
     const nextCp = this.world.checkpoints.find(cp => !this.activatedCheckpoints.has(cp.id))
     if (nextCp) markers.push({ kind: 'checkpoint', ...rel(nextCp.x, nextCp.z) })
@@ -1037,6 +1083,7 @@ export class Game {
       speedBoostUntil: p.speedBoostUntil, carryingBallot: this.carryingBallot,
       score: this.stats.tokens * 45 + this.stats.checkpoints * 60,
       compass: { yawDeg, markers },
+      spectating: p.isDetained ? this.spectateName : null,
     })
   }
 
@@ -1135,6 +1182,7 @@ export class Game {
     const p = this.player
     if (!p) return
     const store = useGameStore.getState()
+    this.exitPhotoMode(false)
     this.input.setEnabled(false)
     this.running = false
     const detentions = this.stats.detentions
@@ -1225,7 +1273,92 @@ export class Game {
     AudioManager.setCrowdLevel(0.2)
   }
 
+  // ================= photo mode =================
+  private static PHOTO_FILTERS = [
+    '', // protest natural
+    'saturate(1.4) contrast(1.14)', // poster punch
+    'sepia(0.5) contrast(1.06) saturate(1.25)', // vintage press photo
+    'grayscale(1) contrast(1.28)', // noir committee
+  ]
+
+  private ensurePhotoKeyHandler() {
+    if (this.photoKeyHandler) return
+    this.photoKeyHandler = (e: KeyboardEvent) => {
+      const store = useGameStore.getState()
+      if (e.code === 'KeyP') {
+        if (store.uiMode === 'playing') { e.preventDefault(); this.togglePhotoMode() }
+        return
+      }
+      if (this.photoMode && store.uiMode === 'playing') {
+        if (e.code === 'KeyO') { e.preventDefault(); this.cyclePhotoFilter() }
+        else if (e.code === 'KeyK') { e.preventDefault(); this.takeSnapshot() }
+      }
+    }
+    window.addEventListener('keydown', this.photoKeyHandler)
+  }
+
+  private removePhotoKeyHandler() {
+    if (this.photoKeyHandler) window.removeEventListener('keydown', this.photoKeyHandler)
+    this.photoKeyHandler = null
+  }
+
+  togglePhotoMode() {
+    const store = useGameStore.getState()
+    if (this.photoMode) { this.exitPhotoMode(true); return }
+    if (!this.player || this.matchEnded || this.player.isDetained || store.uiMode !== 'playing') return
+    this.photoMode = true
+    store.setPhotoMode(true)
+    store.setPhotoFilter(0)
+    this.applyPhotoFilter(0)
+    if (this.player.state === 'normal') this.player.state = 'frozen'
+    this.camRig.targetDistance = 7.2
+    AudioManager.play('uiClick')
+    store.notify('PHOTO MODE — mouse orbits · O filter · K snapshot · P exit', 'info')
+  }
+
+  private exitPhotoMode(restorePlayer: boolean) {
+    if (!this.photoMode) return
+    this.photoMode = false
+    const store = useGameStore.getState()
+    store.setPhotoMode(false)
+    this.applyPhotoFilter(0)
+    if (this.canvasEl) this.canvasEl.style.filter = ''
+    this.camRig.targetDistance = 5.4
+    if (restorePlayer && this.player && this.player.state === 'frozen') this.player.state = 'normal'
+  }
+
+  private applyPhotoFilter(idx: number) {
+    if (!this.canvasEl) return
+    this.canvasEl.style.filter = Game.PHOTO_FILTERS[idx % Game.PHOTO_FILTERS.length]
+  }
+
+  private cyclePhotoFilter() {
+    if (!this.photoMode) return
+    const next = (useGameStore.getState().photoFilter + 1) % Game.PHOTO_FILTERS.length
+    useGameStore.getState().setPhotoFilter(next)
+    this.applyPhotoFilter(next)
+    const names = ['Natural', 'Poster Punch', 'Vintage Press', 'Committee Noir']
+    useGameStore.getState().notify(`Filter: ${names[next]}`, 'info')
+    AudioManager.play('uiClick')
+  }
+
+  private takeSnapshot() {
+    if (!this.photoMode || !this.engine) return
+    try {
+      const url = this.engine.renderer.domElement.toDataURL('image/png')
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `votechor_photo_${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.png`
+      a.click()
+      useGameStore.getState().notify('📸 Snapshot saved — courtesy of the Protest Press Club!', 'achievement')
+      AudioManager.play('token')
+    } catch {
+      useGameStore.getState().notify('Snapshot confiscated by the committee. Try again.', 'warning')
+    }
+  }
+
   dispose() {
+    this.removePhotoKeyHandler()
     this.unsubStore?.()
     this.net.leave()
     this.input?.dispose()

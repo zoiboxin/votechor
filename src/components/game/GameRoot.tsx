@@ -18,6 +18,7 @@ import TouchControls from './TouchControls'
 import BigMap from './BigMap'
 import SquadPanel from './SquadPanel'
 import ReconnectOverlay from './ReconnectOverlay'
+import PhotoHud from './PhotoHud'
 
 // Global one-shot guards (StrictMode double-mount safe)
 let engineBooted = false
@@ -77,6 +78,7 @@ function LoadingScreen() {
 export default function GameRoot() {
   const minimapBufferRef = useRef<HTMLCanvasElement>(null)
   const uiMode = useGameStore((s) => s.uiMode)
+  const photoMode = useGameStore((s) => s.photoMode)
 
   useEffect(() => {
     const st = useGameStore.getState()
@@ -170,6 +172,7 @@ export default function GameRoot() {
   }, [])
 
   const inMatch = uiMode === 'playing' || uiMode === 'paused'
+  const photoActive = inMatch && photoMode && uiMode === 'playing'
 
   return (
     <>
@@ -186,6 +189,7 @@ export default function GameRoot() {
         @keyframes vc-march { from { transform: translateX(-60px); } to { transform: translateX(100vw); } }
         @keyframes vc-march-bob { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-3px) rotate(2deg); } }
         @keyframes vc-shine { 0% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(240%) skewX(-18deg); } }
+        @keyframes vc-zonetint { 0% { opacity: 0; } 14% { opacity: 1; } 100% { opacity: 0; } }
         .vc-scroll::-webkit-scrollbar { width: 10px; }
         .vc-scroll::-webkit-scrollbar-track { background: rgba(28,26,23,0.08); border-radius: 8px; }
         .vc-scroll::-webkit-scrollbar-thumb { background: #8c1f28; border-radius: 8px; border: 2px solid #f5efdc; }
@@ -211,8 +215,9 @@ export default function GameRoot() {
       {/* Boot / match loading */}
       {(uiMode === 'boot' || uiMode === 'loading') && <LoadingScreen />}
 
-      {/* In-match HUD (kept mounted while paused so the world stays readable behind the menu) */}
-      {inMatch && (
+      {/* In-match HUD (kept mounted while paused so the world stays readable behind the menu)
+          — hidden entirely during photo mode, which gets its own viewfinder overlay */}
+      {inMatch && !photoActive && (
         <>
           <Hud minimapBuffer={minimapBufferRef} />
           <Compass />
@@ -226,6 +231,8 @@ export default function GameRoot() {
           {uiMode === 'playing' && <TouchControls />}
         </>
       )}
+
+      {photoActive && <PhotoHud />}
 
       {uiMode === 'paused' && <PauseMenu />}
       {uiMode === 'ended' && <EndScreen />}

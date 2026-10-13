@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/lib/game-store'
-import { uiActions } from '@/lib/game-store'
+import { uiActions, ZONE_ACCENTS } from '@/lib/game-store'
 import { ITEM_CONFIG, CAPTURE_MESSAGES } from '@/game/shared/constants'
 import {
   Heart, Zap, Vote, Users, Wifi, WifiOff, Map as MapIcon, Hand, Star,
@@ -79,6 +79,7 @@ function SquadRow({ m }: { m: { id: string; name: string; health: number; detain
 
 function DetainedOverlay() {
   const detainRemain = useGameStore((s) => s.hud.detainRemain)
+  const spectating = useGameStore((s) => s.hud.spectating)
   // fresh random message every time this overlay mounts (i.e. every new detention)
   const [message] = useState(() => CAPTURE_MESSAGES[Math.floor(Math.random() * CAPTURE_MESSAGES.length)])
   return (
@@ -86,16 +87,32 @@ function DetainedOverlay() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 bg-[#8c1f28]/30 backdrop-blur-[2px]"
+      className={`pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 ${spectating ? 'bg-[#8c1f28]/12' : 'bg-[#8c1f28]/30 backdrop-blur-[2px]'}`}
     >
-      <div className="absolute inset-0 shadow-[inset_0_0_120px_rgba(140,31,40,0.55)]" />
-      <div className="animate-[vc-stamp-in_0.4s_ease-out] rounded-xl border-4 border-red-600 bg-red-600/10 px-8 py-3 text-5xl font-black uppercase tracking-tight text-red-600 shadow-[0_0_0_2px_rgba(255,255,255,0.4)_inset,6px_6px_0_rgba(28,26,23,0.5)] sm:text-7xl"
+      <div className="absolute inset-0 shadow-[inset_0_0_120px_rgba(140,31,40,0.45)]" />
+      <div className={`animate-[vc-stamp-in_0.4s_ease-out] rounded-xl border-4 border-red-600 bg-red-600/10 px-8 py-3 font-black uppercase tracking-tight text-red-600 shadow-[0_0_0_2px_rgba(255,255,255,0.4)_inset,6px_6px_0_rgba(28,26,23,0.5)] ${spectating ? 'text-4xl sm:text-5xl' : 'text-5xl sm:text-7xl'}`}
         style={{ textShadow: '2px 2px 0 rgba(28,26,23,0.35)' }}>
         DETAINED
       </div>
-      <p className="max-w-md px-6 text-center text-sm font-bold uppercase tracking-wide text-[#1c1a17] drop-shadow-[1px_1px_0_#f5efdc] sm:text-base">
-        {message}
-      </p>
+      {!spectating && (
+        <p className="max-w-md px-6 text-center text-sm font-bold uppercase tracking-wide text-[#1c1a17] drop-shadow-[1px_1px_0_#f5efdc] sm:text-base">
+          {message}
+        </p>
+      )}
+      {spectating ? (
+        <div className="flex flex-col items-center gap-2">
+          <div className="flex items-center gap-2 rounded-full border-2 border-[#4ecdc4] bg-[#1c1a17]/85 px-4 py-1.5 text-xs font-black uppercase tracking-tight text-[#4ecdc4] shadow-[3px_3px_0_rgba(28,26,23,0.6)]">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#4ecdc4] opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#4ecdc4]" />
+            </span>
+            SPECTATING {spectating}
+          </div>
+          <span className="rounded-full bg-[#1c1a17]/70 px-3 py-0.5 text-[9px] font-bold uppercase tracking-widest text-[#f5efdc]/85">
+            The revolution continues through them
+          </span>
+        </div>
+      ) : null}
       <div className="rounded-full border-2 border-[#1c1a17]/80 bg-[#1c1a17] px-4 py-1.5 text-sm font-black tabular-nums text-[#f2c14e]">
         Release in {Math.ceil(detainRemain)}s — paperwork is being stamped
       </div>
@@ -263,11 +280,14 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
               exit={{ opacity: 0, y: -8 }}
               className="text-center"
             >
-              <div className="inline-block rounded-xl border-2 border-[#1c1a17]/80 bg-[#f5efdc]/95 px-5 py-1.5 shadow-[4px_4px_0_rgba(28,26,23,0.8)]">
-                <div className="text-base font-black uppercase tracking-tight text-[#1c1a17] sm:text-xl">{hud.zoneName}</div>
-                {hud.zoneHint && (
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-[#8c1f28]">{hud.zoneHint}</div>
-                )}
+              <div className="inline-block overflow-hidden rounded-xl border-2 border-[#1c1a17]/80 bg-[#f5efdc]/95 shadow-[4px_4px_0_rgba(28,26,23,0.8)]">
+                <div className="h-1.5 w-full" style={{ background: ZONE_ACCENTS[hud.zoneName] ?? '#c96f4a' }} />
+                <div className="px-5 py-1.5">
+                  <div className="text-base font-black uppercase tracking-tight text-[#1c1a17] sm:text-xl">{hud.zoneName}</div>
+                  {hud.zoneHint && (
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-[#8c1f28]">{hud.zoneHint}</div>
+                  )}
+                </div>
               </div>
             </motion.div>
           )}

@@ -207,3 +207,44 @@ Stage Summary:
 - Round 3 shipped: server-validated cosmetic unlocks (6 hats, 3 new 3D renders), reconnect overlay + auto-rejoin with infinite retry, onboarding tips, XP ring/marchers/shine styling, and a major progression-wiping bootstrap bug fixed + DB deduped
 - Verified end-to-end in browser: locks render + enforced by API, all hats render in 3D, kill→overlay→restart→auto-rejoin loop, profile persistence across reloads
 - Risks/next: CharacterSelect achievement fetch is mount-once (unlock doesn't live-refresh mid-session — reload picks it up); remote-player new-hat rendering untested with 2 clients (flows through same rig code); consider cosmetics section in HowToPlay; game-server restarts must use the double-fork pattern
+
+---
+Task ID: 6
+Agent: Z.ai Code (cron webDevReview round 4)
+Task: QA assessment + mouse-look critical bugfix + speech bubbles + spectate mode + photo mode + zone tint + first-aid compass + styling polish
+
+Work Log:
+- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002 via double-fork, Caddy :81); menu/solo boot/movement/multiplayer re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+- BUGFIX (CRITICAL) — mouse-look was completely dead since round 1:
+  * game.ts fixedUpdate called `input.consumeLook()` but DISCARDED the result; renderUpdate passed hardcoded `[0,0]` to camRig.update → camRig.yaw/pitch NEVER changed from mouse input (camera was permanently fixed behind player)
+  * Fixed: fixedUpdate now applies consumed look deltas to camRig.yaw/pitch (clamped; wider pitch range -0.2..1.25 in photo mode)
+  * Verified: synthetic lookDx injection rotates camRig.yaw 0 → 0.6; camera orbits correctly
+- FEATURE — NPC satire speech bubbles (master prompt §14 humor):
+  * src/game/bubbles.ts (new): SpeechBubbleSystem — pooled canvas-sprite paper bubbles (ink border, tail, word-wrap, pop-in animation, bob, fade), one bubble per NPC key, POOL_MAX 10
+  * NPC_LINES pools: 8 police lines, 4 chase lines ("STOP! You are under arrest for jogging!"), 5 security lines, 5 guard lines; chasing officers get chase-specific lines at shorter duration
+  * npcs.ts: bubbles group added to NPC group; update(dt, alpha, t, px?, pz?) spawns a bubble every 3.6-7s on a random NPC within 34m of player; game.ts passes player pos (render loop only, both playing + paused)
+  * Occlusion: bubbles hide when a physics raycast (camera → anchor) is blocked (walls/buildings) — wired via bubbles.occlusionCheck in game.ts boot
+  * Verified in browser: "No assembly of more than one (1) citizen." rendered above a market patrol officer, correctly hidden when behind buildings
+- FEATURE — Spectate mode while detained (multiplayer):
+  * game.ts renderUpdate: when detained, camera focus switches to nearest non-detained teammate (smooth camRig lerp), tracks spectateName; syncHud patches hud.spectating (8Hz)
+  * DetainedOverlay: SPECTATING chip (live ping dot, teammate name) + "The revolution continues through them" caption; DETAINED stamp shrinks and blur removed so the teammate stays visible; offline/solo unchanged
+  * Verified with 2 live sessions in one public room: fake capture → camera flew to teammate + chip rendered; release → cleared (8Hz race noted, correct on next sync)
+- FEATURE — Photo Mode (P key):
+  * game.ts: window keydown handler (P toggle, O filter, K snapshot — gated by uiMode==='playing'); player frozen ('frozen' state), camera auto-drifts 0.1 rad/s + full mouse orbit, distance 7.2 (restored 5.4 on exit)
+  * engine.ts: preserveDrawingBuffer:true for snapshot support
+  * 4 filters on the WebGL canvas: Natural / Poster Punch (saturate 1.4) / Vintage Press (sepia) / Committee Noir (grayscale); O cycles with toast
+  * K downloads PNG via canvas.toDataURL → anchor download (`votechor_photo_<timestamp>.png`) + "Protest Press Club" toast
+  * PhotoHud.tsx (new): viewfinder frame, corner ticks, camera badge + filter chip, EXIT/FILTER/SNAPSHOT buttons (touch-friendly), key hints; GameRoot hides ALL HUD/companions when photoActive and renders PhotoHud instead
+  * PauseMenu: new "Photo Mode" button (yellow, camera icon) → resume + deferred toggle (touch access); exits cleanly on capture/detention/pause/leave/finalize
+  * Verified: P/O/K keys + pause-menu entry + snapshot download all work; filters apply visually
+- FEATURE — Zone-entry styling: ZONE_ACCENTS map (game-store.ts) — Hud zone banner got accent color top strip; CinematicOverlay renders zone-tinted radial wash re-keyed per zone (vc-zonetint keyframe fades 0→1→0 over 2.4s, pure CSS, no state); verified banner strip in Security Checkpoint
+- FEATURE — First-aid compass markers: when health < 45, nearest untaken firstaid within 130m gets a 'firstaid' marker (pink Cross icon + edge cling); verified markers ["token:44m","firstaid:31m","checkpoint:70m","squad:0m"] with health forced to 30
+- FIX — CharacterSelect hat unlocks now live-refresh: achievements refetch on mount + window focus + 15s interval (was mount-once)
+- HowToPlay controls table: added P (Photo Mode) row
+- OPS: game-server restarted (double-fork pattern) to flush 2 stale zombie sessions polluting the public room; reconnect system auto-rejoined both times (re-verified)
+- All checks green: eslint (fixed react-hooks/set-state-in-effect in CinematicOverlay by going stateless), tsc (game/UI/lib), zero console errors in QA sessions
+
+Stage Summary:
+- Round 4 shipped: CRITICAL mouse-look fix (camera was permanently frozen since round 1 — biggest gameplay bug yet), world satire speech bubbles with wall-occlusion, multiplayer spectate-while-detained, full Photo Mode (orbit/filters/PNG export, pause-menu + touch access), zone accent banners + tint washes, first-aid compass guidance, live hat-unlock refresh
+- Verified end-to-end in browser incl. 2-session multiplayer spectate; snapshot download confirmed; lint/tsc clean
+- Risks/next: preserveDrawingBuffer has minor GPU cost (acceptable); bubbles max 1 concurrent per NPC (fine); consider Photo Mode zoom via wheel, achievements toast integration for hats, squad respawn/emote propagation polish; headless QA env still ~3.5fps (sim slowed) — real browsers unaffected

@@ -1,0 +1,702 @@
+     1→     1→// VoteChor game orchestrator — owns the engine, entities, net, and match flow.
+     2→     2→'use client'
+     3→     3→import * as THREE from 'three'
+     4→     4→import { Engine } from './engine'
+     5→     5→import { PhysicsWorld } from './physics'
+     6→     6→import { WorldRenderer } from './world'
+     7→     7→import { InputManager } from './input'
+     8→     8→import { ThirdPersonCamera } from './camera'
+     9→     9→import { PlayerController } from './player'
+    10→    10→import { CharacterRig } from './character'
+    11→    11→import { NpcSystem, VehicleSystem } from './npcs'
+    12→    12→import { ItemSystem } from './items'
+    13→    13→import { BossClient } from './boss'
+    14→    14→import { NetClient, type JoinAck } from './net'
+    15→    15→import { AudioManager } from './audio'
+    16→    16→import { FxSystem } from './fx'
+    17→    17→import { buildWorldDef } from './shared/world-def'
+    18→    18→import { createNpcStates, tickNpc, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
+    19→    19→import { createBossBrain, tickBoss, grabBallot, depositBallot, registerBossHit, type BossBrain } from './shared/boss-brain'
+    20→    20→import {
+    21→    21→  MOVE, TOKENS_NEEDED, DETENTION_SECONDS, MATCH_TIME_LIMIT, ITEM_CONFIG, INVENTORY_MAX,
+    22→    22→  archetypeById, XP_TABLE, levelFromXp, CAPTURE_MESSAGES, RANDOM_NOTIFICATIONS, BOSS_NAME,
+    23→    23→  BOSS_PHASE_NAMES,
+    24→    24→} from './shared/constants'
+    25→    25→import type { AnimName, BossNetState, ItemType } from './shared/types'
+    26→    26→import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
+    27→    27→
+    28→    28→export const QUICK_MESSAGES = [
+    29→    29→  'Chai break, anyone?', 'Follow me!', 'POLICE! Scatter!', 'Nice one!', 'Help! Detained!',
+    30→    30→  'To the flyover!', 'Uncle Ji approves.', 'Form a squad!', 'The gate needs votes!', 'Boss time!',
+    31→    31→]
+    32→    32→
+    33→    33→export const EMOTES = ['wave', 'salute', 'dance', 'facepalm', 'flex', 'cry']
+    34→    34→
+    35→    35→interface MatchStats {
+    36→    36→  tokens: number
+    37→    37→  checkpoints: number
+    38→    38→  rescues: number
+    39→    39→  revives: number
+    40→    40→  itemsCollected: number
+    41→    41→  detentions: number
+    42→    42→  bossHits: number
+    43→    43→  distractions: number
+    44→    44→}
+    45→    45→
+    46→    46→export class Game {
+    47→    47→  private engine!: Engine
+    48→    48→  private physics = new PhysicsWorld()
+    49→    49→  private worldRenderer!: WorldRenderer
+    50→    50→  private input!: InputManager
+    51→    51→  private camRig!: ThirdPersonCamera
+    52→    52→  private player: PlayerController | null = null
+    53→    53→  private npcs!: NpcSystem
+    54→    54→  private vehicles!: VehicleSystem
+    55→    55→  private items!: ItemSystem
+    56→    56→  private bossClient = new BossClient()
+    57→    57→  private fx = new FxSystem()
+    58→    58→  private net = new NetClient()
+    59→    59→  private world = buildWorldDef()
+    60→    60→
+    61→    61→  private mode: 'solo' | 'multiplayer' | null = null
+    62→    62→  private offline = false
+    63→    63→  private lastRoomCode: string | null = null
+    64→    64→  private reconnectNotified = false
+    65→    65→  private onboardingTimers: ReturnType<typeof setTimeout>[] = []
+    66→    66→  private serverMatchStart: number | null = null
+    67→    67→  private running = false
+    68→    68→  private worldTime = 0
+    69→    69→  private matchTime = 0
+    70→    70→  private stateSendAccum = 0
+    71→    71→  private hudAccum = 0
+    72→    72→  private store = useGameStore.getState()
+    73→    73→  private unsubStore: (() => void) | null = null
+    74→    74→
+    75→    75→  // local sim (offline)
+    76→    76→  private localNpcBrains: NpcBrainState[] = []
+    77→    77→  private localBoss: BossBrain | null = null
+    78→    78→  private localBossAccum = 0
+    79→    79→
+    80→    80→  // match state
+    81→    81→  private tokens = 0
+    82→    82→  private tokensNeeded = TOKENS_NEEDED
+    83→    83→  private gateOpen = false
+    84→    84→  private activatedCheckpoints = new Set<number>()
+    85→    85→  private inventory: { uid: string; type: ItemType }[] = []
+    86→    86→  private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0 }
+    87→    87→  private detainUntil = 0
+    88→    88→  private carryingBallot = false
+    89→    89→  private carryingBallotId: string | null = null
+    90→    90→  private remotePlayers = new Map<string, { rig: import('./character').CharacterRig; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; health: number; detained: boolean }>()
+    91→    91→  private serverNpcRys: Record<string, number> = {}
+    92→    92→  private lastTokenPos = { x: 0, z: 0 }
+    93→    93→  private humorTimer = 30
+    94→    94→  private minimapCanvas: HTMLCanvasElement | null = null
+    95→    95→  private matchEnded = false
+    96→    96→  private endHandled = false
+    97→    97→  private archetype = 'student'
+    98→    98→  private lastSearchlightRys: Record<string, number> = {}
+    99→    99→  private localSearchlightAngles: Record<string, number> = {}
+   100→   100→  private interacting = false
+   101→   101→  private reviveProgress = 0
+   102→   102→  private reviveTargetId: string | null = null
+   103→   103→  private bossActiveLocal = false
+   104→   104→  private bossCinematic = { active: false, t: 0, fired: false }
+   105→   105→
+   106→   106→  async boot(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
+   107→   107→    this.minimapCanvas = minimap
+   108→   108→    this.engine = new Engine(canvas)
+   109→   109→    this.physics.setColliders(this.world.colliders)
+   110→   110→    this.worldRenderer = new WorldRenderer(this.world, 'high')
+   111→   111→    this.engine.scene.add(this.worldRenderer.group)
+   112→   112→    this.engine.scene.add(this.bossClient.group)
+   113→   113→    this.engine.scene.add(this.fx.group)
+   114→   114→
+   115→   115→    this.input = new InputManager(canvas)
+   116→   116→    this.input.onOneShot = (a) => this.handleOneShot(a)
+   117→   117→    this.camRig = new ThirdPersonCamera(this.engine.camera, this.physics)
+   118→   118→
+   119→   119→    this.npcs = new NpcSystem(this.world, this.physics, 'high')
+   120→   120→    this.engine.scene.add(this.npcs.group)
+   121→   121→    this.vehicles = new VehicleSystem(this.world)
+   122→   122→    this.engine.scene.add(this.vehicles.group)
+   123→   123→    this.vehicles.onPlayerHit = (kind, x, z, dmg) => this.handleVehicleHit(kind, x, z, dmg)
+   124→   124→
+   125→   125→    this.items = new ItemSystem(this.world.items, this.physics)
+   126→   126→    this.engine.scene.add(this.items.group)
+   127→   127→
+   128→   128→    this.localNpcBrains = createNpcStates(this.world.npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol.map(p => ({ ...p })) })))
+   129→   129→    for (const sl of this.world.searchlights) this.localSearchlightAngles[sl.id] = sl.ry
+   130→   130→
+   131→   131→    // net events
+   132→   132→    this.net.ev = {
+   133→   133→      onJoinAck: (ack) => this.onJoinAck(ack),
+   134→   134→      onPlayers: (players) => this.onServerPlayers(players),
+   135→   135→      onNpcs: (npcs) => { this.npcs.applyServerState(npcs); for (const n of npcs) this.serverNpcRys[n.id] = n.ry },
+   136→   136→      onItems: (items) => this.items.applyServerState(items, this.worldTime),
+   137→   137→      onBoss: (boss, ballots) => this.onServerBoss(boss, ballots),
+   138→   138→      onCapture: (playerId, until, message) => this.onCapture(playerId, until, message),
+   139→   139→      onRelease: (playerId, x, z) => this.onRelease(playerId, x, z),
+   140→   140→      onCheckpoint: (cp, byName, total) => this.onCheckpoint(cp, byName, total),
+   141→   141→      onProjectile: (p) => this.items.spawnRemoteProjectile(p.id, p.type, p.x, p.y, p.z, p.vx, p.vy, p.vz),
+   142→   142→      onEmote: (playerId, emote) => this.playRemoteEmote(playerId, emote),
+   143→   143→      onPlayerLeft: (playerId, name) => { this.removeRemote(playerId); this.store.notify(`${name} left the protest`, 'info') },
+   144→   144→      onPlayerJoined: (_playerId, name) => this.store.notify(`${name} joined the protest!`, 'squad'),
+   145→   145→      onHealth: (playerId, health, dazed) => this.onRemoteHealth(playerId, health, dazed),
+   146→   146→      onDamage: (playerId, amount, kind) => { if (playerId === this.net.playerId) this.applyDamage(amount, kind) },
+   147→   147→      onMatchEnd: (payload) => this.handleMatchEnd(payload),
+   148→   148→      onTokens: (count) => { this.tokens = count; this.checkGate() },
+   149→   149→      onGate: (open) => this.setGate(open),
+   150→   150→      onPing: (ms) => this.store.patchHud({ ping: ms }),
+   151→   151→      onDisconnect: () => {
+   152→   152→        if (this.running && !this.offline) {
+   153→   153→          if (this.mode === 'multiplayer') {
+   154→   154→            this.reconnectNotified = true
+   155→   155→            this.store.notify('Connection lost — attempting to reconnect…', 'warning')
+   156→   156→          } else {
+   157→   157→            this.store.notify('Connection lost — switching to offline mode', 'warning')
+   158→   158→          }
+   159→   159→          this.offline = true
+   160→   160→          this.store.patchHud({ connection: 'offline' })
+   161→   161→        }
+   162→   162→      },
+   163→   163→      onConnect: () => {
+   164→   164→        if (this.running) {
+   165→   165→          this.store.patchHud({ connection: 'connected' })
+   166→   166→          // auto-rejoin after mid-match reconnect (server dropped our session)
+   167→   167→          if (this.mode === 'multiplayer' && this.reconnectNotified) {
+   168→   168→            this.reconnectNotified = false
+   169→   169→            const profile = useGameStore.getState().profile
+   170→   170→            this.net.join({
+   171→   171→              name: profile?.name ?? 'Protester',
+   172→   172→              archetype: this.archetype,
+   173→   173→              roomCode: this.lastRoomCode,
+   174→   174→              cosmetics: profile?.cosmetics as Record<string, unknown> | undefined,
+   175→   175→            })
+   176→   176→            this.offline = false
+   177→   177→            this.store.notify('Reconnected to the protest!', 'squad')
+   178→   178→          }
+   179→   179→        }
+   180→   180→      },
+   181→   181→    }
+   182→   182→
+   183→   183→    // store subscription for settings
+   184→   184→    this.unsubStore = useGameStore.subscribe((s) => {
+   185→   185→      this.store = s
+   186→   186→      AudioManager.setVolumes({ master: s.settings.masterVolume, music: s.settings.musicVolume, sfx: s.settings.sfxVolume })
+   187→   187→      this.input.keybinds = s.settings.keybinds
+   188→   188→      this.input.sensitivity = s.settings.mouseSensitivity
+   189→   189→      this.input.invertY = s.settings.invertY
+   190→   190→    })
+   191→   191→
+   192→   192→    this.engine.onFixedUpdate = (dt) => this.fixedUpdate(dt)
+   193→   193→    this.engine.onRender = (dt) => this.renderUpdate(dt)
+   194→   194→    this.engine.onFps = (fps) => useGameStore.getState().setFps(fps)
+   195→   195→    this.engine.setQuality(this.store.settings.quality)
+   196→   196→    window.addEventListener('resize', () => this.engine.resize())
+   197→   197→
+   198→   198→    registerUIActions({
+   199→   199→      startSolo: () => void this.startMatch('solo', null),
+   200→   200→      joinMultiplayer: (roomCode) => void this.startMatch('multiplayer', roomCode),
+   201→   201→      leaveMatch: () => this.leaveMatch(),
+   202→   202→      selectArchetype: (id) => { this.archetype = id },
+   203→   203→      updateCosmetics: () => {},
+   204→   204→      useItem: (uid) => this.useInventoryItem(uid),
+   205→   205→      dropItem: (uid) => this.dropInventoryItem(uid),
+   206→   206→      sendEmote: (emote) => this.playEmote(emote),
+   207→   207→      sendQuickMessage: (id) => { this.net.quickMsg(id); this.store.notify(QUICK_MESSAGES[id] ?? '', 'squad') },
+   208→   208→      respawnRequest: () => {},
+   209→   209→    })
+   210→   210→
+   211→   211→    this.engine.start()
+   212→   212→    AudioManager.resume()
+   213→   213→    AudioManager.startCrowd()
+   214→   214→    AudioManager.setTheme('menu')
+   215→   215→    useGameStore.getState().setUIMode('menu')
+   216→   216→    // debug handle for QA tooling
+   217→   217→    ;(window as unknown as { __vc: unknown }).__vc = this
+   218→   218→  }
+   219→   219→
+   220→   220→  // ================= match lifecycle =================
+   221→   221→  private async startMatch(mode: 'solo' | 'multiplayer', roomCode: string | null) {
+   222→   222→    const store = useGameStore.getState()
+   223→   223→    store.setUIMode('loading')
+   224→   224→    this.mode = mode
+   225→   225→    store.setMatchMode(mode)
+   226→   226→    this.lastRoomCode = roomCode
+   227→   227→    this.reconnectNotified = false
+   228→   228→    this.clearOnboarding()
+   229→   229→    this.matchEnded = false
+   230→   230→    this.endHandled = false
+   231→   231→    this.tokens = 0
+   232→   232→    this.gateOpen = false
+   233→   233→    this.activatedCheckpoints.clear()
+   234→   234→    this.inventory = []
+   235→   235→    this.stats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0 }
+   236→   236→    this.carryingBallot = false
+   237→   237→    this.carryingBallotId = null
+   238→   238→    this.matchTime = 0
+   239→   239→    this.humorTimer = 24
+   240→   240→
+   241→   241→    const profile = store.profile
+   242→   242→    this.archetype = profile?.archetype ?? 'student'
+   243→   243→    const name = profile?.name ?? 'Protester'
+   244→   244→
+   245→   245→    // reset world states
+   246→   246→    this.worldRenderer.setBossGateOpen(false)
+   247→   247→    this.bossClient.hideAll()
+   248→   248→    this.fx.clear()
+   249→   249→    this.bossCinematic = { active: false, t: 0, fired: false }
+   250→   250→    for (const it of this.items.items) { it.taken = false; it.group.visible = true; it.respawnAt = 0 }
+   251→   251→    for (const [id] of this.remotePlayers) this.removeRemote(id)
+   252→   252→    this.localBoss = createBossBrain(this.world.bossArena)
+   253→   253→    this.bossActiveLocal = false
+   254→   254→
+   255→   255→    // fresh player
+   256→   256→    if (this.player) { this.engine.scene.remove(this.player.rig.group) }
+   257→   257→    const cosmetics = profile?.cosmetics
+   258→   258→    this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
+   259→   259→      hat: cosmetics?.hat as string | undefined,
+   260→   260→      glasses: cosmetics?.glasses,
+   261→   261→      signText: cosmetics?.signText,
+   262→   262→      cosmetics,
+   263→   263→    })
+   264→   264→    this.player.onFootstep = (running) => AudioManager.play(running ? 'footstepRun' : 'footstep')
+   265→   265→    this.player.onLand = (hard) => AudioManager.play(hard ? 'land' : 'footstep')
+   266→   266→    this.player.onJump = () => AudioManager.play('jump')
+   267→   267→    this.player.onSlide = () => AudioManager.play('slide')
+   268→   268→    this.player.onDazed = () => { AudioManager.play('hit'); this.store.notify(randomOf(RANDOM_NOTIFICATIONS), 'warning') }
+   269→   269→    this.engine.scene.add(this.player.rig.group)
+   270→   270→    this.camRig.yaw = 0 // camera behind player, looking down the road (-z)
+   271→   271→
+   272→   272→    // reset local npc brains
+   273→   273→    this.localNpcBrains = createNpcStates(this.world.npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol.map(p => ({ ...p })) })))
+   274→   274→
+   275→   275→    // connect to authoritative server (both modes use it; fallback offline)
+   276→   276→    this.offline = true
+   277→   277→    store.patchHud({ connection: 'connecting' })
+   278→   278→    const connected = await this.net.connect()
+   279→   279→    if (connected) {
+   280→   280→      this.net.join({
+   281→   281→        name,
+   282→   282→        archetype: this.archetype,
+   283→   283→        roomCode: mode === 'multiplayer' ? roomCode : null,
+   284→   284→        cosmetics,
+   285→   285→      })
+   286→   286→      // wait briefly for join ack; ack sets offline=false
+   287→   287→      await new Promise<void>((resolve) => {
+   288→   288→        const check = setInterval(() => {
+   289→   289→          if (this.net.playerId || !this.net.connected) { clearInterval(check); resolve() }
+   290→   290→        }, 100)
+   291→   291→        setTimeout(() => { clearInterval(check); resolve() }, 4000)
+   292→   292→      })
+   293→   293→      this.offline = !this.net.playerId
+   294→   294→    }
+   295→   295→    if (this.offline) {
+   296→   296→      store.patchHud({ connection: 'offline', playersOnline: 1 })
+   297→   297→      store.notify('Offline mode — local patrols active', 'info')
+   298→   298→    } else {
+   299→   299→      store.patchHud({ connection: 'connected' })
+   300→   300→    }
+   301→   301→
+   302→   302→    AudioManager.setTheme('ambient')
+   303→   303→    AudioManager.setCrowdLevel(0.7)
+   304→   304→    store.setUIMode('playing')
+   305→   305→    this.input.setEnabled(true)
+   306→   306→    this.running = true
+   307→   307→    store.notify('The votes are missing. The protest is on. Everybody run!', 'info')
+   308→   308→    this.maybeOnboard()
+   309→   309→  }
+   310→   310→
+   311→   311→  /** One-time contextual onboarding hints for brand-new protesters. */
+   312→   312→  private maybeOnboard() {
+   313→   313→    try {
+   314→   314→      if (localStorage.getItem('votechor_onboarded')) return
+   315→   315→      const tips: [number, string, 'info' | 'squad' | 'warning' | 'boss'][] = [
+   316→   316→        [2500, 'Tip: follow the compass up top — gold markers are stolen vote tokens', 'info'],
+   317→   317→        [9500, 'Tip: press E near tokens & items to grab them · Q throws a distraction', 'squad'],
+   318→   318→        [16500, 'Tip: checkpoints save progress, heal you, and free detained squadmates', 'warning'],
+   319→   319→        [23500, 'Tip: 12 tokens unlock the boss gate in the Government District. Good luck!', 'boss'],
+   320→   320→      ]
+   321→   321→      for (const [delay, text, kind] of tips) {
+   322→   322→        this.onboardingTimers.push(setTimeout(() => {
+   323→   323→          if (this.running) useGameStore.getState().notify(text, kind)
+   324→   324→        }, delay))
+   325→   325→      }
+   326→   326→      localStorage.setItem('votechor_onboarded', '1')
+   327→   327→    } catch { /* private browsing — skip */ }
+   328→   328→  }
+   329→   329→
+   330→   330→  private clearOnboarding() {
+   331→   331→    for (const t of this.onboardingTimers) clearTimeout(t)
+   332→   332→    this.onboardingTimers = []
+   333→   333→  }
+   334→   334→
+   335→   335→  leaveMatch() {
+   336→   336→    if (this.matchEnded) return
+   337→   337→    this.net.leave()
+   338→   338→    this.running = false
+   339→   339→    this.input.setEnabled(false)
+   340→   340→    this.clearOnboarding()
+   341→   341→    AudioManager.setTheme('menu')
+   342→   342→    AudioManager.setCrowdLevel(0.25)
+   343→   343→    const st = useGameStore.getState()
+   344→   344→    st.setUIMode('menu')
+   345→   345→    st.setMenuScreen('main')
+   346→   346→    st.setMatchMode(null)
+   347→   347→  }
+   348→   348→
+   349→   349→  // ================= server ack & sync =================
+   350→   350→  private onJoinAck(ack: JoinAck) {
+   351→   351→    if (!ack.ok) {
+   352→   352→      useGameStore.getState().setJoining(false, ack.error ?? 'Join failed')
+   353→   353→      useGameStore.getState().notify(ack.error ?? 'Join failed', 'warning')
+   354→   354→      return
+   355→   355→    }
+   356→   356→    this.offline = false
+   357→   357→    this.net.playerId = ack.playerId
+   358→   358→    this.serverMatchStart = ack.matchStartedAt
+   359→   359→    useGameStore.getState().setRoomCode(ack.roomCode)
+   360→   360→    useGameStore.getState().patchHud({ playersOnline: ack.players.length })
+   361→   361→    this.tokens = ack.tokensCollected
+   362→   362→    this.tokensNeeded = ack.tokensNeeded
+   363→   363→    for (const p of ack.players) {
+   364→   364→      if (p.id !== ack.playerId) this.addRemote(p)
+   365→   365→    }
+   366→   366→    // sync world state
+   367→   367→    if (ack.checkpoints) ack.checkpoints.forEach(cp => this.activatedCheckpoints.add(cp))
+   368→   368→    if (ack.boss && ack.boss.active) this.bossActiveLocal = true
+   369→   369→    useGameStore.getState().notify(`Joined room ${ack.roomCode}`, 'squad')
+   370→   370→  }
+   371→   371→
+   372→   372→  private onServerPlayers(players: import('./shared/types').PlayerNetState[]) {
+   373→   373→    if (!this.player) return
+   374→   374→    const seen = new Set<string>()
+   375→   375→    let online = 0
+   376→   376→    for (const p of players) {
+   377→   377→      online++
+   378→   378→      seen.add(p.id)
+   379→   379→      if (p.id === this.net.playerId) continue
+   380→   380→      let r = this.remotePlayers.get(p.id)
+   381→   381→      if (!r) { r = this.addRemote(p) }
+   382→   382→      r.target = { x: p.x, y: p.y, z: p.z, ry: p.ry }
+   383→   383→      r.anim = p.anim
+   384→   384→      r.health = p.health
+   385→   385→      r.detained = p.detained
+   386→   386→      r.rig.group.visible = true
+   387→   387→    }
+   388→   388→    for (const [id, r] of this.remotePlayers) {
+   389→   389→      if (!seen.has(id)) { this.removeRemote(id) }
+   390→   390→    }
+   391→   391→    useGameStore.getState().patchHud({ playersOnline: online })
+   392→   392→  }
+   393→   393→
+   394→   394→  private addRemote(p: import('./shared/types').PlayerNetState) {
+   395→   395→    const rig = new CharacterRig({ archetype: p.archetype, name: p.name })
+   396→   396→    rig.group.position.set(p.x, p.y, p.z)
+   397→   397→    this.engine.scene.add(rig.group)
+   398→   398→    const r = { rig, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained }
+   399→   399→    this.remotePlayers.set(p.id, r)
+   400→   400→    return r
+   401→   401→  }
+   402→   402→
+   403→   403→  private removeRemote(id: string) {
+   404→   404→    const r = this.remotePlayers.get(id)
+   405→   405→    if (r) { this.engine.scene.remove(r.rig.group); this.remotePlayers.delete(id) }
+   406→   406→  }
+   407→   407→
+   408→   408→  private onServerBoss(boss: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) {
+   409→   409→    this.bossClient.applyState(boss, this.worldTime)
+   410→   410→    this.bossClient.setBallots(ballots, this.worldTime)
+   411→   411→    const store = useGameStore.getState()
+   412→   412→    if (boss.active) {
+   413→   413→      let progress = 0
+   414→   414→      let objective = ''
+   415→   415→      switch (boss.phase) {
+   416→   416→        case 0: objective = 'The Committee arrives...'; break
+   417→   417→        case 1: progress = boss.interruptPoints / 120; objective = 'Interrupt the speech — hold megaphone stations!'; break
+   418→   418→        case 2: progress = boss.documents / 240; objective = 'Sort documents at the desks!'; break
+   419→   419→        case 3: progress = boss.hits / 6; objective = boss.dizzyTimer > 0 ? 'BOSS DIZZY — Throw items at him! (Q)' : 'Dodge the giant stamp!'; break
+   420→   420→        case 4: progress = boss.teamworkProgress / 12; objective = 'Hold BOTH team stations!'; break
+   421→   421→        case 5: progress = boss.votes / boss.votesNeeded; objective = `Grab ballots → deposit at the box! (${boss.votes}/${boss.votesNeeded})`; break
+   422→   422→        case 6: objective = 'DEMOCRACY RESTORED!'; break
+   423→   423→      }
+   424→   424→      store.patchBoss({
+   425→   425→        active: true, phase: boss.phase, phaseName: BOSS_PHASE_NAMES[boss.phase] ?? '',
+   426→   426→        health: boss.health, maxHealth: boss.maxHealth, objectiveText: objective,
+   427→   427→        progress: Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0,
+   428→   428→        votes: boss.votes, votesNeeded: boss.votesNeeded,
+   429→   429→        dizzy: boss.stateName === 'dizzy',
+   430→   430→      })
+   431→   431→    } else {
+   432→   432→      store.patchBoss({ active: false })
+   433→   433→    }
+   434→   434→  }
+   435→   435→
+   436→   436→  private onCapture(playerId: string, until: number, message: string) {
+   437→   437→    if (!this.player) return
+   438→   438→    if (playerId === this.net.playerId || this.offline) {
+   439→   439→      this.player.detain()
+   440→   440→      this.stats.detentions++
+   441→   441→      this.detainUntil = until
+   442→   442→      this.store.notify(message || randomOf(CAPTURE_MESSAGES), 'capture')
+   443→   443→      AudioManager.play('capture')
+   444→   444→      this.camRig.addShake(0.7)
+   445→   445→    } else {
+   446→   446→      const r = this.remotePlayers.get(playerId)
+   447→   447→      if (r) r.detained = true
+   448→   448→      this.store.notify(`Teammate detained: ${r?.name ?? 'someone'}`, 'squad')
+   449→   449→    }
+   450→   450→  }
+   451→   451→
+   452→   452→  private onRelease(playerId: string, x: number, z: number) {
+   453→   453→    if (!this.player) return
+   454→   454→    if (playerId === this.net.playerId || this.offline) {
+   455→   455→      this.player.release(x, z)
+   456→   456→      this.store.notify('Released! The paperwork was, tragically, in order.', 'info')
+   457→   457→      AudioManager.play('release')
+   458→   458→    } else {
+   459→   459→      const r = this.remotePlayers.get(playerId)
+   460→   460→      if (r) r.detained = false
+   461→   461→    }
+   462→   462→  }
+   463→   463→
+   464→   464→  private onCheckpoint(cp: number, byName: string, total: number) {
+   465→   465→    if (this.activatedCheckpoints.has(cp)) return
+   466→   466→    this.activatedCheckpoints.add(cp)
+   467→   467→    this.stats.checkpoints = total
+   468→   468→    if (this.player) this.fx.popup('CHECKPOINT +60 XP', '#4e9b6e', this.player.pos.x, 2.1, this.player.pos.z)
+   469→   469→    this.store.notify(`Checkpoint ${cp} unlocked by ${byName}! (${total}/4)`, 'achievement')
+   470→   470→    AudioManager.play('checkpoint')
+   471→   471→  }
+   472→   472→
+   473→   473→  private onRemoteHealth(playerId: string, health: number, dazed: boolean) {
+   474→   474→    const r = this.remotePlayers.get(playerId)
+   475→   475→    if (r) { r.health = health; if (dazed) r.anim = 'dazed' }
+   476→   476→  }
+   477→   477→
+   478→   478→  private playRemoteEmote(playerId: string, emote: string) {
+   479→   479→    const r = this.remotePlayers.get(playerId)
+   480→   480→    if (!r) return
+   481→   481→    const map: Record<string, AnimName> = { wave: 'celebrate', dance: 'celebrate', salute: 'idle', facepalm: 'dazed', flex: 'celebrate', cry: 'dazed' }
+   482→   482→    r.anim = map[emote] ?? 'celebrate'
+   483→   483→  }
+   484→   484→
+   485→   485→  // ================= input & actions =================
+   486→   486→  private handleOneShot(a: string) {
+   487→   487→    const store = useGameStore.getState()
+   488→   488→    switch (a) {
+   489→   489→      case 'pause':
+   490→   490→        if (store.uiMode === 'playing') { store.setUIMode('paused'); this.input.setEnabled(false) }
+   491→   491→        else if (store.uiMode === 'paused') { store.setUIMode('playing'); this.input.setEnabled(true) }
+   492→   492→        break
+   493→   493→      case 'jump': this.pendingOneShot = 'jump'; break
+   494→   494→      case 'slide': this.pendingOneShot = 'slide'; break
+   495→   495→      case 'throw': this.doThrow(); break
+   496→   496→      case 'emote': store.toggleEmoteWheel(); break
+   497→   497→      case 'map': store.toggleMap(); break
+   498→   498→      case 'squad': store.toggleSquad(); break
+   499→   499→    }
+   500→   500→  }
+   501→   501→
+   502→   502→  private doThrow() {
+   503→   503→    if (!this.player || this.player.isDetained || this.player.isDazed) return
+   504→   504→    const idx = this.inventory.findIndex(i => ['bottle', 'sign', 'foam'].includes(i.type))
+   505→   505→    if (idx === -1) { this.store.notify('Nothing to throw! Grab a bottle.', 'info'); return }
+   506→   506→    const item = this.inventory[idx]
+   507→   507→    this.inventory.splice(idx, 1)
+   508→   508→    const camDir = new THREE.Vector3()
+   509→   509→    this.engine.camera.getWorldDirection(camDir)
+   510→   510→    const dir = { x: camDir.x, z: camDir.z }
+   511→   511→    const len = Math.hypot(dir.x, dir.z) || 1
+   512→   512→    const power = 11
+   513→   513→    const from = this.player.pos
+   514→   514→    const impact = (ix: number, _iy: number, iz: number) => {
+   515→   515→      AudioManager.play('impact')
+   516→   516→      this.stats.distractions++
+   517→   517→      if (this.offline) {
+   518→   518→        this.npcs.distraction(ix, iz, this.archetype === 'strategist' ? 9 : 5.5)
+   519→   519→      } else {
+   520→   520→        this.net.noiseEvent(ix, iz)
+   521→   521→      }
+   522→   522→      // boss hit check
+   523→   523→      if (this.offline && this.localBoss && this.localBoss.phase === 3 && this.localBoss.dizzyTimer > 0) {
+   524→   524→        const d = Math.hypot(ix - this.localBoss.x, iz - this.localBoss.z)
+   525→   525→        if (d < 4 && registerBossHit(this.localBoss, this.net.playerId || 'local', Date.now())) {
+   526→   526→          this.stats.bossHits++
+   527→   527→          AudioManager.play('bossHit')
+   528→   528→          this.fx.popup('BONK! -1 SHIELD', '#ff9f1c', ix, 3, iz)
+   529→   529→        }
+   530→   530→      }
+   531→   531→    }
+   532→   532→    this.items.throwItem(item.type, from, { x: dir.x / len, z: dir.z / len }, power, 'me', this.offline, impact)
+   533→   533→    if (!this.offline) this.net.throwItem(item.type, from.x, from.y, from.z, (dir.x / len) * power, 5.2, (dir.z / len) * power)
+   534→   534→    this.player.playAnim('throw', 0.35)
+   535→   535→    AudioManager.play('throw')
+   536→   536→    this.syncHud()
+   537→   537→  }
+   538→   538→
+   539→   539→  private useInventoryItem(uid: string) {
+   540→   540→    if (!this.player) return
+   541→   541→    const idx = this.inventory.findIndex(i => i.uid === uid)
+   542→   542→    if (idx === -1) return
+   543→   543→    const item = this.inventory[idx]
+   544→   544→    const p = this.player
+   545→   545→    switch (item.type) {
+   546→   546→      case 'chai':
+   547→   547→        p.stamina = p.maxStamina
+   548→   548→        p.speedBoostUntil = this.worldTime + 6
+   549→   549→        AudioManager.play('heal')
+   550→   550→        this.store.notify('Chai break! Stamina restored. Zindagi ek baar milta hai.', 'info')
+   551→   551→        break
+   552→   552→      case 'firstaid':
+   553→   553→        p.heal(50)
+   554→   554→        AudioManager.play('heal')
+   555→   555→        this.fx.popup('+50 HP', '#ff8fa3', p.pos.x, 1.9, p.pos.z)
+   556→   556→        this.store.notify('Patched up with one (1) band-aid.', 'info')
+   557→   557→        break
+   558→   558→      case 'snack':
+   559→   559→        p.speedBoostUntil = this.worldTime + 8
+   560→   560→        AudioManager.play('pickup')
+   561→   561→        this.store.notify('Sugar rush! Speed boost for 8s.', 'info')
+   562→   562→        break
+   563→   563→      case 'joke': {
+   564→   564→        const jokes = ['Delicious. Illegal. Worth it.', 'The samosa was filled with classified documents.', 'You feel oddly empowered.', '+10 confidence. -2 health code compliance.']
+   565→   565→        p.heal(10)
+   566→   566→        AudioManager.play('cash')
+   567→   567→        this.store.notify(randomOf(jokes), 'info')
+   568→   568→        break
+   569→   569→      }
+   570→   570→      default:
+   571→   571→        this.store.notify(`${ITEM_CONFIG[item.type]?.name}: use Q to throw it!`, 'info')
+   572→   572→        return
+   573→   573→    }
+   574→   574→    this.inventory.splice(idx, 1)
+   575→   575→    this.syncHud()
+   576→   576→  }
+   577→   577→
+   578→   578→  private dropInventoryItem(uid: string) {
+   579→   579→    const idx = this.inventory.findIndex(i => i.uid === uid)
+   580→   580→    if (idx === -1 || !this.player) return
+   581→   581→    const item = this.inventory[idx]
+   582→   582→    this.inventory.splice(idx, 1)
+   583→   583→    // respawn as world item near player
+   584→   584→    const spawnDef = this.world.items.find(d => d.type === item.type)
+   585→   585→    if (spawnDef) {
+   586→   586→      const def = { ...spawnDef, id: `drop_${Date.now().toString(36)}`, x: this.player.pos.x + (Math.random() - 0.5) * 2, y: this.physics.groundHeight(this.player.pos.x, this.player.pos.z, 2) + 0.2, z: this.player.pos.z + (Math.random() - 0.5) * 2, respawn: 25 }
+   587→   587→      this.items.spawnDropped(def)
+   588→   588→    }
+   589→   589→    this.syncHud()
+   590→   590→  }
+   591→   591→
+   592→   592→  private playEmote(emote: string) {
+   593→   593→    if (!this.player) return
+   594→   594→    this.player.playAnim(emote === 'cry' || emote === 'facepalm' ? 'dazed' : 'celebrate', 1.6)
+   595→   595→    this.net.emote(emote)
+   596→   596→    useGameStore.getState().toggleEmoteWheel(false)
+   597→   597→  }
+   598→   598→
+   599→   599→  private handleVehicleHit(kind: string, x: number, z: number, dmg: number) {
+   600→   600→    if (!this.player) return
+   601→   601→    if (this.player.damage(dmg, kind)) {
+   602→   602→      this.store.notify(kind === 'cow' ? 'Headbutted by a cow. It regrets nothing.' : 'Traffic remains undefeated.', 'warning')
+   603→   603→    }
+   604→   604→    this.player.knockback(x, z, kind === 'cow' ? 4 : 9)
+   605→   605→    AudioManager.play(kind === 'cow' ? 'moo' : 'horn')
+   606→   606→    this.camRig.addShake(kind === 'cow' ? 0.3 : 0.8)
+   607→   607→    this.applyDamage(0, kind) // trigger HUD update
+   608→   608→  }
+   609→   609→
+   610→   610→  private applyDamage(amount: number, kind: string) {
+   611→   611→    if (!this.player) return
+   612→   612→    if (amount > 0) {
+   613→   613→      this.player.damage(amount, kind)
+   614→   614→      AudioManager.play('hit')
+   615→   615→      this.camRig.addShake(Math.min(0.8, amount / 40))
+   616→   616→    }
+   617→   617→    this.syncHud()
+   618→   618→  }
+   619→   619→
+   620→   620→  // ================= core loops =================
+   621→   621→  private fixedUpdate(dt: number) {
+   622→   622→    if (!this.running || !this.player) return
+   623→   623→    const store = useGameStore.getState()
+   624→   624→    if (store.uiMode !== 'playing') { return }
+   625→   625→    this.worldTime += dt
+   626→   626→    this.matchTime += dt
+   627→   627→
+   628→   628→    // input
+   629→   629→    const [ldx, ldy] = this.input.consumeLook()
+   630→   630→    const oneShot = this.pendingOneShot
+   631→   631→    this.pendingOneShot = null
+   632→   632→    const boosted = this.worldTime < this.player.speedBoostUntil
+   633→   633→    this.player.applyInput(dt, this.input.state, this.camRig.yaw, this.archetype, oneShot, boosted)
+   634→   634→
+   635→   635→    // world bounds safety
+   636→   636→    const b = this.world.bounds
+   637→   637→    this.player.pos.x = Math.max(b.minX, Math.min(b.maxX, this.player.pos.x))
+   638→   638→    this.player.pos.z = Math.max(b.minZ, Math.min(b.maxZ, this.player.pos.z))
+   639→   639→    if (this.player.pos.y < -5) { this.player.teleport(this.world.spawn.x, this.world.spawn.z) }
+   640→   640→
+   641→   641→    // boss gate: block player when closed
+   642→   642→    const gateZ = this.world.bossArena.gateZ
+   643→   643→    if (!this.gateOpen && this.player.pos.z < gateZ + 0.5 && this.player.pos.z > gateZ - 2 && Math.abs(this.player.pos.x) < 10.5) {
+   644→   644→      this.player.pos.z = gateZ + 0.55
+   645→   645→      if (this.player.pos.z < gateZ) this.player.pos.z = gateZ + 0.55
+   646→   646→    }
+   647→   647→
+   648→   648→    // detention countdown
+   649→   649→    if (this.player.isDetained) {
+   650→   650→      const remain = Math.max(0, (this.detainUntil - Date.now()) / 1000)
+   651→   651→      if (remain <= 0) {
+   652→   652→        const cp = this.activatedCheckpoints.size > 0 ? this.world.checkpoints[Math.min(this.activatedCheckpoints.size, this.world.checkpoints.length) - 1] : this.world.checkpoints[0]
+   653→   653→        const dp = cp.detention
+   654→   654→        if (this.offline) this.player.release(dp.x, dp.z)
+   655→   655→        // server path: server sends game:release
+   656→   656→      }
+   657→   657→    }
+   658→   658→
+   659→   659→    // checkpoints (offline: local activation; online: server detects from positions)
+   660→   660→    if (this.offline) {
+   661→   661→      for (const cp of this.world.checkpoints) {
+   662→   662→        if (this.activatedCheckpoints.has(cp.id)) continue
+   663→   663→        if (Math.hypot(this.player.pos.x - cp.x, this.player.pos.z - cp.z) < cp.radius) {
+   664→   664→          this.activatedCheckpoints.add(cp.id)
+   665→   665→          this.stats.checkpoints = this.activatedCheckpoints.size
+   666→   666→          AudioManager.play('checkpoint')
+   667→   667→          this.fx.popup('CHECKPOINT +60 XP', '#4e9b6e', this.player.pos.x, 2.1, this.player.pos.z)
+   668→   668→          this.store.notify(`Checkpoint ${cp.id} — ${cp.name} unlocked! (${this.activatedCheckpoints.size}/4)`, 'achievement')
+   669→   669→        }
+   670→   670→      }
+   671→   671→    }
+   672→   672→
+   673→   673→    // offline NPC sim + capture (8s spawn grace so players can orient)
+   674→   674→    if (this.offline) {
+   675→   675→      const pv: NpcPlayerView = {
+   676→   676→        id: 'me', x: this.player.pos.x, z: this.player.pos.z,
+   677→   677→        detained: this.player.isDetained, dazed: this.player.isDazed,
+   678→   678→        hidden: this.matchTime < 8 && Math.hypot(this.player.pos.x - this.world.spawn.x, this.player.pos.z - this.world.spawn.z) < 16,
+   679→   679→      }
+   680→   680→      this.npcs.simulateLocal(dt, pv, this.world.colliders, Date.now())
+   681→   681→      // searchlight rotation local
+   682→   682→      for (const sl of this.world.searchlights) {
+   683→   683→        this.localSearchlightAngles[sl.id] += sl.speed * dt
+   684→   684→      }
+   685→   685→    }
+   686→   686→
+   687→   687→    // vehicles (clock synced to server when online so damage matches visuals)
+   688→   688→    const vehicleTime = this.offline || !this.serverMatchStart ? this.matchTime : (Date.now() - this.serverMatchStart) / 1000
+   689→   689→    this.vehicles.update(vehicleTime, dt, this.player.pos, true)
+   690→   690→
+   691→   691→    // offline boss tick
+   692→   692→    if (this.offline && this.localBoss) {
+   693→   693→      this.localBossAccum += dt
+   694→   694→      const step = 1 / 10
+   695→   695→      let guard = 0
+   696→   696→      while (this.localBossAccum >= step && guard++ < 4) {
+   697→   697→        this.localBossAccum -= step
+   698→   698→        const pv: import('./shared/boss-brain').BossPlayerView = { id: 'me', x: this.player.pos.x, z: this.player.pos.z, detained: this.player.isDetained, dazed: this.player.isDazed }
+   699→   699→        const ev = tickBoss(this.localBoss, [pv], step, Date.now())
+   700→   700→        for (const d of ev.damage) this.applyDamage(d.amount, d.kind)
+
+[showing lines 1-700 of 1272; use offset=701 with limit to continue reading]

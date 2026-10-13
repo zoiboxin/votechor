@@ -83,6 +83,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const [hoveredHat, setHoveredHat] = useState<string | null>(null)
 
   // fetch granted achievements → cosmetic unlocks (server remains authoritative on save)
+  // re-fetches on mount, on window focus, and every 15s so mid-session unlocks appear live
   useEffect(() => {
     let cancelled = false
     const load = async () => {
@@ -97,7 +98,13 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
       } catch { /* offline — defaults stay unlocked */ }
     }
     void load()
-    return () => { cancelled = true }
+    window.addEventListener('focus', load)
+    const iv = setInterval(load, 15000)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', load)
+      clearInterval(iv)
+    }
   }, [])
 
   const level = profile?.level ?? 1

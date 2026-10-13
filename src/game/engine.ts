@@ -26,6 +26,7 @@ export class Engine {
     this.canvas = canvas
     this.renderer = new THREE.WebGLRenderer({
       canvas, antialias: true, powerPreference: 'high-performance',
+      preserveDrawingBuffer: true, // photo-mode snapshot support (canvas.toDataURL)
     })
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap

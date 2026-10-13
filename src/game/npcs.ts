@@ -5,6 +5,7 @@ import { CharacterRig } from './character'
 import { createNpcStates, tickNpc, applyNoise, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
 import type { NpcNetState, NpcStateName, WorldDef, AABB } from './shared/types'
 import type { PhysicsWorld } from './physics'
+import { SpeechBubbleSystem, NPC_LINES } from './bubbles'
 
 interface NpcVisual {
   brain: NpcBrainState
@@ -23,11 +24,13 @@ const NPC_COLORS: Record<string, { shirt: string; pants: string; skin: string; h
 
 export class NpcSystem {
   group = new THREE.Group()
+  bubbles = new SpeechBubbleSystem()
   visuals: NpcVisual[] = []
   private brainById = new Map<string, NpcBrainState>()
   private localSim = false
   private simAccum = 0
   private lastNetTime = 0
+  private speechCooldown = 2.5
 
   constructor(
     world: WorldDef,
@@ -51,6 +54,7 @@ export class NpcSystem {
       this.visuals.push(v)
       this.brainById.set(b.id, b)
     }
+    this.group.add(this.bubbles.group)
   }
 
   /** Local offline simulation (solo, server unreachable) */
@@ -94,7 +98,7 @@ export class NpcSystem {
     }
   }
 
-  update(dt: number, alpha: number, t: number) {
+  update(dt: number, alpha: number, t: number, px?: number, pz?: number) {
     for (const v of this.visuals) {
       // interpolate
       const x = v.prev.x + (v.target.x - v.prev.x) * alpha
@@ -113,6 +117,26 @@ export class NpcSystem {
       // alert indicator
       const showAlert = st === 'chase' || (st !== 'patrol' && v.brain.alert > 0.25)
       if (showAlert !== v.alertShown) { v.rig.setAlert(showAlert); v.alertShown = showAlert }
+    }
+    // ambient satire speech bubbles (chasing officers get their own lines)
+    this.bubbles.update(dt)
+    if (px !== undefined && pz !== undefined) {
+      this.speechCooldown -= dt
+      if (this.speechCooldown <= 0) {
+        this.speechCooldown = 3.6 + Math.random() * 3.4
+        const nearby = this.visuals.filter(v => Math.hypot(v.brain.x - px, v.brain.z - pz) < 34)
+        if (nearby.length) {
+          const pick = nearby[Math.floor(Math.random() * nearby.length)]
+          const chasing = pick.brain.state === 'chase'
+          const lines = chasing ? NPC_LINES.chase : NPC_LINES[pick.brain.type] ?? NPC_LINES.police
+          const text = lines[Math.floor(Math.random() * lines.length)]
+          const id = pick.brain.id
+          this.bubbles.say(`npc-${id}`, text, () => {
+            const vv = this.visuals.find(v2 => v2.brain.id === id)
+            return vv ? vv.rig.group.position : null
+          }, chasing ? 2.6 : 4.2)
+        }
+      }
     }
   }
 

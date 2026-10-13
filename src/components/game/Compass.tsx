@@ -1,13 +1,14 @@
 'use client'
 // Compass strip — cardinal directions + objective markers, relative to camera yaw.
 import { useGameStore, type CompassMarker } from '@/lib/game-store'
-import { Vote, Flag, Crown, User } from 'lucide-react'
+import { Vote, Flag, Crown, User, Cross } from 'lucide-react'
 
 const MARKER_STYLE: Record<CompassMarker['kind'], { icon: typeof Vote; cls: string; label: string }> = {
   token: { icon: Vote, cls: 'bg-[#f2c14e] text-[#1c1a17] border-[#1c1a17]', label: 'token' },
   checkpoint: { icon: Flag, cls: 'bg-[#c9482e] text-[#f5efdc] border-[#1c1a17]', label: 'checkpoint' },
   boss: { icon: Crown, cls: 'bg-[#8c1f28] text-[#f2c14e] border-[#1c1a17]', label: 'boss' },
   chai: { icon: Vote, cls: 'bg-[#d9822b] text-[#f5efdc] border-[#1c1a17]', label: 'chai' },
+  firstaid: { icon: Cross, cls: 'bg-[#ff8fa3] text-[#1c1a17] border-[#1c1a17]', label: 'first-aid — you are hurt!' },
   squad: { icon: User, cls: 'bg-[#4ecdc4] text-[#1c1a17] border-[#1c1a17]', label: 'squad' },
 }
 
@@ -99,7 +100,7 @@ export default function Compass() {
               style={{
                 left: m.deg < 0 ? '2px' : undefined,
                 right: m.deg >= 0 ? '2px' : undefined,
-                backgroundColor: m.kind === 'token' ? '#f2c14e' : m.kind === 'boss' ? '#8c1f28' : m.kind === 'squad' ? '#4ecdc4' : '#c9482e',
+                backgroundColor: m.kind === 'token' ? '#f2c14e' : m.kind === 'boss' ? '#8c1f28' : m.kind === 'squad' ? '#4ecdc4' : m.kind === 'firstaid' ? '#ff8fa3' : '#c9482e',
               }}
             >
               <Icon className="h-2 w-2 text-[#1c1a17]" strokeWidth={3} />

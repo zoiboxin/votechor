@@ -17,6 +17,7 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['M'], action: 'Big Map' },
   { keys: ['TAB'], action: 'Squad Panel' },
   { keys: ['1–8'], action: 'Use Inventory Item', note: 'Right-click a slot to drop it' },
+  { keys: ['P'], action: 'Photo Mode', note: 'O cycles filters · K saves a snapshot PNG' },
   { keys: ['ESC'], action: 'Pause', note: 'The police do not pause. Ever.' },
 ]
 
