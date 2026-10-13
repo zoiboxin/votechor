@@ -24,6 +24,8 @@ model Player {
   weeklyKind    String?
   weeklyProgress Float   @default(0)
   weeklyClaimed Boolean  @default(false)
+  dailyStreak   Int      @default(0) // consecutive days completing the daily challenge
+  lastDailyDone String?  // YYYY-MM-DD of the last completed daily (streak bookkeeping)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   matches       MatchResult[]

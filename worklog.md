@@ -316,3 +316,36 @@ Stage Summary:
 - Round 6 shipped: Weekly Challenges (full retention loop: roll → accumulate → one-time bonus → reset Monday), Create Private Room with shareable code + copy ticket, Match History UI, and a stats-display bug that had silently zeroed 8/10 lifetime cards since round 1
 - Verified: weekly accumulation/bonus/idempotency (curl), WeeklyCard done-state (browser), private-room online join (browser TEZA4Q), history rows (browser), stat card values (browser)
 - Risks/next: weekly ribbon renders only when a match crosses the weekly target mid-session (code path symmetric to verified daily ribbon; not triggered live this round); browser QA session localStorage was re-pointed to the test profile Protester_6328 (real users unaffected); consider emote unlocks at levels (§16), item gifting to teammates (§11), remote-hat 2-client re-verify, squad creation/invitations as the next feature front
+
+---
+Task ID: 9
+Agent: Z.ai Code (cron webDevReview round 7)
+Task: QA assessment + Emote unlock progression (§16) + Squad system v1 (§15) + Daily Streak retention loop + styling polish
+
+Work Log:
+- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002 double-fork, Caddy :81); lint clean; tsc clean for src (pre-existing smoke-test/skills errors only); menu/solo boot/movement re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+- FEATURE — Emote unlock progression (§16):
+  * src/lib/cosmetics.ts: EMOTE_CATALOG (8 emotes: wave/salute/facepalm/cry free, dance/flex LV2, chant LV3, chai achievement-gated via chai_guardian) + unlockedEmoteIds/emoteIsUnlocked pure helpers shared by game guard + UI
+  * game.ts: playEmote now gates on unlocks (locked → warning toast "Emote locked — Reach level N / Earn medal: X", no anim, no net send); EMOTE_ANIMS map (chant→celebrate, chai→heal); EMOTE_LABELS + 2 new lines; refreshUnlockedEmotes() at match start (free seeds + GET /api/achievements w/ x-vc-token for medal codes); playRemoteEmote uses shared EMOTE_ANIMS
+  * EmoteWheel.tsx: full redesign — ring of 8 protest-poster cards, locked cards grayscaled with LV-N / lock badges, center chip "N/8 UNLOCKED", footer hint "LEVEL UP & EARN MEDALS TO UNLOCK MORE CHANTS", locked click → vc-emote-shake wobble + warning toast, unlocks live-refresh (mount + focus + 15s interval, mirrors CharacterSelect pattern)
+- FEATURE — Squad system v1 "protest cells" (§15, 4-player per-room cells):
+  * mini-services/game-server/index.ts: roomSquads/socketSquad maps; game:squadCreate (4-char unique code, unambiguous alphabet), game:squadJoin (validate exists/not-full/auto-leave-old), game:squadLeave; emitSquad() → targeted game:squad {code, members[{id,name}]} to member sockets only; squadLeaveInternal() on leaveRoom/disconnect (orphan squad auto-disbands when last member leaves); SQUAD_NOT_FOUND / SQUAD_FULL errors via game:squadError
+  * net.ts: onSquad/onSquadError events + squadCreate/squadJoin/squadLeave emitters
+  * game.ts: onSquadUpdate → store + remote rig name-tag recolor (squadmates green #7ee08a via new CharacterRig.setNameColor()); registerUIActions squadCreate/squadJoin/squadLeave (offline guard + 4-char validation); leaveMatch/startMatch reset
+  * store: CellMember/SquadState + squad field + setSquad + UIActions additions
+  * Hud.tsx: green "CELL <code> N/4" chip with pulsing ping dot, above squad list
+  * SquadPanel.tsx: protest-cell management box (multiplayer only) — Create squad button, dashed-ticket code input + Join, copyable code chip w/ Check feedback, Leave squad; member rows get green border + "CELL" badge when in your cell; "squads are multiplayer-only" note in solo
+- BUGFIX (found during QA) — squad state went stale after mid-match reconnect: server dropped our socket, auto-rejoin landed in a different public room, but client chip still showed "2/4" forever. Fixed: onDisconnect clears local squad state; onConnect auto-rejoin now attempts squadJoin(lastSquadCode) (restored → "Squad X restored — back in the cell!", room changed → SQUAD_NOT_FOUND silently swallowed via squadAutoRejoin flag)
+- FEATURE — Daily Streak (§16 retention loop):
+  * Prisma Player += dailyStreak/lastDailyDone → db push; /api/matches: on dailyJustCompleted → streak = (lastDailyDone==yesterday ? +1 : 1) persisted; response + duplicate path + /api/profile now include dailyStreak
+  * VERIFIED via curl: fresh completion → streak 1; DB-simulated yesterday-streak 4 → today 5 + streakUp true; duplicate matchId → streak 5 echoed, streakUp false, no double-claim
+  * game.ts finalizeMatch parses streak/streakUp → profile + MatchSummary + "🔥 N-DAY STREAK" toast (N>1); MainMenu PlayerCard: animated 🔥 "N-DAY STREAK / DON'T BREAK IT" dashed chip (server-synced 854 XP render verified); EndScreen: streak ribbon ("Streak day N — chain unbroken" / day-1 variant), mirrors daily/weekly ribbons
+- STYLING (mandatory polish): EmoteWheel poster redesign + shake keyframes (GameRoot style block), squad chip ping animation, dashed protest-ticket code chips, green cell-member rows, streak chip gradient + flame loop, EndScreen streak ribbon
+- QA NOTES: 2-session squad flow fully verified (S6CQ: create → join → CELL chips 2/4 on BOTH sessions + green CELL member rows both panels); headless WebGL drops sockets every ~60s under 2 live 3D sessions (infra flake, not app bug — reconnect handled as designed); squad orphan-cleanup verified (last-member leave disbands cell); bogus-code join error path exercised via window.__vc.net.squadJoin
+- OPS: game-server restarted (double-fork pattern) to load squad handlers; Next dev restarted after prisma client regen (stale-client pitfall from round 6); test data left: StreakTest player (streak 5) + streak_t1..t4 matches — harmless, useful demo data
+- All checks green: tsc (src clean), eslint, zero console errors across all QA sessions
+
+Stage Summary:
+- Round 7 shipped: emote unlock progression (8-emote catalog, locked wheel UI, game-side guard), Squad system v1 (server-authoritative 4-player cells, code join/leave, green name tags, HUD cell chip, panel management UI, reconnect-aware), Daily Streak (DB→API→PlayerCard→EndScreen), and a stale-squad-state reconnect bugfix
+- Verified: 2-session squad join (both chips 2/4), emote lock/unlock paths, streak 4→5 increment + idempotency via curl, streak card render, zero console errors
+- Risks/next: remote-hat + green-nametag 2-client visual re-verify in a stable env (nametag recolor runs in same handler as verified chips); HowToPlay could gain squads/emote-unlock rows; consider squad teleport-to-leader or cell bonus XP next; item gifting (§11) remains unstarted; game-server restart needed if index.ts changes again

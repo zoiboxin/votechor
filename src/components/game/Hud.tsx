@@ -152,6 +152,7 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
   const settings = useGameStore((s) => s.settings)
   const fps = useGameStore((s) => s.fps)
   const squadOpen = useGameStore((s) => s.squadOpen)
+  const squad = useGameStore((s) => s.squad)
   const toggleMap = useGameStore((s) => s.toggleMap)
   const minimapRef = useRef<HTMLCanvasElement>(null)
   const [zoneVisible, setZoneVisible] = useState(true)
@@ -281,6 +282,21 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
             <span className="text-[10px] font-black tabular-nums text-[#2e6e4e]">{fps} FPS</span>
           )}
         </div>
+
+        {/* protest-cell squad chip (§15) */}
+        {squad && squad.members.length > 0 && (
+          <div className="pointer-events-auto flex w-44 items-center justify-between rounded-xl border-2 border-[#2e6e4e] bg-[#2e6e4e]/95 px-2 py-1 shadow-[3px_3px_0_rgba(28,26,23,0.75)]">
+            <span className="flex items-center gap-1.5">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#7ee08a] opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#7ee08a]" />
+              </span>
+              <span className="text-[9px] font-black uppercase tracking-[0.18em] text-[#f5efdc]">Cell</span>
+              <span className="font-mono text-xs font-black tracking-[0.22em] text-[#f2c14e]">{squad.code}</span>
+            </span>
+            <span className="text-[10px] font-black tabular-nums text-[#f5efdc]">{squad.members.length}/4</span>
+          </div>
+        )}
 
         {/* squad list */}
         {(hud.squad.length > 0 || squadOpen) && (

@@ -283,6 +283,29 @@ function PlayerCard() {
         </div>
       </div>
 
+      {/* daily streak chip — retention loop badge */}
+      {(profile?.dailyStreak ?? 0) > 0 && (
+        <div
+          className="mt-2 flex items-center justify-between rounded-xl border-2 border-dashed border-[#b07d1e] bg-gradient-to-r from-[#f2c14e]/35 to-[#f2c14e]/10 px-2.5 py-1"
+          title="Consecutive days completing the daily challenge"
+        >
+          <span className="flex items-center gap-1.5">
+            <motion.span
+              animate={{ rotate: [0, -10, 10, -6, 6, 0], scale: [1, 1.15, 1, 1.1, 1, 1] }}
+              transition={{ duration: 1.6, repeat: Infinity, repeatDelay: 3.5 }}
+              className="text-sm leading-none"
+              aria-hidden
+            >
+              🔥
+            </motion.span>
+            <span className="text-[10px] font-black uppercase tracking-[0.18em] text-[#1c1a17]/75">
+              {profile?.dailyStreak}-day streak
+            </span>
+          </span>
+          <span className="text-[9px] font-bold uppercase tracking-widest text-[#8c1f28]">Don't break it</span>
+        </div>
+      )}
+
       <div className="mt-3 flex items-center gap-2">
         <span
           className="h-6 w-6 shrink-0 rounded-full border-2 border-[#1c1a17]/70"

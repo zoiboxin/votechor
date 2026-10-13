@@ -185,6 +185,29 @@ export default function EndScreen() {
               <span className="text-xs font-black tabular-nums text-[#2e6e4e]">+{summary.weeklyBonus ?? 0} bonus</span>
             </motion.div>
           )}
+          {summary.streakUp && (summary.streak ?? 0) > 0 && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, rotate: -1 }}
+              animate={{ opacity: 1, scale: 1, rotate: -1 }}
+              transition={{ delay: 1.05 }}
+              className="mt-2 flex items-center justify-between rounded-xl border-2 border-[#b07d1e] bg-gradient-to-r from-[#f2c14e]/45 to-[#f2c14e]/15 px-3 py-1.5"
+            >
+              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-[#1c1a17]">
+                <motion.span
+                  animate={{ scale: [1, 1.25, 1], rotate: [0, -8, 8, 0] }}
+                  transition={{ duration: 1.4, repeat: Infinity, repeatDelay: 2.5 }}
+                  className="text-sm leading-none"
+                  aria-hidden
+                >
+                  🔥
+                </motion.span>
+                {summary.streak === 1 ? 'Streak started — come back tomorrow!' : `Streak day ${summary.streak} — chain unbroken`}
+              </span>
+              <span className="text-[9px] font-black uppercase tracking-widest text-[#8c1f28]">
+                {summary.streak === 1 ? 'Day 1' : `×${summary.streak}`}
+              </span>
+            </motion.div>
+          )}
           {summary.leveledUp && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}

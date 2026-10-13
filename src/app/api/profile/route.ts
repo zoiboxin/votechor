@@ -77,7 +77,7 @@ async function ensureAchievementsSeeded(): Promise<void> {
 
 const ARCHETYPE_IDS = new Set(ARCHETYPES.map((a) => a.id))
 
-function profileView(p: { id: string; name: string; archetype: string; xp: number; level: number; cosmetics: string }, unlockedHats?: string[]) {
+function profileView(p: { id: string; name: string; archetype: string; xp: number; level: number; cosmetics: string; dailyStreak: number }, unlockedHats?: string[]) {
   let cosmetics: Record<string, unknown> = {}
   try {
     const parsed: unknown = JSON.parse(p.cosmetics)
@@ -85,7 +85,7 @@ function profileView(p: { id: string; name: string; archetype: string; xp: numbe
   } catch {
     cosmetics = {}
   }
-  return { id: p.id, name: p.name, archetype: p.archetype, xp: p.xp, level: p.level, cosmetics, ...(unlockedHats ? { unlockedHats } : {}) }
+  return { id: p.id, name: p.name, archetype: p.archetype, xp: p.xp, level: p.level, dailyStreak: p.dailyStreak, cosmetics, ...(unlockedHats ? { unlockedHats } : {}) }
 }
 
 /** Load the player's unlocked hat ids (server-authoritative, from level + granted achievements). */

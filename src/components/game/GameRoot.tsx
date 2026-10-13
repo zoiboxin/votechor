@@ -195,6 +195,8 @@ export default function GameRoot() {
         @keyframes vc-mote { 0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; } 8% { opacity: var(--mote-o, 0.5); } 92% { opacity: var(--mote-o, 0.5); } 100% { transform: translateY(-110vh) translateX(var(--mote-x, 30px)) rotate(300deg); opacity: 0; } }
         @keyframes vc-march { from { transform: translateX(-60px); } to { transform: translateX(100vw); } }
         @keyframes vc-march-bob { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-3px) rotate(2deg); } }
+        @keyframes vc-emote-shake { 0%, 100% { transform: rotate(0deg); } 20% { transform: rotate(-9deg); } 40% { transform: rotate(9deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(6deg); } }
+        .vc-emote-shake { animation: vc-emote-shake 0.42s ease-in-out; }
         @keyframes vc-shine { 0% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(240%) skewX(-18deg); } }
         @keyframes vc-zonetint { 0% { opacity: 0; } 14% { opacity: 1; } 100% { opacity: 0; } }
         .vc-scroll::-webkit-scrollbar { width: 10px; }

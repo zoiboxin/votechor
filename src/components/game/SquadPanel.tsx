@@ -1,13 +1,14 @@
 'use client'
 
-import { useGameStore } from '@/lib/game-store'
+import { useState } from 'react'
+import { useGameStore, uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { KeyRound, HeartPulse, ShieldAlert, X, Route } from 'lucide-react'
+import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const TIPS = [
   'Hold E next to a DETAINED teammate to bail them out. No bribe required — the paperwork is free today.',
-  'Detained squadmates can see the map. Ask them (politely) for patrol positions.',
+  'Squadmates get green name tags in the world. Spot your cell instantly in a stampede.',
   'Press G for the emote wheel. Morale is a legitimate tactic.',
   'Press M for the big map — checkpoints, tokens and chasers, beautifully framed.',
   'The journalist archetype spots police on the minimap from farther away. Bring one. Or become one.',
@@ -17,15 +18,37 @@ export default function SquadPanel() {
   const squadOpen = useGameStore((s) => s.squadOpen)
   const toggleSquad = useGameStore((s) => s.toggleSquad)
   const hud = useGameStore((s) => s.hud)
+  const squad = useGameStore((s) => s.squad)
+  const matchMode = useGameStore((s) => s.matchMode)
+  const [joinCode, setJoinCode] = useState('')
+  const [copied, setCopied] = useState(false)
 
   if (!squadOpen) return null
+
+  const copyCode = async () => {
+    if (!squad?.code) return
+    try {
+      await navigator.clipboard.writeText(squad.code)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = squad.code
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      ta.remove()
+    }
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
+  }
+
+  const squadById = new Map((squad?.members ?? []).map((m) => [m.id, m]))
 
   return (
     <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center">
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="vc-paper pointer-events-auto w-[min(420px,92vw)] rounded-2xl border-2 border-[#1c1a17]/80 p-4 shadow-[6px_6px_0_rgba(28,26,23,0.85)]"
+        className="vc-paper pointer-events-auto max-h-[86vh] w-[min(430px,92vw)] overflow-y-auto vc-scroll rounded-2xl border-2 border-[#1c1a17]/80 p-4 shadow-[6px_6px_0_rgba(28,26,23,0.85)]"
       >
         <div className="mb-2 flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-black uppercase tracking-tight text-[#1c1a17]">
@@ -39,6 +62,87 @@ export default function SquadPanel() {
           </button>
         </div>
 
+        {/* ---------- squad cell management (multiplayer only) ---------- */}
+        {matchMode === 'multiplayer' && (
+          <div className="mb-3 rounded-xl border-2 border-[#1c1a17]/70 bg-[#efe6cd] p-2.5">
+            {squad ? (
+              <>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-lg border-2 border-[#1c1a17]/70 bg-[#f2c14e]">
+                      <Users className="h-3.5 w-3.5 text-[#1c1a17]" />
+                    </span>
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1c1a17]/70">Protest cell</span>
+                  </div>
+                  {/* dashed protest-ticket code chip + copy */}
+                  <button
+                    onClick={copyCode}
+                    aria-label={`Copy squad code ${squad.code}`}
+                    className="group flex items-center gap-1.5 rounded-lg border-2 border-dashed border-[#8c1f28] bg-[#f5efdc] px-2.5 py-1 shadow-[2px_2px_0_rgba(28,26,23,0.6)] transition-transform hover:-rotate-1 hover:scale-[1.03] active:rotate-0"
+                  >
+                    <span className="font-mono text-sm font-black tracking-[0.25em] text-[#8c1f28]">{squad.code}</span>
+                    {copied ? <Check className="h-3.5 w-3.5 text-[#2e6e4e]" /> : <Copy className="h-3.5 w-3.5 text-[#1c1a17]/50 group-hover:text-[#1c1a17]" />}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/50">
+                    {squad.members.length}/4 members · share the code
+                  </span>
+                  <button
+                    onClick={() => { setJoinCode(''); uiActions().squadLeave() }}
+                    className="flex items-center gap-1 rounded-lg border-2 border-[#1c1a17]/60 bg-[#e7dfc9] px-2 py-1 text-[9px] font-black uppercase tracking-widest text-[#1c1a17]/80 shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-colors hover:bg-[#f2c14e]"
+                  >
+                    <LogOut className="h-3 w-3" /> Leave squad
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-1.5 flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] text-[#1c1a17]/70">
+                  <Flag className="h-3.5 w-3.5 text-[#2e6e4e]" /> Form a protest cell (max 4)
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={() => uiActions().squadCreate()}
+                    className="flex items-center gap-1 rounded-lg border-2 border-[#1c1a17]/70 bg-[#2e6e4e] px-2.5 py-1.5 text-[10px] font-black uppercase tracking-widest text-[#f5efdc] shadow-[2px_2px_0_rgba(28,26,23,0.7)] transition-transform hover:-translate-y-0.5"
+                  >
+                    <Users className="h-3 w-3" /> Create squad
+                  </button>
+                  <div className="flex items-center gap-1 rounded-lg border-2 border-dashed border-[#1c1a17]/50 bg-[#f5efdc] px-1.5 py-0.5">
+                    <Ticket className="h-3.5 w-3.5 text-[#1c1a17]/50" />
+                    <input
+                      value={joinCode}
+                      onChange={(e) => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && joinCode.length === 4) uiActions().squadJoin(joinCode)
+                      }}
+                      placeholder="CODE"
+                      aria-label="Squad join code"
+                      maxLength={4}
+                      className="w-16 bg-transparent text-center font-mono text-sm font-black tracking-[0.2em] text-[#8c1f28] outline-none placeholder:text-[#1c1a17]/30"
+                    />
+                    <button
+                      onClick={() => { if (joinCode.length === 4) uiActions().squadJoin(joinCode) }}
+                      disabled={joinCode.length !== 4}
+                      className="rounded border-2 border-[#1c1a17]/60 bg-[#f2c14e] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-widest text-[#1c1a17] disabled:opacity-40"
+                    >
+                      Join
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-1 text-[9px] font-semibold text-[#1c1a17]/50">
+                  Squadmates get green name tags and squad toasts. Create one, share the 4-letter code, cause chaos together.
+                </p>
+              </>
+            )}
+          </div>
+        )}
+        {matchMode !== 'multiplayer' && (
+          <p className="mb-3 rounded-xl border-2 border-dashed border-[#1c1a17]/40 bg-[#efe6cd]/60 px-3 py-2 text-center text-[10px] font-bold uppercase tracking-widest text-[#1c1a17]/55">
+            Squads are a multiplayer feature — rally in a room first
+          </p>
+        )}
+
         {hud.squad.length === 0 ? (
           <p className="rounded-xl border-2 border-dashed border-[#1c1a17]/40 px-3 py-4 text-center text-xs font-bold text-[#1c1a17]/60">
             You are protest-soloing right now. Join a multiplayer room to get squadmates — and witnesses.
@@ -47,12 +151,26 @@ export default function SquadPanel() {
           <div className="space-y-1.5">
             {hud.squad.map((m) => {
               const arch = archetypeById(m.archetype || 'student')
+              const inCell = squadById.has(m.id)
               return (
-                <div key={m.id} className="flex items-center gap-2.5 rounded-xl border border-[#1c1a17]/60 bg-[#f5efdc] px-2.5 py-1.5">
-                  <span className="h-6 w-6 shrink-0 rounded-full border-2 border-[#1c1a17]/60" style={{ background: arch.colors.shirt }} />
+                <div
+                  key={m.id}
+                  className={`flex items-center gap-2.5 rounded-xl border px-2.5 py-1.5 transition-colors ${
+                    inCell ? 'border-[#2e6e4e] bg-[#2e6e4e]/10' : 'border-[#1c1a17]/60 bg-[#f5efdc]'
+                  }`}
+                >
+                  <span
+                    className="h-6 w-6 shrink-0 rounded-full border-2"
+                    style={{ background: arch.colors.shirt, borderColor: inCell ? '#2e6e4e' : 'rgba(28,26,23,0.6)' }}
+                  />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="truncate text-xs font-black uppercase tracking-tight text-[#1c1a17]">{m.name}</span>
+                      {inCell && (
+                        <span className="rounded border border-[#2e6e4e] bg-[#2e6e4e] px-1 text-[8px] font-black uppercase text-[#f5efdc]">
+                          Cell
+                        </span>
+                      )}
                       {m.detained && (
                         <span className="flex items-center gap-0.5 rounded border border-[#8c1f28] bg-[#8c1f28] px-1 text-[8px] font-black uppercase text-[#f5efdc]">
                           <ShieldAlert className="h-2.5 w-2.5" /> Detained

@@ -9,7 +9,7 @@ export type CosmeticUnlock =
 
 export interface CosmeticItem {
   id: string
-  kind: 'hat'
+  kind: 'hat' | 'emote'
   label: string
   emoji: string
   desc: string
@@ -105,4 +105,95 @@ export function hatIsUnlocked(hat: string | undefined | null, level: number, ach
   const item = cosmeticById(hat)
   if (!item) return false
   return unlockedHatIds(level, achievementCodes).has(item.id)
+}
+
+// ---------- Emote unlock catalog (§16 progression) ----------
+
+export const EMOTE_CATALOG: CosmeticItem[] = [
+  {
+    id: 'wave',
+    kind: 'emote',
+    label: 'Wave',
+    emoji: '👋',
+    desc: 'Hello, democracy!',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'salute',
+    kind: 'emote',
+    label: 'Salute',
+    emoji: '🫡',
+    desc: 'Salute to the cause!',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'facepalm',
+    kind: 'emote',
+    label: 'Facepalm',
+    emoji: '🤦',
+    desc: 'Not this again…',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'cry',
+    kind: 'emote',
+    label: 'Cry',
+    emoji: '😭',
+    desc: 'The votes… they are gone…',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'dance',
+    kind: 'emote',
+    label: 'Dance',
+    emoji: '💃',
+    desc: 'Protest dance move!',
+    unlock: { type: 'level', level: 2 },
+  },
+  {
+    id: 'flex',
+    kind: 'emote',
+    label: 'Flex',
+    emoji: '💪',
+    desc: 'Strong together!',
+    unlock: { type: 'level', level: 2 },
+  },
+  {
+    id: 'chant',
+    kind: 'emote',
+    label: 'Chant',
+    emoji: '📣',
+    desc: 'AIYOO COMMITTEE! AIYOO AIYOO!',
+    unlock: { type: 'level', level: 3 },
+  },
+  {
+    id: 'chai',
+    kind: 'emote',
+    label: 'Chai Toast',
+    emoji: '🍵',
+    desc: 'Chai break! Sipped with suspicious confidence.',
+    unlock: { type: 'achievement', code: 'chai_guardian' },
+  },
+]
+
+export const EMOTE_IDS = new Set(EMOTE_CATALOG.map((e) => e.id))
+
+/** Compute the set of emote ids a player may use. Pure — shared by game guard and UI. */
+export function unlockedEmoteIds(level: number, achievementCodes: Iterable<string>): Set<string> {
+  const codes = achievementCodes instanceof Set ? achievementCodes : new Set(achievementCodes)
+  const out = new Set<string>()
+  for (const item of EMOTE_CATALOG) {
+    if (item.unlock.type === 'free') out.add(item.id)
+    else if (item.unlock.type === 'level' && level >= item.unlock.level) out.add(item.id)
+    else if (item.unlock.type === 'achievement' && codes.has(item.unlock.code)) out.add(item.id)
+  }
+  return out
+}
+
+/** True if `emote` may be used at `level` with `achievementCodes`. Unknown ids are rejected. */
+export function emoteIsUnlocked(emote: string | undefined | null, level: number, achievementCodes: Iterable<string>): boolean {
+  if (!emote) return false
+  const item = EMOTE_CATALOG.find((e) => e.id === emote)
+  if (!item) return false
+  return unlockedEmoteIds(level, achievementCodes).has(item.id)
 }

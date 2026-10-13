@@ -10,6 +10,12 @@ export const dynamic = 'force-dynamic'
 // ---------- helpers ----------
 const sanitize = (v: unknown): string => String(v ?? '').replace(/[<>&]/g, '').trim()
 
+function yesterdayKey(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
 function clampInt(v: unknown, min: number, max: number): number {
   const n = Math.round(Number(v))
   if (!Number.isFinite(n)) return min
@@ -99,6 +105,8 @@ export async function POST(req: Request) {
         level: player.level,
         leveledUp: false,
         newAchievements: [],
+        streak: player.dailyStreak,
+        streakUp: false,
         profile: { id: player.id, name: player.name, xp: player.xp, level: player.level },
         funnyTitle: existing.funnyTitle,
       })
@@ -116,6 +124,9 @@ export async function POST(req: Request) {
     const detentions = clampInt(body.detentions, 0, 50)
     const tokens = clampInt(body.tokens, 0, 16)
     const position = clampInt(body.position, 0, 50)
+
+    // current streak snapshot (returned for client refresh even when unchanged)
+    let streakOut = player.dailyStreak
 
     // ---- server-authoritative XP ----
     const xpEarned = Math.round(
@@ -237,9 +248,18 @@ export async function POST(req: Request) {
           dailyClaimed = true
           dailyBonus = def.reward
         }
+
+        // ---- daily streak bookkeeping (§16 retention) ----
+        let streakData: { dailyStreak?: number; lastDailyDone?: string } = {}
+        if (dailyJustCompleted) {
+          const streak = activePlayer.lastDailyDone === yesterdayKey(day) ? activePlayer.dailyStreak + 1 : 1
+          streakData = { dailyStreak: streak, lastDailyDone: day }
+          streakOut = streak
+        }
+
         await tx.player.update({
           where: { id: player.id },
-          data: { dailyProgress: rawProgress, dailyClaimed, dailyKind: def.kind, dailyDate: day },
+          data: { dailyProgress: rawProgress, dailyClaimed, dailyKind: def.kind, dailyDate: day, ...streakData },
         })
       }
 
@@ -335,6 +355,8 @@ export async function POST(req: Request) {
       level: outcome.newLevel,
       leveledUp: outcome.newLevel > player.level,
       newAchievements: outcome.newAchievements,
+      streak: streakOut,
+      streakUp: outcome.dailyJustCompleted,
       profile: {
         id: outcome.updatedPlayer.id,
         name: outcome.updatedPlayer.name,

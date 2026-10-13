@@ -99,6 +99,7 @@ function leaveRoom(socketId: string) {
   socketRooms.delete(socketId)
   const room = rooms.get(roomId)
   if (!room) return
+  squadLeaveInternal(socketId) // remove from any squad, notify remaining members
   const player = room.removePlayer(socketId)
   if (player) {
     io.to(room.id).emit('game:playerleft', socketId, player.name)
@@ -108,6 +109,38 @@ function leaveRoom(socketId: string) {
     rooms.delete(room.id)
     if (!room.isPublic && room.code) privateRooms.delete(room.code)
   }
+}
+
+// ---------- squads (§15 social — per-room protest cells of up to 4) ----------
+const SQUAD_CAP = 4
+const SQUAD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+interface Squad { code: string; members: Set<string> }
+const roomSquads = new Map<string, Map<string, Squad>>() // roomId -> code -> squad
+const socketSquad = new Map<string, { roomId: string; code: string }>() // socketId -> membership
+
+function emitSquad(room: Room, squad: Squad) {
+  const members = [...squad.members].map((id) => ({ id, name: room.getPlayer(id)?.name ?? 'Protester' }))
+  const payload = { code: squad.code, members }
+  for (const id of squad.members) io.to(id).emit('game:squad', payload)
+}
+
+/** Remove a socket from its squad (if any) and notify the remaining members. */
+function squadLeaveInternal(socketId: string) {
+  const membership = socketSquad.get(socketId)
+  if (!membership) return
+  socketSquad.delete(socketId)
+  const room = rooms.get(membership.roomId)
+  const squads = room ? roomSquads.get(membership.roomId) : undefined
+  if (!room || !squads) return
+  const squad = squads.get(membership.code)
+  if (!squad) return
+  squad.members.delete(socketId)
+  if (squad.members.size === 0) {
+    squads.delete(squad.code)
+    if (squads.size === 0) roomSquads.delete(membership.roomId)
+    return
+  }
+  emitSquad(room, squad)
 }
 
 // socketId -> roomId
@@ -223,6 +256,46 @@ io.on('connection', (socket) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined
     room?.revive(socket.id, data.targetId)
+  })
+
+  // ---------- squad handlers ----------
+
+  socket.on('game:squadCreate', () => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    if (!roomId || !room || !room.getPlayer(socket.id)) return
+    squadLeaveInternal(socket.id) // leave any previous squad first
+    let squads = roomSquads.get(roomId)
+    if (!squads) { squads = new Map(); roomSquads.set(roomId, squads) }
+    let code = ''
+    do {
+      code = ''
+      for (let i = 0; i < 4; i++) code += SQUAD_ALPHABET[Math.floor(Math.random() * SQUAD_ALPHABET.length)]
+    } while (squads.has(code))
+    const squad: Squad = { code, members: new Set([socket.id]) }
+    squads.set(code, squad)
+    socketSquad.set(socket.id, { roomId, code })
+    emitSquad(room, squad)
+  })
+
+  socket.on('game:squadJoin', (data: { code?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    if (!roomId || !room || !room.getPlayer(socket.id)) return
+    const code = String(data.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
+    const squad = roomSquads.get(roomId)?.get(code)
+    if (!squad) { socket.emit('game:squadError', 'SQUAD_NOT_FOUND'); return }
+    if (squad.members.has(socket.id)) { emitSquad(room, squad); return }
+    if (squad.members.size >= SQUAD_CAP) { socket.emit('game:squadError', 'SQUAD_FULL'); return }
+    squadLeaveInternal(socket.id)
+    squad.members.add(socket.id)
+    socketSquad.set(socket.id, { roomId, code })
+    emitSquad(room, squad)
+  })
+
+  socket.on('game:squadLeave', () => {
+    squadLeaveInternal(socket.id)
+    socket.emit('game:squad', null)
   })
 
   socket.on('game:heal', (data: { targetId?: unknown } = {}) => {

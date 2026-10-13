@@ -91,6 +91,8 @@ export interface MatchSummary extends MatchEndPayload {
   dailyJustCompleted?: boolean
   weeklyBonus?: number
   weeklyJustCompleted?: boolean
+  streak?: number
+  streakUp?: boolean
 }
 
 export interface Profile {
@@ -99,6 +101,7 @@ export interface Profile {
   archetype: string
   xp: number
   level: number
+  dailyStreak?: number
   cosmetics: { hat?: string; glasses?: boolean; signText?: string; skinTone?: string }
 }
 
@@ -113,6 +116,16 @@ export interface DailyState {
 
 export interface WeeklyState extends DailyState {
   week?: string
+}
+
+export interface CellMember {
+  id: string
+  name: string
+}
+
+export interface SquadState {
+  code: string
+  members: CellMember[]
 }
 
 export interface GameState {
@@ -137,6 +150,7 @@ export interface GameState {
   matchMode: 'solo' | 'multiplayer' | null
   photoMode: boolean
   photoFilter: number // 0 = off, 1 = poster, 2 = vintage, 3 = noir
+  squad: SquadState | null
 
   setUIMode: (m: UIMode) => void
   setMenuScreen: (s: MenuScreen) => void
@@ -157,6 +171,7 @@ export interface GameState {
   setJoining: (v: boolean, err?: string | null) => void
   setRoomCode: (c: string | null) => void
   setMatchMode: (m: 'solo' | 'multiplayer' | null) => void
+  setSquad: (s: SquadState | null) => void
   setPhotoMode: (v: boolean) => void
   setPhotoFilter: (i: number) => void
 }
@@ -212,6 +227,7 @@ export const useGameStore = create<GameState>((set) => ({
   matchMode: null,
   photoMode: false,
   photoFilter: 0,
+  squad: null,
 
   setUIMode: (m) => set({ uiMode: m }),
   setMenuScreen: (s) => set({ menuScreen: s }),
@@ -234,6 +250,7 @@ export const useGameStore = create<GameState>((set) => ({
   setJoining: (v, err = null) => set({ joining: v, joinError: err }),
   setRoomCode: (c) => set({ roomCode: c }),
   setMatchMode: (m) => set({ matchMode: m }),
+  setSquad: (s) => set({ squad: s }),
   setPhotoMode: (v) => set({ photoMode: v }),
   setPhotoFilter: (i) => set({ photoFilter: ((i % 4) + 4) % 4 }),
 }))
@@ -254,6 +271,9 @@ export interface UIActions {
   photoFilter: () => void
   photoSnapshot: () => void
   photoZoom: (dir: number) => void // -1 zoom out, +1 zoom in
+  squadCreate: () => void
+  squadJoin: (code: string) => void
+  squadLeave: () => void
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }

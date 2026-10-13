@@ -305,6 +305,19 @@ export class CharacterRig {
 
   setAlert(v: boolean) { if (this.alertIndicator) this.alertIndicator.visible = v }
   setNameVisible(v: boolean) { if (this.nameSprite) this.nameSprite.visible = v }
+  /** Rebuild the name sprite with a new color (squadmates get green tags). */
+  setNameColor(name: string, color: string) {
+    if (!this.nameSprite || this.nameSprite.userData.color === color) return
+    this.nameSprite.userData.color = color
+    const rebuilt = this.makeNameSprite(name, color)
+    rebuilt.position.copy(this.nameSprite.position)
+    const group = this.nameSprite.parent
+    if (group) {
+      group.remove(this.nameSprite)
+      group.add(rebuilt)
+    }
+    this.nameSprite = rebuilt
+  }
 
   update(dt: number, anim: AnimName, moveSpeed: number) {
     this.anim = anim

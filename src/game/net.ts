@@ -48,6 +48,8 @@ export type NetEvents = {
   onMatchEnd: (payload: MatchEndPayload) => void
   onTokens: (count: number) => void
   onGate: (open: boolean) => void
+  onSquad: (squad: { code: string; members: { id: string; name: string }[] } | null) => void
+  onSquadError: (reason: 'SQUAD_NOT_FOUND' | 'SQUAD_FULL') => void
   onDisconnect: () => void
   onConnect: () => void
   onPing: (ms: number) => void
@@ -108,6 +110,8 @@ export class NetClient {
         socket.on('game:matchend', (payload: MatchEndPayload) => this.ev.onMatchEnd?.(payload))
         socket.on('game:tokens', (count: number) => this.ev.onTokens?.(count))
         socket.on('game:gate', (open: boolean) => this.ev.onGate?.(open))
+        socket.on('game:squad', (s: { code: string; members: { id: string; name: string }[] } | null) => this.ev.onSquad?.(s))
+        socket.on('game:squadError', (reason: 'SQUAD_NOT_FOUND' | 'SQUAD_FULL') => this.ev.onSquadError?.(reason))
         socket.on('game:pong', (sentAt: number) => {
           this.ping = Math.round(performance.now() - sentAt)
           this.ev.onPing?.(this.ping)
@@ -143,6 +147,9 @@ export class NetClient {
   bossHit() { this.socket?.emit('game:bossHit', {}) }
   bossGrabBallot(x: number, z: number) { this.socket?.emit('game:bossBallot', { x, z }) }
   bossDeposit(x: number, z: number) { this.socket?.emit('game:bossDeposit', { x, z }) }
+  squadCreate() { this.socket?.emit('game:squadCreate') }
+  squadJoin(code: string) { this.socket?.emit('game:squadJoin', { code }) }
+  squadLeave() { this.socket?.emit('game:squadLeave') }
   leave() {
     this.socket?.emit('game:leave')
     this.socket?.disconnect()

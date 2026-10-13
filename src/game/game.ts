@@ -25,6 +25,7 @@ import {
 } from './shared/constants'
 import type { AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
+import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG } from '@/lib/cosmetics'
 
 export const QUICK_MESSAGES = [
   'Chai break, anyone?', 'Follow me!', 'POLICE! Scatter!', 'Nice one!', 'Help! Detained!',
@@ -41,6 +42,20 @@ export const EMOTE_LABELS: Record<string, string> = {
   facepalm: 'Not this again…',
   flex: 'Strong together!',
   cry: 'The votes… they are gone…',
+  chant: 'AIYOO COMMITTEE! AIYOO AIYOO!',
+  chai: 'Chai break! Sipped proudly.',
+}
+
+/** Anim each emote maps to on remote rigs. */
+const EMOTE_ANIMS: Record<string, AnimName> = {
+  wave: 'celebrate',
+  dance: 'celebrate',
+  salute: 'idle',
+  facepalm: 'dazed',
+  flex: 'celebrate',
+  cry: 'dazed',
+  chant: 'celebrate',
+  chai: 'heal',
 }
 
 interface MatchStats {
@@ -120,6 +135,10 @@ export class Game {
   private photoKeyHandler: ((e: KeyboardEvent) => void) | null = null
   private canvasEl: HTMLCanvasElement | null = null
   private spectateName: string | null = null
+  private unlockedEmotes = new Set<string>(['wave', 'salute', 'facepalm', 'cry'])
+  private squad = { code: null as string | null, memberIds: new Set<string>() }
+  private lastSquadCode: string | null = null
+  private squadAutoRejoin = false
 
   async boot(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
@@ -168,6 +187,15 @@ export class Game {
       onMatchEnd: (payload) => this.handleMatchEnd(payload),
       onTokens: (count) => { this.tokens = count; this.checkGate() },
       onGate: (open) => this.setGate(open),
+      onSquad: (s) => this.onSquadUpdate(s),
+      onSquadError: (reason) => {
+        if (this.squadAutoRejoin) {
+          this.squadAutoRejoin = false
+          return // silent: squad did not survive the room change after reconnect
+        }
+        const why = reason === 'SQUAD_FULL' ? 'That squad is full (4 max)' : 'No squad with that code in this room'
+        this.store.notify(why, 'warning')
+      },
       onPing: (ms) => this.store.patchHud({ ping: ms }),
       onDisconnect: () => {
         if (this.running && !this.offline) {
@@ -177,6 +205,9 @@ export class Game {
           } else {
             this.store.notify('Connection lost — switching to offline mode', 'warning')
           }
+          // squads are room-scoped: drop the local cell state until we land back in one
+          this.squad = { code: null, memberIds: new Set() }
+          useGameStore.getState().setSquad(null)
           this.offline = true
           this.store.patchHud({ connection: 'offline' })
         }
@@ -196,6 +227,11 @@ export class Game {
             })
             this.offline = false
             this.store.notify('Reconnected to the protest!', 'squad')
+            // attempt to restore the protest cell if it survived in the room
+            if (this.lastSquadCode) {
+              this.squadAutoRejoin = true
+              this.net.squadJoin(this.lastSquadCode)
+            }
           }
         }
       },
@@ -236,6 +272,17 @@ export class Game {
       photoFilter: () => this.cyclePhotoFilter(),
       photoSnapshot: () => this.takeSnapshot(),
       photoZoom: (dir) => this.photoZoom(dir),
+      squadCreate: () => {
+        if (this.offline) { this.store.notify('Squads need a live room — go multiplayer!', 'warning'); return }
+        this.net.squadCreate()
+      },
+      squadJoin: (code) => {
+        if (this.offline) { this.store.notify('Squads need a live room — go multiplayer!', 'warning'); return }
+        const clean = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
+        if (clean.length !== 4) { this.store.notify('Squad codes are 4 characters', 'warning'); return }
+        this.net.squadJoin(clean)
+      },
+      squadLeave: () => this.net.squadLeave(),
     })
 
     this.ensurePhotoKeyHandler()
@@ -256,7 +303,7 @@ export class Game {
   }
 
   // ================= match lifecycle =================
-  private async startMatch(mode: 'solo' | 'multiplayer', roomCode: string | null) {
+  async startMatch(mode: 'solo' | 'multiplayer', roomCode: string | null) {
     const store = useGameStore.getState()
     store.setUIMode('loading')
     this.mode = mode
@@ -275,10 +322,15 @@ export class Game {
     this.carryingBallotId = null
     this.matchTime = 0
     this.humorTimer = 24
+    this.squad = { code: null, memberIds: new Set() }
+    this.lastSquadCode = null
+    this.squadAutoRejoin = false
+    useGameStore.getState().setSquad(null)
 
     const profile = store.profile
     this.archetype = profile?.archetype ?? 'student'
     const name = profile?.name ?? 'Protester'
+    this.refreshUnlockedEmotes()
 
     // reset world states
     this.worldRenderer.setBossGateOpen(false)
@@ -370,6 +422,26 @@ export class Game {
     this.onboardingTimers = []
   }
 
+  /** Refresh the unlocked-emote set (level from profile + medal codes from the API). */
+  private refreshUnlockedEmotes() {
+    const store = useGameStore.getState()
+    const level = store.profile?.level ?? 1
+    const seed = new Set<string>()
+    for (const e of EMOTE_CATALOG) if (e.unlock.type === 'free') seed.add(e.id)
+    this.unlockedEmotes = seed
+    try {
+      const raw = localStorage.getItem('votechor_profile')
+      const token = raw ? (JSON.parse(raw) as { token?: string }).token : null
+      fetch('/api/achievements', { headers: token ? { 'x-vc-token': token } : {} })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { unlocked?: string[] } | null) => {
+          if (!data?.unlocked) return
+          this.unlockedEmotes = new Set([...unlockedEmoteIds(level, data.unlocked)])
+        })
+        .catch(() => { /* offline — free emotes remain usable */ })
+    } catch { /* private browsing — free emotes remain usable */ }
+  }
+
   leaveMatch() {
     if (this.matchEnded) return
     this.exitPhotoMode(false)
@@ -380,7 +452,11 @@ export class Game {
     this.npcs.bubbles.clear()
     this.playerBubbles.clear()
     this.lastHunted = false
+    this.squad = { code: null, memberIds: new Set() }
+    this.lastSquadCode = null
+    this.squadAutoRejoin = false
     useGameStore.getState().patchHud({ hunted: false })
+    useGameStore.getState().setSquad(null)
     AudioManager.setTheme('menu')
     AudioManager.setCrowdLevel(0.25)
     const st = useGameStore.getState()
@@ -522,9 +598,37 @@ export class Game {
   private playRemoteEmote(playerId: string, emote: string) {
     const r = this.remotePlayers.get(playerId)
     if (!r) return
-    const map: Record<string, AnimName> = { wave: 'celebrate', dance: 'celebrate', salute: 'idle', facepalm: 'dazed', flex: 'celebrate', cry: 'dazed' }
-    r.anim = map[emote] ?? 'celebrate'
+    r.anim = EMOTE_ANIMS[emote] ?? 'celebrate'
     this.sayBubble(playerId, EMOTE_LABELS[emote] ?? emote)
+  }
+
+  // ================= squads (§15) =================
+
+  private onSquadUpdate(s: { code: string; members: { id: string; name: string }[] } | null) {
+    const me = this.net.playerId
+    if (!s) {
+      this.squad = { code: null, memberIds: new Set() }
+      this.lastSquadCode = null
+      useGameStore.getState().setSquad(null)
+    } else {
+      const restoring = this.squadAutoRejoin
+      this.squadAutoRejoin = false
+      this.squad = { code: s.code, memberIds: new Set(s.members.map((m) => m.id)) }
+      this.lastSquadCode = s.code
+      useGameStore.getState().setSquad({ code: s.code, members: s.members })
+      if (this.squad.memberIds.has(me)) {
+        this.store.notify(
+          restoring
+            ? `Squad ${s.code} restored — back in the cell!`
+            : `Squad ${s.code} — ${s.members.length}/4 strong. Name tags recolored!`,
+          'squad',
+        )
+      }
+    }
+    // squadmates wear green name tags; everyone else stays white
+    for (const [id, r] of this.remotePlayers) {
+      r.rig.setNameColor(r.name, this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
+    }
   }
 
   // ================= input & actions =================
@@ -636,7 +740,21 @@ export class Game {
 
   private playEmote(emote: string) {
     if (!this.player) return
-    this.player.playAnim(emote === 'cry' || emote === 'facepalm' ? 'dazed' : 'celebrate', 1.6)
+    // §16 progression gate — server catalog shared with the emote wheel UI
+    const level = useGameStore.getState().profile?.level ?? 1
+    if (!emoteIsUnlocked(emote, level, this.unlockedEmotes)) {
+      const item = EMOTE_CATALOG.find((e) => e.id === emote)
+      if (item) {
+        const why = item.unlock.type === 'level'
+          ? `Reach level ${item.unlock.level}`
+          : item.unlock.type === 'achievement'
+            ? `Earn medal: ${item.unlock.code.replaceAll('_', ' ').toUpperCase()}`
+            : 'Emote locked'
+        this.store.notify(`Emote locked — ${why}`, 'warning')
+      }
+      return
+    }
+    this.player.playAnim(EMOTE_ANIMS[emote] ?? 'celebrate', 1.6)
     this.net.emote(emote)
     this.sayBubble('me', EMOTE_LABELS[emote] ?? emote)
     useGameStore.getState().toggleEmoteWheel(false)
@@ -1280,6 +1398,8 @@ export class Game {
     let dailyJustCompleted = false
     let weeklyBonus = 0
     let weeklyJustCompleted = false
+    let streak: number | undefined
+    let streakUp = false
     const profileRaw = typeof window !== 'undefined' ? localStorage.getItem('votechor_profile') : null
     const token = profileRaw ? (JSON.parse(profileRaw) as { token: string }).token : null
     if (token) {
@@ -1304,11 +1424,15 @@ export class Game {
             daily?: { kind: string; desc: string; target: number; reward: number; progress: number; claimed: boolean; justCompleted: boolean } | null
             weeklyBonus?: number
             weekly?: { kind: string; desc: string; target: number; reward: number; progress: number; claimed: boolean; justCompleted: boolean } | null
+            streak?: number
+            streakUp?: boolean
           }
           xpEarned = data.xpEarned
           newAchievements = data.newAchievements ?? []
           leveledUp = data.leveledUp
           newLevel = data.level
+          streak = data.streak
+          streakUp = !!data.streakUp
           if (data.daily) {
             dailyBonus = data.dailyBonus ?? 0
             dailyDesc = data.daily.desc
@@ -1321,7 +1445,7 @@ export class Game {
             useGameStore.getState().setWeekly({ kind: data.weekly.kind, desc: data.weekly.desc, target: data.weekly.target, reward: data.weekly.reward, progress: data.weekly.progress, claimed: data.weekly.claimed })
           }
           if (data.profile && store.profile) {
-            const updated = { ...store.profile, xp: data.profile.xp, level: data.profile.level }
+            const updated = { ...store.profile, xp: data.profile.xp, level: data.profile.level, ...(streak !== undefined ? { dailyStreak: streak } : {}) }
             store.setProfile(updated)
             // keep localStorage in sync so the menu shows fresh progress after reload
             try {
@@ -1335,11 +1459,12 @@ export class Game {
           for (const a of newAchievements) store.notify(`Achievement: ${a.name}!`, 'achievement')
           if (dailyJustCompleted) store.notify(`DAILY CHALLENGE COMPLETE! +${dailyBonus} bonus XP!`, 'achievement')
           if (weeklyJustCompleted) store.notify(`WEEKLY CHALLENGE COMPLETE! +${weeklyBonus} bonus XP!`, 'achievement')
+          if (streakUp && streak && streak > 1) store.notify(`🔥 ${streak}-DAY STREAK — don't break the chain!`, 'achievement')
           if (leveledUp) { store.notify(`LEVEL UP — Level ${newLevel}!`, 'achievement'); AudioManager.play('victory') }
         }
       } catch { /* offline persistence failure is fine */ }
     }
-    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted }
+    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted, streak, streakUp }
     store.setMatchSummary(summary)
     store.setUIMode('ended')
     AudioManager.setTheme('menu')
