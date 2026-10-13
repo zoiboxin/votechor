@@ -126,7 +126,7 @@ export class Game {
   private detainUntil = 0
   private carryingBallot = false
   private carryingBallotId: string | null = null
-  private remotePlayers = new Map<string, { rig: import('./character').CharacterRig; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; health: number; detained: boolean }>()
+  private remotePlayers = new Map<string, { rig: import('./character').CharacterRig; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; health: number; detained: boolean; archetype: string }>()
   private serverNpcRys: Record<string, number> = {}
   private lastTokenPos = { x: 0, z: 0 }
   private humorTimer = 30
@@ -149,6 +149,7 @@ export class Game {
   private squad = { code: null as string | null, memberIds: new Set<string>() }
   private lastSquadCode: string | null = null
   private squadAutoRejoin = false
+  private kudosSentTo = new Set<string>()
   private rallyReadyAt = 0
   private inviteClearTimer: ReturnType<typeof setTimeout> | null = null
   private static RALLY_COOLDOWN_MS = 45000
@@ -194,8 +195,8 @@ export class Game {
       onProjectile: (p) => this.items.spawnRemoteProjectile(p.id, p.type, p.x, p.y, p.z, p.vx, p.vy, p.vz),
       onEmote: (playerId, emote) => this.playRemoteEmote(playerId, emote),
       onQuickMsg: (playerId, msgId) => this.onRemoteQuickMsg(playerId, msgId),
-      onPlayerLeft: (playerId, name) => { this.removeRemote(playerId); this.store.notify(`${name} left the protest`, 'info') },
-      onPlayerJoined: (_playerId, name) => this.store.notify(`${name} joined the protest!`, 'squad'),
+      onPlayerLeft: (playerId, name) => { this.removeRemote(playerId); this.syncRoomRoster(); this.store.notify(`${name} left the protest`, 'info') },
+      onPlayerJoined: (playerId, name) => { this.deferredRosterAdd(playerId, name); this.store.notify(`${name} joined the protest!`, 'squad') },
       onHealth: (playerId, health, dazed) => this.onRemoteHealth(playerId, health, dazed),
       onDamage: (playerId, amount, kind) => { if (playerId === this.net.playerId) this.applyDamage(amount, kind) },
       onMatchEnd: (payload) => this.handleMatchEnd(payload),
@@ -205,6 +206,19 @@ export class Game {
       onGift: (g) => this.onGiftReceived(g),
       onGiftBounce: (g) => this.onGiftBounced(g),
       onGiftRefund: (type) => this.onGiftRefund(type),
+      onKudos: (k) => this.onKudosReceived(k),
+      onKudosSent: (k) => {
+        this.kudosSentTo.add(k.targetId)
+        this.store.notify(`Kudos sent to ${k.targetName} — solidarity saluted 🙌`, 'squad')
+      },
+      onMvpTally: (t) => useGameStore.getState().setMvpTally(t),
+      onMvpFinal: (f) => this.onMvpFinal(f),
+      onMvpError: (e) => {
+        const why = e.reason === 'SELF_VOTE'
+          ? 'No voting for yourself — the committee frowns on ballot fraud'
+          : 'That protester left before the vote landed'
+        this.store.notify(why, 'warning')
+      },
       onSquadInvite: (inv) => this.onSquadInvite(inv),
       onSquadInviteSent: (s) => this.store.notify(`Invite sent to ${s.targetName} — the cell awaits`, 'squad'),
       onSquadInviteAccepted: (s) => {
@@ -325,6 +339,17 @@ export class Game {
       rallyToCell: () => this.rallyToCell(),
       giftNearest: () => this.giftNearest(),
       giftTo: (targetId) => this.giftTo(targetId),
+      kudosTo: (targetId) => {
+        if (this.offline) { this.store.notify('Kudos need teammates — go multiplayer!', 'warning'); return }
+        if (!targetId || targetId === this.net.playerId) return
+        if (this.kudosSentTo.has(targetId)) { this.store.notify('You already saluted this protester', 'info'); return }
+        this.net.kudos(targetId)
+      },
+      mvpVote: (targetId) => {
+        if (this.offline) { this.store.notify('MVP voting needs teammates — go multiplayer!', 'warning'); return }
+        if (!targetId || targetId === this.net.playerId) return
+        this.net.mvpVote(targetId)
+      },
     })
 
     this.ensurePhotoKeyHandler()
@@ -342,6 +367,8 @@ export class Game {
     useGameStore.getState().setUIMode('menu')
     // debug handle for QA tooling
     ;(window as unknown as { __vc: unknown }).__vc = this
+    // QA affordance: direct store access for tooling (same contract as __vc)
+    ;(window as unknown as { __vcStore: unknown }).__vcStore = useGameStore
   }
 
   // ================= match lifecycle =================
@@ -356,6 +383,9 @@ export class Game {
     this.matchEnded = false
     this.endHandled = false
     this.tokens = 0
+    this.kudosSentTo.clear()
+    useGameStore.getState().resetPostMatch()
+    useGameStore.getState().setRoomRoster([])
     this.gateOpen = false
     this.activatedCheckpoints.clear()
     this.inventory = []
@@ -377,6 +407,7 @@ export class Game {
     this.refreshUnlockedEmotes()
 
     // reset world states
+    this.net.leave() // drop any lingering previous-room socket (post-match ghosts)
     this.worldRenderer.setBossGateOpen(false)
     this.bossClient.hideAll()
     this.fx.clear()
@@ -486,8 +517,8 @@ export class Game {
     } catch { /* private browsing — free emotes remain usable */ }
   }
 
-  leaveMatch() {
-    if (this.matchEnded) return
+  leaveMatch(force = false) {
+    if (this.matchEnded && !force) return // normal mid-match quit; the end screen passes force=true
     this.exitPhotoMode(false)
     this.net.leave()
     this.running = false
@@ -531,7 +562,20 @@ export class Game {
     // sync world state
     if (ack.checkpoints) ack.checkpoints.forEach(cp => this.activatedCheckpoints.add(cp))
     if (ack.boss && ack.boss.active) this.bossActiveLocal = true
+    this.syncRoomRoster()
     useGameStore.getState().notify(`Joined room ${ack.roomCode}`, 'squad')
+    // invite deep-link (§15): ?squad=CODE auto-joins the cell right after the room
+    if (this.mode === 'multiplayer') {
+      try {
+        const deepCode = sessionStorage.getItem('vc_squad_deeplink')
+        if (deepCode && /^[A-Z0-9]{4}$/.test(deepCode)) {
+          sessionStorage.removeItem('vc_squad_deeplink')
+          this.squadAutoRejoin = true // silent error path if the cell is gone/full
+          this.net.squadJoin(deepCode)
+          useGameStore.getState().notify(`Invite link detected — joining cell ${deepCode}…`, 'squad')
+        }
+      } catch { /* sessionStorage unavailable */ }
+    }
   }
 
   private onServerPlayers(players: import('./shared/types').PlayerNetState[]) {
@@ -554,13 +598,14 @@ export class Game {
       if (!seen.has(id)) { this.removeRemote(id) }
     }
     useGameStore.getState().patchHud({ playersOnline: online })
+    this.syncRoomRoster()
   }
 
   private addRemote(p: import('./shared/types').PlayerNetState) {
     const rig = new CharacterRig({ archetype: p.archetype, name: p.name })
     rig.group.position.set(p.x, p.y, p.z)
     this.engine.scene.add(rig.group)
-    const r = { rig, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained }
+    const r = { rig, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype }
     this.remotePlayers.set(p.id, r)
     return r
   }
@@ -796,6 +841,65 @@ export class Game {
     this.store.notify('Gift did not land — item returned to your pockets', 'warning')
     this.stats.gifts = Math.max(0, this.stats.gifts - 1)
     this.syncHud()
+  }
+
+  // ================= post-match honors (§15 — kudos + MVP) =================
+
+  /** Someone saluted us — celebrate, count it, and persist the stat. */
+  private onKudosReceived(k: { fromId: string; fromName: string }) {
+    const store = useGameStore.getState()
+    store.bumpKudosReceived()
+    AudioManager.play('token')
+    const pos = this.player?.rig.group.position
+    if (pos) this.fx.popup('🙌 KUDOS!', '#f2c14e', pos.x, 2.4, pos.z)
+    this.player?.playAnim('celebrate', 0.8)
+    store.notify(`${k.fromName} salutes your protest — kudos received! 🙌`, 'squad')
+    this.flushSocialStat({ kudos: 1 })
+  }
+
+  /** The room's MVP vote concluded — crown the winner (and log our own titles). */
+  private onMvpFinal(f: { winnerId: string | null; winnerName: string | null; tally: { id: string; name: string; votes: number }[]; voters: number }) {
+    const store = useGameStore.getState()
+    if (f.winnerId && f.winnerName) {
+      store.setMvpWinner({ winnerId: f.winnerId, winnerName: f.winnerName })
+      AudioManager.play('checkpoint')
+      store.notify(`🏆 MVP: ${f.winnerName} — ${f.voters} vote${f.voters === 1 ? '' : 's'} cast!`, 'squad')
+      if (f.winnerId === this.net.playerId) {
+        this.fx.popup('🏆 MVP!', '#f2c14e', this.player?.rig.group.position.x ?? 0, 2.6, this.player?.rig.group.position.z ?? 0)
+        store.notify('YOU are the Most Valuable Protester! The aunty is telling everyone.', 'achievement')
+        this.flushSocialStat({ mvp: true })
+      }
+    } else {
+      store.setMvpTally({ tally: f.tally, voters: f.voters, roomPlayers: store.postMatch.roomPlayers })
+    }
+  }
+
+  /** Persist kudos/MVP honors to the profile (fire-and-forget; social stats are cosmetic). */
+  private flushSocialStat(delta: { kudos?: number; mvp?: boolean }) {
+    if (typeof window === 'undefined') return
+    try {
+      const token = (JSON.parse(localStorage.getItem('votechor_profile') ?? 'null') as { token?: string } | null)?.token
+      if (!token) return
+      void fetch('/api/social', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-vc-token': token },
+        body: JSON.stringify(delta),
+      }).catch(() => { /* social stats are best-effort */ })
+    } catch { /* no profile — nothing to persist */ }
+  }
+
+  /** Rebuild the EndScreen roster from the live remote-player set. */
+  private syncRoomRoster() {
+    if (this.offline || !this.net.playerId) { useGameStore.getState().setRoomRoster([]); return }
+    const roster = [...this.remotePlayers.entries()]
+      .filter(([id]) => id !== this.net.playerId)
+      .map(([id, r]) => ({ id, name: r.name, archetype: r.archetype || 'student' }))
+    useGameStore.getState().setRoomRoster(roster)
+  }
+
+  /** playerjoined fires before the next players broadcast — sync once it lands. */
+  private deferredRosterAdd(_playerId: string, _name: string) {
+    setTimeout(() => this.syncRoomRoster(), 2500)
   }
 
   private onSquadUpdate(s: { code: string; members: { id: string; name: string }[] } | null) {

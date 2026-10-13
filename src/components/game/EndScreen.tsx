@@ -2,24 +2,31 @@
 
 import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
-import { xpForLevel, levelFromXp } from '@/game/shared/constants'
+import { xpForLevel, levelFromXp, archetypeById } from '@/game/shared/constants'
 import {
   Vote, Crown, Skull, Trophy, Footprints, Flag, KeyRound, HeartPulse, Package, Zap,
   Timer, Users, Play, Home, Medal, X, CalendarCheck, CalendarRange, Handshake, Gift,
+  HeartHandshake, Award,
 } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 
 const AUTO_RETURN_SECONDS = 14
 
 export default function EndScreen() {
   const summary = useGameStore((s) => s.matchSummary)
   const profile = useGameStore((s) => s.profile)
+  const matchMode = useGameStore((s) => s.matchMode)
+  const roomRoster = useGameStore((s) => s.roomRoster)
+  const postMatch = useGameStore((s) => s.postMatch)
   const [countdown, setCountdown] = useState(AUTO_RETURN_SECONDS)
   const [autoReturn, setAutoReturn] = useState(true)
+  const [kudosSent, setKudosSent] = useState<Set<string>>(new Set())
+  const [votedFor, setVotedFor] = useState<string | null>(null)
 
   const toMenu = () => {
     setAutoReturn(false)
     useGameStore.getState().setMatchSummary(null)
+    uiActions().leaveMatch(true) // force: release the room socket so no ghost protester lingers
     useGameStore.getState().setUIMode('menu')
   }
   const playAgain = () => {
@@ -53,6 +60,10 @@ export default function EndScreen() {
   const next = xpForLevel(level + 1)
   const xpIntoLevel = Math.max(0, (profile?.xp ?? base) - base)
   const pct = Math.min(100, (xpIntoLevel / Math.max(1, next - base)) * 100)
+
+  const showHonors = matchMode === 'multiplayer' && roomRoster.length > 0
+  const tallyById = new Map((postMatch.tally ?? []).map((t) => [t.id, t]))
+  const mvpId = postMatch.mvp?.winnerId ?? null
 
   const stats = [
     { icon: Vote, label: 'Vote Tokens', value: summary.tokens },
@@ -256,6 +267,155 @@ export default function EndScreen() {
                 </span>
               ))}
             </div>
+          </motion.div>
+        )}
+
+        {/* Match honors — kudos + MVP voting (multiplayer, §15) */}
+        {showHonors && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+            className="rounded-2xl border-2 border-[#1c1a17]/80 bg-[#f5efdc] p-4 shadow-[4px_4px_0_#1c1a17]"
+          >
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-[#1c1a17]">
+                <Award className="h-4 w-4 text-[#b07d1e]" /> Match Honors
+              </div>
+              <div className="flex items-center gap-1.5">
+                <AnimatePresence>
+                  {postMatch.kudosReceived > 0 && (
+                    <motion.span
+                      key={postMatch.kudosReceived}
+                      initial={{ scale: 1.6, rotate: -6 }}
+                      animate={{ scale: 1, rotate: 0 }}
+                      className="flex items-center gap-1 rounded-full border-2 border-[#b07d1e] bg-[#f2c14e] px-2 py-0.5 text-[10px] font-black uppercase tracking-widest text-[#1c1a17] shadow-[2px_2px_0_#b07d1e]"
+                    >
+                      🙌 {postMatch.kudosReceived} received
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+                {postMatch.mvp && (
+                  <motion.span
+                    initial={{ scale: 0.4, rotate: 8, opacity: 0 }}
+                    animate={{ scale: 1, rotate: [-2, 2, -2], opacity: 1 }}
+                    transition={{ rotate: { duration: 1.6, repeat: Infinity, repeatDelay: 1.2 } }}
+                    className="flex items-center gap-1 rounded-full border-2 border-[#8c1f28] bg-gradient-to-r from-[#f2c14e] to-[#f2a541] px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest text-[#1c1a17] shadow-[2px_2px_0_#8c1f28]"
+                  >
+                    <Crown className="h-3 w-3" /> MVP: {postMatch.mvp.winnerName}
+                  </motion.span>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              {roomRoster.map((p) => {
+                const arch = archetypeById(p.archetype || 'student')
+                const t = tallyById.get(p.id)
+                const votes = t?.votes ?? 0
+                const isMvp = mvpId === p.id
+                const gotKudos = kudosSent.has(p.id)
+                const voteClosed = Boolean(postMatch.mvp) || votedFor !== null
+                return (
+                  <div
+                    key={p.id}
+                    className={`relative overflow-hidden rounded-xl border-2 px-2.5 py-1.5 transition-colors ${
+                      isMvp ? 'border-[#b07d1e] bg-[#f2c14e]/25' : 'border-[#1c1a17]/60 bg-white/40'
+                    }`}
+                  >
+                    {/* live vote tally bar */}
+                    {votes > 0 && (
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.min(100, (votes / Math.max(1, postMatch.voters)) * 100)}%` }}
+                        transition={{ type: 'spring', stiffness: 90, damping: 18 }}
+                        className={`absolute inset-y-0 left-0 ${isMvp ? 'bg-[#f2c14e]/40' : 'bg-[#2e6e4e]/12'}`}
+                      />
+                    )}
+                    <div className="relative flex items-center gap-2.5">
+                      <span
+                        className="h-6 w-6 shrink-0 rounded-full border-2 border-[#1c1a17]/60"
+                        style={{ background: arch.colors.shirt }}
+                        aria-hidden
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-xs font-black uppercase tracking-tight text-[#1c1a17]">{p.name}</span>
+                          {isMvp && (
+                            <span className="flex items-center gap-0.5 rounded border border-[#b07d1e] bg-[#f2c14e] px-1 text-[8px] font-black uppercase text-[#1c1a17]">
+                              <Crown className="h-2.5 w-2.5" /> MVP
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/45">
+                          {arch.name}
+                          {votes > 0 && ` · ${votes} vote${votes === 1 ? '' : 's'}`}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {/* KUDOS */}
+                        <button
+                          onClick={() => {
+                            if (gotKudos) return
+                            setKudosSent((prev) => new Set(prev).add(p.id))
+                            uiActions().kudosTo(p.id)
+                          }}
+                          disabled={gotKudos}
+                          title={gotKudos ? `You saluted ${p.name}` : `Salute ${p.name} — send kudos 🙌`}
+                          aria-label={`Send kudos to ${p.name}`}
+                          className={`flex h-8 items-center gap-1 rounded-lg border-2 px-2 text-[9px] font-black uppercase tracking-widest shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-all ${
+                            gotKudos
+                              ? 'cursor-not-allowed border-[#b07d1e] bg-[#f2c14e]/50 text-[#1c1a17]/60'
+                              : 'border-[#1c1a17]/70 bg-[#7de3a8] text-[#1c1a17] hover:-translate-y-0.5 hover:bg-[#a7efc3] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none'
+                          }`}
+                        >
+                          <HeartHandshake className="h-3.5 w-3.5" />
+                          {gotKudos ? 'Saluted' : 'Kudos'}
+                        </button>
+                        {/* MVP VOTE */}
+                        <button
+                          onClick={() => {
+                            if (voteClosed || votedFor === p.id) return
+                            setVotedFor(p.id)
+                            uiActions().mvpVote(p.id)
+                          }}
+                          disabled={voteClosed}
+                          title={
+                            postMatch.mvp
+                              ? 'Vote closed — MVP crowned'
+                              : votedFor
+                                ? `Your vote is locked in (${roomRoster.find((r) => r.id === votedFor)?.name ?? ''})`
+                                : `Vote ${p.name} as Most Valuable Protester`
+                          }
+                          aria-label={`Vote ${p.name} as MVP`}
+                          className={`flex h-8 items-center gap-1 rounded-lg border-2 px-2 text-[9px] font-black uppercase tracking-widest shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-all ${
+                            votedFor === p.id
+                              ? 'cursor-default border-[#8c1f28] bg-[#8c1f28] text-[#f5efdc]'
+                              : voteClosed
+                                ? 'cursor-not-allowed border-[#1c1a17]/30 bg-[#e7dfc9] text-[#1c1a17]/30'
+                                : 'border-[#1c1a17]/70 bg-[#f5d9d4] text-[#8c1f28] hover:-translate-y-0.5 hover:bg-[#efc4bc] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none'
+                          }`}
+                        >
+                          <Vote className="h-3.5 w-3.5" />
+                          {votedFor === p.id ? 'Voted' : 'MVP'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <p className="mt-2 flex items-center justify-between gap-2 border-t-2 border-dashed border-[#1c1a17]/25 pt-1.5 text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/45">
+              <span>Salute your favorites — the crowd remembers</span>
+              <span>
+                {postMatch.mvp
+                  ? 'Verdict in'
+                  : postMatch.voters > 0
+                    ? `${postMatch.voters}/${postMatch.roomPlayers} votes in`
+                    : 'Vote open · 15s window'}
+              </span>
+            </p>
           </motion.div>
         )}
 

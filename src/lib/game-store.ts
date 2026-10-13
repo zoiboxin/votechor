@@ -140,6 +140,27 @@ export interface PendingInvite {
   at: number
 }
 
+export interface RoomRosterEntry { id: string; name: string; archetype: string }
+
+export interface MvpTallyRow { id: string; name: string; votes: number }
+
+/** Live post-match honors state — kudos counters + MVP vote tally (multiplayer). */
+export interface PostMatchState {
+  kudosReceived: number
+  tally: MvpTallyRow[] | null
+  voters: number
+  roomPlayers: number
+  mvp: { winnerId: string; winnerName: string } | null
+}
+
+const defaultPostMatch: PostMatchState = {
+  kudosReceived: 0,
+  tally: null,
+  voters: 0,
+  roomPlayers: 0,
+  mvp: null,
+}
+
 export interface GameState {
   uiMode: UIMode
   menuScreen: MenuScreen
@@ -164,6 +185,8 @@ export interface GameState {
   photoFilter: number // 0 = off, 1 = poster, 2 = vintage, 3 = noir
   squad: SquadState | null
   pendingInvite: PendingInvite | null
+  postMatch: PostMatchState
+  roomRoster: RoomRosterEntry[]
 
   setUIMode: (m: UIMode) => void
   setMenuScreen: (s: MenuScreen) => void
@@ -188,6 +211,11 @@ export interface GameState {
   setPendingInvite: (inv: PendingInvite | null) => void
   setPhotoMode: (v: boolean) => void
   setPhotoFilter: (i: number) => void
+  resetPostMatch: () => void
+  bumpKudosReceived: () => void
+  setMvpTally: (t: { tally: MvpTallyRow[]; voters: number; roomPlayers: number } | null) => void
+  setMvpWinner: (m: { winnerId: string; winnerName: string } | null) => void
+  setRoomRoster: (r: RoomRosterEntry[]) => void
 }
 
 const defaultHud: HudState = {
@@ -243,6 +271,8 @@ export const useGameStore = create<GameState>((set) => ({
   photoFilter: 0,
   squad: null,
   pendingInvite: null,
+  postMatch: defaultPostMatch,
+  roomRoster: [],
 
   setUIMode: (m) => set({ uiMode: m }),
   setMenuScreen: (s) => set({ menuScreen: s }),
@@ -269,13 +299,18 @@ export const useGameStore = create<GameState>((set) => ({
   setPendingInvite: (inv) => set({ pendingInvite: inv }),
   setPhotoMode: (v) => set({ photoMode: v }),
   setPhotoFilter: (i) => set({ photoFilter: ((i % 4) + 4) % 4 }),
+  resetPostMatch: () => set({ postMatch: { ...defaultPostMatch } }),
+  bumpKudosReceived: () => set((st) => ({ postMatch: { ...st.postMatch, kudosReceived: st.postMatch.kudosReceived + 1 } })),
+  setMvpTally: (t) => set((st) => ({ postMatch: { ...st.postMatch, tally: t?.tally ?? null, voters: t?.voters ?? 0, roomPlayers: t?.roomPlayers ?? 0 } })),
+  setMvpWinner: (m) => set((st) => ({ postMatch: { ...st.postMatch, mvp: m } })),
+  setRoomRoster: (r) => set({ roomRoster: r }),
 }))
 
 // ---- controller bridge: UI calls these, engine registers handlers ----
 export interface UIActions {
   startSolo: () => void
   joinMultiplayer: (roomCode: string | null, roomName?: string) => void
-  leaveMatch: () => void
+  leaveMatch: (force?: boolean) => void
   selectArchetype: (id: string) => void
   updateCosmetics: (c: Partial<Profile['cosmetics']>) => void
   useItem: (uid: string) => void
@@ -296,6 +331,8 @@ export interface UIActions {
   rallyToCell: () => void
   giftNearest: () => void
   giftTo: (targetId: string) => void
+  kudosTo: (targetId: string) => void
+  mvpVote: (targetId: string) => void
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }

@@ -68,6 +68,8 @@ model PlayerStats {
   bossKills     Int    @default(0)
   bestPosition  Int    @default(0) // 0 = none, 1 = best
   totalXp       Int    @default(0)
+  kudosReceived Int    @default(0) // lifetime 🙌 salutes from other protesters
+  mvpWins       Int    @default(0) // lifetime MVP vote titles
   player        Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 }
 

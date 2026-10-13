@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone, Gift, UserPlus } from 'lucide-react'
+import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone, Gift, UserPlus, Link2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const TIPS = [
@@ -25,6 +25,7 @@ export default function SquadPanel() {
   const matchMode = useGameStore((s) => s.matchMode)
   const [joinCode, setJoinCode] = useState('')
   const [copied, setCopied] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
   const [now, setNow] = useState(Date.now())
 
   // cheap ticker for the rally cooldown countdown
@@ -50,6 +51,25 @@ export default function SquadPanel() {
     }
     setCopied(true)
     window.setTimeout(() => setCopied(false), 2000)
+  }
+
+  /** Copy a ?squad= deep link — recipients auto-join this cell after entering any room. */
+  const copyInviteLink = async () => {
+    if (!squad?.code) return
+    const url = `${window.location.origin}/?squad=${squad.code}`
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = url
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      ta.remove()
+    }
+    setLinkCopied(true)
+    useGameStore.getState().notify('Invite link copied — send it to your comrades!', 'squad')
+    window.setTimeout(() => setLinkCopied(false), 2000)
   }
 
   const squadById = new Map((squad?.members ?? []).map((m) => [m.id, m]))
@@ -85,19 +105,33 @@ export default function SquadPanel() {
                     </span>
                     <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1c1a17]/70">Protest cell</span>
                   </div>
-                  {/* dashed protest-ticket code chip + copy */}
-                  <button
-                    onClick={copyCode}
-                    aria-label={`Copy squad code ${squad.code}`}
-                    className="group flex items-center gap-1.5 rounded-lg border-2 border-dashed border-[#8c1f28] bg-[#f5efdc] px-2.5 py-1 shadow-[2px_2px_0_rgba(28,26,23,0.6)] transition-transform hover:-rotate-1 hover:scale-[1.03] active:rotate-0"
-                  >
-                    <span className="font-mono text-sm font-black tracking-[0.25em] text-[#8c1f28]">{squad.code}</span>
-                    {copied ? <Check className="h-3.5 w-3.5 text-[#2e6e4e]" /> : <Copy className="h-3.5 w-3.5 text-[#1c1a17]/50 group-hover:text-[#1c1a17]" />}
-                  </button>
+                  {/* dashed protest-ticket code chip + copy + invite link */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={copyCode}
+                      aria-label={`Copy squad code ${squad.code}`}
+                      className="group flex items-center gap-1.5 rounded-lg border-2 border-dashed border-[#8c1f28] bg-[#f5efdc] px-2.5 py-1 shadow-[2px_2px_0_rgba(28,26,23,0.6)] transition-transform hover:-rotate-1 hover:scale-[1.03] active:rotate-0"
+                    >
+                      <span className="font-mono text-sm font-black tracking-[0.25em] text-[#8c1f28]">{squad.code}</span>
+                      {copied ? <Check className="h-3.5 w-3.5 text-[#2e6e4e]" /> : <Copy className="h-3.5 w-3.5 text-[#1c1a17]/50 group-hover:text-[#1c1a17]" />}
+                    </button>
+                    <button
+                      onClick={copyInviteLink}
+                      aria-label="Copy cell invite link"
+                      title="Copy a link that auto-joins this cell (opens with ?squad param)"
+                      className={`flex h-7 w-7 items-center justify-center rounded-lg border-2 shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-all ${
+                        linkCopied
+                          ? 'border-[#2e6e4e] bg-[#dcebe0] text-[#2e6e4e]'
+                          : 'border-[#1c1a17]/60 bg-[#f5efdc] text-[#1c1a17]/60 hover:-translate-y-0.5 hover:border-[#2e6e4e] hover:text-[#2e6e4e]'
+                      }`}
+                    >
+                      {linkCopied ? <Check className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/50">
-                    {squad.members.length}/4 members · share the code
+                    {squad.members.length}/4 members · share the code or link
                   </span>
                   <div className="flex items-center gap-1.5">
                     {/* gifting perk — hand an item to the nearest live teammate (§11) */}

@@ -58,6 +58,11 @@ export type NetEvents = {
   onGift: (g: { fromId: string; fromName: string; type: string }) => void
   onGiftBounce: (g: { toId: string; toName: string; type: string }) => void
   onGiftRefund: (type: string) => void
+  onKudos: (k: { fromId: string; fromName: string }) => void
+  onKudosSent: (k: { targetId: string; targetName: string }) => void
+  onMvpTally: (t: { tally: { id: string; name: string; votes: number }[]; voters: number; roomPlayers: number }) => void
+  onMvpFinal: (f: { winnerId: string | null; winnerName: string | null; tally: { id: string; name: string; votes: number }[]; voters: number }) => void
+  onMvpError: (e: { reason: 'SELF_VOTE' | 'TARGET_LEFT' }) => void
   onDisconnect: () => void
   onConnect: () => void
   onPing: (ms: number) => void
@@ -128,6 +133,11 @@ export class NetClient {
         socket.on('game:gift', (g: { fromId: string; fromName: string; type: string }) => this.ev.onGift?.(g))
         socket.on('game:giftBounce', (g: { toId: string; toName: string; type: string }) => this.ev.onGiftBounce?.(g))
         socket.on('game:giftRefund', (r: { type: string }) => this.ev.onGiftRefund?.(r.type))
+        socket.on('game:kudos', (k: { fromId: string; fromName: string }) => this.ev.onKudos?.(k))
+        socket.on('game:kudosSent', (k: { targetId: string; targetName: string }) => this.ev.onKudosSent?.(k))
+        socket.on('game:mvpTally', (t: { tally: { id: string; name: string; votes: number }[]; voters: number; roomPlayers: number }) => this.ev.onMvpTally?.(t))
+        socket.on('game:mvpFinal', (f: { winnerId: string | null; winnerName: string | null; tally: { id: string; name: string; votes: number }[]; voters: number }) => this.ev.onMvpFinal?.(f))
+        socket.on('game:mvpError', (e: { reason: 'SELF_VOTE' | 'TARGET_LEFT' }) => this.ev.onMvpError?.(e))
         socket.on('game:pong', (sentAt: number) => {
           this.ping = Math.round(performance.now() - sentAt)
           this.ev.onPing?.(this.ping)
@@ -171,6 +181,8 @@ export class NetClient {
   squadInviteDecline(fromId: string) { this.socket?.emit('game:squadInviteDecline', { fromId }) }
   gift(targetId: string, type: string) { this.socket?.emit('game:gift', { targetId, type }) }
   giftBounce(targetId: string, type: string) { this.socket?.emit('game:giftBounce', { targetId, type }) }
+  kudos(targetId: string) { this.socket?.emit('game:kudos', { targetId }) }
+  mvpVote(targetId: string) { this.socket?.emit('game:mvpVote', { targetId }) }
   leave() {
     this.socket?.emit('game:leave')
     this.socket?.disconnect()

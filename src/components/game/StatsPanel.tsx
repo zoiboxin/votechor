@@ -5,7 +5,7 @@ import { useGameStore } from '@/lib/game-store'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import {
   BarChart3, RefreshCw, WifiOff, Vote, Footprints, Flag, KeyRound, HeartPulse, Package,
-  Skull, Trophy, Users, Swords, Crown, History, Clock, Zap,
+  Skull, Trophy, Users, Swords, Crown, History, Clock, Zap, HeartHandshake, Award,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -38,6 +38,8 @@ const CARDS = [
   { key: 'itemsCollected', label: 'Items Looted', icon: Package },
   { key: 'bossHits', label: 'Boss Hits Landed', icon: Swords },
   { key: 'detentions', label: 'Times Detained', icon: Skull },
+  { key: 'kudosReceived', label: 'Kudos Received', icon: HeartHandshake },
+  { key: 'mvpWins', label: 'MVP Titles', icon: Award },
 ] as const
 
 export default function StatsPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {

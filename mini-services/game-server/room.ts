@@ -89,6 +89,7 @@ export interface PlayerState {
   emoteTimes: number[]
   giftTimes: number[]
   inviteTimes: number[]
+  kudosTimes: number[]
 }
 
 export interface ItemState {
@@ -188,6 +189,7 @@ export class Room {
       emoteTimes: [],
       giftTimes: [],
       inviteTimes: [],
+      kudosTimes: [],
     }
     this.players.set(socketId, p)
     this.start()
@@ -282,7 +284,7 @@ export class Room {
   }
 
   /** Rate limiter: max 5 events/s per player per channel. */
-  rateLimit(p: PlayerState, channel: 'noiseTimes' | 'emoteTimes' | 'giftTimes' | 'inviteTimes'): boolean {
+  rateLimit(p: PlayerState, channel: 'noiseTimes' | 'emoteTimes' | 'giftTimes' | 'inviteTimes' | 'kudosTimes'): boolean {
     const now = Date.now()
     const arr = p[channel]
     while (arr.length && now - arr[0] > RATE_LIMIT_WINDOW_MS) arr.shift()

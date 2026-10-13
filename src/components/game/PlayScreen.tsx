@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/lib/game-store'
 import { uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { ArrowLeft, Users, Zap, Shuffle, KeyRound, Server, Loader2, AlertTriangle, Ticket, Copy, Check } from 'lucide-react'
+import { ArrowLeft, Users, Zap, Shuffle, KeyRound, Server, Loader2, AlertTriangle, Ticket, Copy, Check, Link2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 /** Unambiguous room-code alphabet (no I/L/O/0/1 — the committee gave up on fonts). */
@@ -17,18 +17,47 @@ function generateRoomCode(): string {
   return code
 }
 
+/** Harvest ?squad=CODE from the URL into sessionStorage (consumed on join-ack). */
+function harvestSquadDeepLink(): string | null {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const raw = (params.get('squad') ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
+    if (raw.length === 4) {
+      sessionStorage.setItem('vc_squad_deeplink', raw)
+      params.delete('squad')
+      const qs = params.toString()
+      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : ''))
+      return raw
+    }
+    // honor a pending link even if the page was refreshed after harvest
+    const pending = sessionStorage.getItem('vc_squad_deeplink')
+    return pending && /^[A-Z0-9]{4}$/.test(pending) ? pending : null
+  } catch {
+    return null
+  }
+}
+
 export default function PlayScreen({ onBack }: { onBack: () => void }) {
   const joining = useGameStore((s) => s.joining)
   const joinError = useGameStore((s) => s.joinError)
   const profile = useGameStore((s) => s.profile)
   const [roomCode, setRoomCode] = useState('')
   const [copied, setCopied] = useState(false)
+  const [deepCell, setDeepCell] = useState<string | null>(null)
   const soloStarted = useRef(false)
 
-  // reset join state when arriving on this screen
+  // reset join state when arriving on this screen + harvest ?squad= deep links
   useEffect(() => {
     useGameStore.getState().setJoining(false, null)
+    const cell = harvestSquadDeepLink()
+    const t = window.setTimeout(() => setDeepCell(cell), 0)
+    return () => window.clearTimeout(t)
   }, [])
+
+  const clearDeepCell = () => {
+    setDeepCell(null)
+    try { sessionStorage.removeItem('vc_squad_deeplink') } catch { /* ignore */ }
+  }
 
   const cleanCode = roomCode.trim().toUpperCase().slice(0, 6)
 
@@ -94,6 +123,34 @@ export default function PlayScreen({ onBack }: { onBack: () => void }) {
 
       <div className="vc-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto grid max-w-3xl gap-5 px-4 py-6 md:grid-cols-2">
+          {/* Invite deep-link banner (§15) */}
+          {deepCell && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="md:col-span-2 flex items-center gap-3 rounded-2xl border-2 border-dashed border-[#8c1f28] bg-[#f2c14e]/40 px-4 py-3 shadow-[4px_4px_0_rgba(140,31,40,0.7)]"
+              role="status"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border-2 border-[#1c1a17]/70 bg-[#f2c14e]">
+                <Link2 className="h-5 w-5 text-[#8c1f28]" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-black uppercase tracking-tight text-[#1c1a17]">Cell invite detected</div>
+                <div className="text-[11px] font-semibold text-[#1c1a17]/70">
+                  Join any multiplayer room and you will auto-connect to cell{' '}
+                  <span className="font-mono font-black tracking-[0.2em] text-[#8c1f28]">{deepCell}</span>
+                </div>
+              </div>
+              <button
+                onClick={clearDeepCell}
+                className="shrink-0 rounded-lg border-2 border-[#1c1a17]/50 bg-[#f5efdc] px-2 py-1 text-[9px] font-black uppercase tracking-widest text-[#1c1a17]/70 transition-colors hover:bg-[#f2c14e]"
+                aria-label="Dismiss cell invite link"
+              >
+                Dismiss
+              </button>
+            </motion.div>
+          )}
+
           {/* Solo */}
           <motion.section
             initial={{ opacity: 0, y: 16 }}

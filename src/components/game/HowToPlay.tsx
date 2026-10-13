@@ -128,7 +128,10 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
                 <Users className="h-3.5 w-3.5" /> Protest Cells
               </div>
               <p className="text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
-                Tab → create a cell, share the 4-letter code — or press <b>INVITE</b> on any protester&rsquo;s row and they get a 20-second flyer to accept. Cellmates get green name tags, a RALLY teleport (45s cooldown), <b>F to gift supplies</b> and a <b>+10% XP solidarity bonus per cellmate</b> at match end.
+                Tab → create a cell, share the 4-letter code or an <b>invite link</b> — or press <b>INVITE</b> on any protester&rsquo;s row and they get a 20-second flyer to accept. Cellmates get green name tags, a RALLY teleport (45s cooldown), <b>F to gift supplies</b> and a <b>+10% XP solidarity bonus per cellmate</b> at match end.
+              </p>
+              <p className="mt-1 text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
+                After the whistle: <b>Match Honors</b> on the results screen — send 🙌 <b>kudos</b> and vote an <b>MVP</b> (15s window). Kudos received and MVP titles live on your stats card forever.
               </p>
             </div>
             <div className="rounded-xl border-2 border-[#b07d1e]/60 bg-[#f2c14e]/25 p-2.5">

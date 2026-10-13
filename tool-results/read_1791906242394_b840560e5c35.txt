@@ -1,0 +1,330 @@
+   120→  5. Client vehicle clock now synced to server matchStartedAt (visuals match server-side damage)
+   121→  6. Menu button text truncation ("OPTIO…") → responsive sizing
+   122→  7. game.ts: removed require() calls (ESM), fixed boss HUD progress fields, fog cast, TDZ in test
+   123→- Rewrote game-server integration test to be self-correcting (hops from server snapshots, capture-aware waiting, filtered listeners)
+   124→- game-server: 28/28 integration tests PASS (join, snapshots, capture+detention 15s accidental, release at checkpoint, tokens, anti-teleport snap, vehicle damage 35/auto, health 65, heal 95, gate snap, ping, throw validation, emote rate-limit, quickmsg validation, private rooms, playerleft×2)
+   125→- Browser E2E verified (agent-browser, http://localhost:81 via Caddy):
+   126→  * Main menu renders (protest-poster style, marquee, player card)
+   127→  * Solo + multiplayer both CONNECT through gateway (XTransformPort=3002)
+   128→  * World renders: buildings w/ shop signs, fountain, stalls, crowd protesters w/ signs, trees, benches, billboards
+   129→  * Player movement (walk 5.2 m/s verified), jump verified
+   130→  * Token pickup via E verified (tokens: 1), bottle throw verified (projectile spawned)
+   131→  * Server captured player → DETAINED overlay w/ funny message + countdown + release
+   132→  * Boss: gate opens at 12 tokens, arena trigger, intro → Phase 1 speech w/ megaphone stations (interruptPoints rising, station active), Phase 3 stamp telegraphs + DIZZY window + HUD "Throw items!"
+   133→  * Victory: phase 6 → EndScreen "DEMOCRACY RESTORED!" + funny title "Ghost of the Galli" + XP 501 + LEVEL 3
+   134→  * DB persistence verified via /api/stats: matchesPlayed 1, wins 1, bossKills 1, totalXp 501
+   135→  * Big map overlay (5 zones, checkpoints, legend, current zone)
+   136→  * TWO independent agent-browser sessions in same public room: both show playersOnline=2, P1 renders P2's rig with name tag, position sync verified to ~20cm, squad panel live health
+   137→- Note: headless QA env runs ~3.5fps (rAF throttled) → game sim runs ~30% speed there; real browsers run full 60fps step loop
+   138→- Services running: Next dev :3000, game-server :3002 (setsid bun --hot), Caddy gateway :81
+   139→
+   140→Stage Summary:
+   141→- COMPLETE GAME LOOP VERIFIED END-TO-END: menu → play → move/pickup/throw → capture/detention → checkpoints → token gate → 5-phase boss → victory → XP/level/achievements persisted → leaderboard-ready
+   142→- Multiplayer is real (2 sessions verified), server-authoritative (captures, damage, items, boss)
+   143→- Known limitations: headless perf, ESLint clean, tsc clean for game/UI/api
+   144→
+   145→---
+   146→Task ID: 4
+   147→Agent: Z.ai Code (cron webDevReview round 2)
+   148→Task: QA pass + Daily Challenge system + navigation/juice features + styling polish
+   149→
+   150→Work Log:
+   151→- QA: all services healthy (Next :3000 fresh Prisma client after restart, game-server :3002, Caddy :81); movement/pickup/connection re-verified in browser
+   152→- FEATURE — Daily Challenge system (end-to-end, verified):
+   153→  * Schema: Player.dailyDate/dailyKind/dailyProgress/dailyClaimed + db push
+   154→  * src/lib/daily.ts — deterministic per-day roll (hash of YYYY-MM-DD over 6-challenge pool: distance/items/tokens/checkpoints/rescues/boss)
+   155→  * GET /api/daily (rolls + tracks per-player progress), POST /api/matches now accumulates daily progress per match, grants bonus XP once (dailyBonus + justCompleted flags, idempotent via claimed)
+   156→  * Browser-verified: match1 checkpoints=2 → progress 2/3; match2 → 3/3 → dailyBonus 160, xpEarned includes bonus
+   157→  * MainMenu DailyCard (reward chip, progress bar, claimed state) + EndScreen bonus ribbon + store setDaily
+   158→- FEATURE — Compass strip (top-center): cardinal N/E/S/W relative to camera yaw, 15° ticks, markers for nearest token (≤90m), next checkpoint, boss (gate open), squadmates, with distance labels + edge-cling indicators when off-screen; hidden during cinematic/detained
+   159→- FEATURE — Floating world popups (new src/game/fx.ts): canvas-sprite pooled text popups that rise/fade — token (+45 XP / VOTE RECOVERED!), item names, +50 HP, CHECKPOINT +60 XP, boss BONK! -1 SHIELD
+   160→- FEATURE — Boss intro cinematic: 4.2s orbiting camera + letterbox bars + "THE GREAT VOTE COLLECTOR — Minister of Missing Votes · 14-term champion of paperwork" banner, input frozen (state 'frozen'), boss theme + gate sting; verified firing and releasing control
+   161→- STYLING — CinematicOverlay: vignette (deepens at low HP), low-health pulse ring, animated SVG film grain (respects reducedEffects), boss letterbox; MainMenu drifting paper motes (vc-mote keyframes, 14 flyers)
+   162→- BUGFIX — localStorage profile went stale after matches (menu showed old level/XP on reload): finalizeMatch now syncs votechor_profile with fresh xp/level
+   163→- BUGFIX — toasts overlapped compass: NotificationStack moved top-3 → top-11
+   164→- OPS — Next dev server restarted to pick up regenerated Prisma client (old process cached pre-dailyDate client → PrismaClientValidationError on /api/daily)
+   165→- All checks clean: eslint, tsc (game/UI/lib/api), no page errors
+   166→
+   167→Stage Summary:
+   168→- Round 2 shipped: Daily Challenges (retention loop), compass navigation, world-space juice popups, boss cinematic, film-grain/vignette dressing
+   169→- Verified: daily API accumulation + bonus grant, compass markers w/ live distances, cinematic trigger/release, popup rendering, menu card
+   170→- Risks/next: compass markers could include chai/firstaid when needed (kind exists); consider zone-entry vignette tinting; game-server restart needed if shared world-def patrol changes again
+   171→
+   172→---
+   173→Task ID: 5
+   174→Agent: Z.ai Code (cron webDevReview round 3)
+   175→Task: QA assessment + cosmetic unlock system + reconnect overlay + onboarding hints + styling polish + profile-bootstrap bugfix
+   176→
+   177→Work Log:
+   178→- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002, Caddy :81); menu/customize/solo boot/multiplayer connect/movement re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development over bugfixing (one major bug surfaced later, see below)
+   179→- BUGFIX (major) — profile bootstrap created a duplicate player on EVERY page reload:
+   180→  * GameRoot.tsx captured `const st = useGameStore.getState()` then checked `st.profile` AFTER calling `st.setProfile(...)` — stale snapshot (zustand set replaces the state object) → always truthy-falsy wrong → POST /api/profile created a fresh row named Protester_XXXX each reload, clobbering localStorage profile (all progression wiped per reload)
+   181→  * DB evidence: 12 duplicate Protester_7244 rows; fixed by checking fresh `useGameStore.getState().profile` + added server refresh path (POST with x-vc-token + empty body) so stored profiles re-sync XP/unlocks on boot; cleaned 11 dup rows from DB
+   182→  * Verified: profile (UnlockTest LV3) now survives reload; DB count stable at 7
+   183→- FEATURE — Cosmetic unlock system (server-authoritative, per master prompt §16):
+   184→  * src/lib/cosmetics.ts (new): 6-hat catalog — none/cap free, topi LV3, garland→medic, cone→traffic_cone, crown→boss_slayer; pure `unlockedHatIds`/`hatIsUnlocked` helpers shared by API + UI
+   185→  * /api/profile: validates requested hat vs player level + granted PlayerAchievements → 403 "Locked — Reach level 3" / "Locked — Earn medal: BOSS SLAYER"; rejects unknown ids; response now includes unlockedHats[]
+   186→  * character.ts: 3D hat renders — traffic cone (cone+white band+base), Crown of Chaos (metallic gold band + 5 spikes + red/green jewels), marigold garland (two torus rings on torsoPivot)
+   187→  * CharacterSelect.tsx: "Headgear Locker" grid (6 cards) with lock icons, criteria labels (hover/focus reveals full unlock text), X/6 unlocked counter, dashed grayscale locked cards, locked-click warning toast; CSS pixel previews for cone/crown/garland; fetches /api/achievements for unlocked codes
+   188→  * Verified via curl: locked crown/topi → 403; level-up to LV3 → topi equips; unlockedHats grows; in-game 3D screenshots confirm crown/cone/garland all render on the rig
+   189→- FEATURE — Reconnect system (master prompt §15 "reconnecting screens"):
+   190→  * ReconnectOverlay.tsx (new): full-screen poster overlay — "SIGNAL LOST" rubber stamp, WifiOff badge, "THE COMMITTEE CUT OUR LINE", spinner strip, [Keep Playing Offline] [Quit to Menu]; auto-hides when connection returns
+   191→  * store: +matchMode field (set in startMatch, cleared on leave); game.ts: lastRoomCode + reconnectNotified tracking; multiplayer onDisconnect flags reconnect; onConnect auto-rejoins the room (name/archetype/cosmetics/roomCode)
+   192→  * net.ts: reconnectionAttempts 3→Infinity, reconnectionDelayMax 3000 (retry for as long as the match lives)
+   193→  * End-to-end verified: kill -9 server mid-match → overlay appears (conn=false) → server restart → socket auto-reconnects → auto-rejoin (new playerId) → overlay hides, match continues
+   194→- FEATURE — First-match onboarding: one-time 4-tip toast sequence (compass→tokens, E/Q interact, checkpoints, boss gate) at 2.5s/9.5s/16.5s/23.5s, localStorage('votechor_onboarded') gated, timers cleared on leave; verified firing in-game
+   195→- STYLING (mandatory polish):
+   196→  * PlayerCard: conic-gradient XP progress RING around level badge (was flat pill) + "WEARING <hat>" emoji watermark row
+   197→  * MenuButton: shine sweep on hover (vc-shine keyframe) + icon rotate/scale micro-interaction
+   198→  * MarchStrip (new): 5 silhouetted protesters (2 carrying "CHAI!" signs) endlessly marching along the menu bottom above the footer (vc-march + vc-march-bob keyframes, ground line) — scaled/staggered
+   199→  * ReconnectOverlay/locker/lock cards all use the protest-poster system (paper, hard shadows, stamps)
+   200→- OPS FINDINGS (important for future rounds):
+   201→  * Sandbox reaps background processes spawned plainly (setsid alone died silently twice in ~2min, no log trace). WORKING pattern: `( setsid bun --hot index.ts > /tmp/gs.log 2>&1 < /dev/null & )` from mini-services/game-server — double-fork subshell survived >10min
+   202→  * agent-browser WebGL contexts exhaust after many game reloads in one session ("Context Lost" + blocked creation) → `agent-browser close --all` resets before 3D QA
+   203→  * game.ts eval clicks need case-insensitive /play solo/i (CSS uppercase ≠ DOM text)
+   204→- All checks green: tsc (game/UI/lib/api), eslint, no console errors; services running (Next :3000, game-server :3002 via double-fork, Caddy :81)
+   205→
+   206→Stage Summary:
+   207→- Round 3 shipped: server-validated cosmetic unlocks (6 hats, 3 new 3D renders), reconnect overlay + auto-rejoin with infinite retry, onboarding tips, XP ring/marchers/shine styling, and a major progression-wiping bootstrap bug fixed + DB deduped
+   208→- Verified end-to-end in browser: locks render + enforced by API, all hats render in 3D, kill→overlay→restart→auto-rejoin loop, profile persistence across reloads
+   209→- Risks/next: CharacterSelect achievement fetch is mount-once (unlock doesn't live-refresh mid-session — reload picks it up); remote-player new-hat rendering untested with 2 clients (flows through same rig code); consider cosmetics section in HowToPlay; game-server restarts must use the double-fork pattern
+   210→
+   211→---
+   212→Task ID: 6
+   213→Agent: Z.ai Code (cron webDevReview round 4)
+   214→Task: QA assessment + mouse-look critical bugfix + speech bubbles + spectate mode + photo mode + zone tint + first-aid compass + styling polish
+   215→
+   216→Work Log:
+   217→- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002 via double-fork, Caddy :81); menu/solo boot/movement/multiplayer re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+   218→- BUGFIX (CRITICAL) — mouse-look was completely dead since round 1:
+   219→  * game.ts fixedUpdate called `input.consumeLook()` but DISCARDED the result; renderUpdate passed hardcoded `[0,0]` to camRig.update → camRig.yaw/pitch NEVER changed from mouse input (camera was permanently fixed behind player)
+   220→  * Fixed: fixedUpdate now applies consumed look deltas to camRig.yaw/pitch (clamped; wider pitch range -0.2..1.25 in photo mode)
+   221→  * Verified: synthetic lookDx injection rotates camRig.yaw 0 → 0.6; camera orbits correctly
+   222→- FEATURE — NPC satire speech bubbles (master prompt §14 humor):
+   223→  * src/game/bubbles.ts (new): SpeechBubbleSystem — pooled canvas-sprite paper bubbles (ink border, tail, word-wrap, pop-in animation, bob, fade), one bubble per NPC key, POOL_MAX 10
+   224→  * NPC_LINES pools: 8 police lines, 4 chase lines ("STOP! You are under arrest for jogging!"), 5 security lines, 5 guard lines; chasing officers get chase-specific lines at shorter duration
+   225→  * npcs.ts: bubbles group added to NPC group; update(dt, alpha, t, px?, pz?) spawns a bubble every 3.6-7s on a random NPC within 34m of player; game.ts passes player pos (render loop only, both playing + paused)
+   226→  * Occlusion: bubbles hide when a physics raycast (camera → anchor) is blocked (walls/buildings) — wired via bubbles.occlusionCheck in game.ts boot
+   227→  * Verified in browser: "No assembly of more than one (1) citizen." rendered above a market patrol officer, correctly hidden when behind buildings
+   228→- FEATURE — Spectate mode while detained (multiplayer):
+   229→  * game.ts renderUpdate: when detained, camera focus switches to nearest non-detained teammate (smooth camRig lerp), tracks spectateName; syncHud patches hud.spectating (8Hz)
+   230→  * DetainedOverlay: SPECTATING chip (live ping dot, teammate name) + "The revolution continues through them" caption; DETAINED stamp shrinks and blur removed so the teammate stays visible; offline/solo unchanged
+   231→  * Verified with 2 live sessions in one public room: fake capture → camera flew to teammate + chip rendered; release → cleared (8Hz race noted, correct on next sync)
+   232→- FEATURE — Photo Mode (P key):
+   233→  * game.ts: window keydown handler (P toggle, O filter, K snapshot — gated by uiMode==='playing'); player frozen ('frozen' state), camera auto-drifts 0.1 rad/s + full mouse orbit, distance 7.2 (restored 5.4 on exit)
+   234→  * engine.ts: preserveDrawingBuffer:true for snapshot support
+   235→  * 4 filters on the WebGL canvas: Natural / Poster Punch (saturate 1.4) / Vintage Press (sepia) / Committee Noir (grayscale); O cycles with toast
+   236→  * K downloads PNG via canvas.toDataURL → anchor download (`votechor_photo_<timestamp>.png`) + "Protest Press Club" toast
+   237→  * PhotoHud.tsx (new): viewfinder frame, corner ticks, camera badge + filter chip, EXIT/FILTER/SNAPSHOT buttons (touch-friendly), key hints; GameRoot hides ALL HUD/companions when photoActive and renders PhotoHud instead
+   238→  * PauseMenu: new "Photo Mode" button (yellow, camera icon) → resume + deferred toggle (touch access); exits cleanly on capture/detention/pause/leave/finalize
+   239→  * Verified: P/O/K keys + pause-menu entry + snapshot download all work; filters apply visually
+   240→- FEATURE — Zone-entry styling: ZONE_ACCENTS map (game-store.ts) — Hud zone banner got accent color top strip; CinematicOverlay renders zone-tinted radial wash re-keyed per zone (vc-zonetint keyframe fades 0→1→0 over 2.4s, pure CSS, no state); verified banner strip in Security Checkpoint
+   241→- FEATURE — First-aid compass markers: when health < 45, nearest untaken firstaid within 130m gets a 'firstaid' marker (pink Cross icon + edge cling); verified markers ["token:44m","firstaid:31m","checkpoint:70m","squad:0m"] with health forced to 30
+   242→- FIX — CharacterSelect hat unlocks now live-refresh: achievements refetch on mount + window focus + 15s interval (was mount-once)
+   243→- HowToPlay controls table: added P (Photo Mode) row
+   244→- OPS: game-server restarted (double-fork pattern) to flush 2 stale zombie sessions polluting the public room; reconnect system auto-rejoined both times (re-verified)
+   245→- All checks green: eslint (fixed react-hooks/set-state-in-effect in CinematicOverlay by going stateless), tsc (game/UI/lib), zero console errors in QA sessions
+   246→
+   247→Stage Summary:
+   248→- Round 4 shipped: CRITICAL mouse-look fix (camera was permanently frozen since round 1 — biggest gameplay bug yet), world satire speech bubbles with wall-occlusion, multiplayer spectate-while-detained, full Photo Mode (orbit/filters/PNG export, pause-menu + touch access), zone accent banners + tint washes, first-aid compass guidance, live hat-unlock refresh
+   249→- Verified end-to-end in browser incl. 2-session multiplayer spectate; snapshot download confirmed; lint/tsc clean
+   250→- Risks/next: preserveDrawingBuffer has minor GPU cost (acceptable); bubbles max 1 concurrent per NPC (fine); consider Photo Mode zoom via wheel, achievements toast integration for hats, squad respawn/emote propagation polish; headless QA env still ~3.5fps (sim slowed) — real browsers unaffected
+   251→
+   252→---
+   253→Task ID: 7
+   254→Agent: Z.ai Code (cron webDevReview round 5)
+   255→Task: QA assessment + social speech bubbles for players + touch camera-look + photo wheel zoom + WANTED chase alert + chai compass markers + duplicate-toast bugfix
+   256→
+   257→Work Log:
+   258→- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002, Caddy :81); lint + tsc clean; menu/solo boot/movement/quick-messages re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+   259→- FEATURE — Player social speech bubbles (emotes + quick messages now visible in-world):
+   260→  * game.ts: new playerBubbles SpeechBubbleSystem instance (same paper/ink style as NPC bubbles, shared occlusion check vs camera raycast), group added to scene, updated in renderUpdate, cleared on leave/startMatch
+   261→  * playEmote → bubble with EMOTE_LABELS text ("Hello, democracy!", "Protest dance move!", …) above own head; playRemoteEmote → bubble above remote rig; new sayBubble(key, text) helper anchors to local player or remote rig
+   262→  * BUGFIX (real gap): onQuickMsg relay existed in net.ts + server but was never bound in game.ts — remote quick messages were silently dropped. Now bound → bubble above sender's rig + toast "Name: msg"
+   263→  * BUGFIX: server relays game:quickmsg to the WHOLE room incl. sender → sender got duplicate toast + bubble from own echo; fixed with `playerId === this.net.playerId` self-echo guard
+   264→  * BUGFIX: QuickMessages.tsx added its own "You: …" toast on top of game.ts's notify → duplicate toasts for the sender; consolidated into game.ts (`You: ${msg}`), component notify removed (+ unused store selector removed)
+   265→- FEATURE — Touch camera-look (mobile could not orbit the camera at all before):
+   266→  * InputManager.addLook(dx,dy) — applies sensitivity + invertY like mouse; touchBridge().look() exposes it
+   267→  * TouchControls: right-half-screen invisible drag-to-look layer (pointer capture, sits under action buttons), LOOK_GAIN 2.6; pulsing "drag to look" affordance hint fades out after first use (per-mount)
+   268→- FEATURE — Photo Mode zoom (wheel + buttons):
+   269→  * photoZoom(dir) clamps targetDistance 2.2..11; wheel listener registered in ensurePhotoKeyHandler (wheel up = zoom in, wheel down = zoom out)
+   270→  * CRITICAL BUGFIX found during QA: renderUpdate forced camRig.targetDistance = 7.2 EVERY FRAME in photo mode → all zoom (wheel AND the new buttons) was instantly overridden. Removed; targetDistance now owned by photoZoom (set 7.2 on enter, 5.4 restore on exit unchanged)
+   271→  * PhotoHud: −/+ zoom button pair between Exit and Filter; hint bar now "P exit · O filter · K snapshot · wheel zoom"
+   272→- FEATURE — WANTED chase alert: renderUpdate computes chased (existing nearestChaserDistance < 18, works offline + online via server NPC states) → patchHud({hunted}) on state CHANGE only; Hud: red rubber-stamp "WANTED — RUN!" (Siren icon, vc-stamp-texture, spring stamp-in, pulse) at 30% screen height + red pulsing edge vignette when hunted (suppressed while detained or when low-health vignette already active); reset on leaveMatch
+   273→- FEATURE — Chai compass markers: stamina < 30 and no chai in inventory → nearest untaken chai within 120m gets orange Coffee-icon marker (kind existed in store/Compass but was never emitted; icon swapped Vote → Coffee; edge-cling color added). Verified dynamic appear/disappear with stamina
+   274→- STYLING (mandatory polish): WANTED stamp + hunted vignette (above), zoom buttons + hint text, drag-to-look hint chip, StatBar low-state treatment (bar + icon pulse, red value text when < 30%)
+   275→- QA METHODOLOGY NOTES (important for future rounds):
+   276→  * agent-browser console buffer ACCUMULATES across page loads — do not count duplicate log lines as multi-boot
+   277→  * An instrumented handler that throws on its first line looks identical to "event never delivered" — verify closures reference this.x correctly; my bootStamp debug (missing this.) created a false "wheel events don't arrive" rabbit hole
+   278→  * Fast Refresh while a Game instance is live leaves the OLD instance's closures holding dead module bindings (imported functions can throw) — ALWAYS hard-reload the page after editing game.ts before debugging runtime behavior
+   279→  * Direct method-call checks (window.__vc.photoZoom) + instance-method wrapping (g.photoZoom = wrapped(orig)) are reliable; wrapping window.__vc properties is NOT the registered listener ref
+   280→- All checks green: tsc (src clean; mini-services smoke-test errors pre-existing), eslint, zero console errors in final QA session
+   281→- Verified end-to-end in browser: emote bubble render, quickmsg single-toast + bubble, chai marker dynamic toggling, WANTED stamp + vignette render, photo zoom via wheel (7.2→6.0 in / back out) with persistence after renderUpdate fix, zoomed photo screenshot
+   282→
+   283→Stage Summary:
+   284→- Round 5 shipped: in-world social bubbles (emotes + quick messages, local + remote, with 3 related bugs fixed incl. a previously-dead net relay), mobile drag-to-look camera, photo-mode wheel/button zoom (plus the per-frame override bug that would have broken it), WANTED chase alarm, chai compass guidance, and stat-bar polish
+   285→- Remote quickmsg bubble verified by code-path symmetry with the round-4-verified onEmote flow (2-session CLI limitation noted; recommend 2-session replay next round)
+   286→- Risks/next: consider squad emote propagation polish, remote-hat render re-verify with 2 clients, zone-entry vignette tinting exists (done round 4); game-server unchanged this round (no restart needed); worklog cumulative console note above
+   287→
+   288→---
+   289→Task ID: 8
+   290→Agent: Z.ai Code (cron webDevReview round 6)
+   291→Task: QA assessment + Weekly Challenge system + Create Private Room + match history UI + stats key-mismatch bugfix
+   292→
+   293→Work Log:
+   294→- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002, Caddy :81); menu/solo boot/movement (z -8→-11 via synthetic key hold) re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+   295→- BUGFIX (pre-existing, found during QA) — 8 of 10 lifetime stat cards ALWAYS showed 0:
+   296→  * /api/stats returned the raw Prisma PlayerStats row (keys: matchesPlayed, totalDistance, totalItems…) while StatsPanel CARDS expect (matches, distance, itemsCollected, tokens, checkpoints, bossHits…) — only wins/detentions ever matched
+   297→  * Fixed server-side: route now returns normalized keys (UI contract) alongside legacy raw keys, plus NEW lifetime aggregates via MatchResult _sum: tokens, checkpoints, bossHits (= Σ bossContribution, rounded); browser-verified cards now show 200 m / 65 items for the test profile
+   298→- FEATURE — Weekly Challenge system (master prompt §16 "Daily and weekly challenges"; completes the pair):
+   299→  * src/lib/weekly.ts (new): WEEKLY_POOL (6 kinds, 4-5× daily targets, 600-950 XP rewards), weekKey() ISO-8601 Monday weeks ("2026-W42"), weeklyForDate() deterministic djb2 hash roll, weeklyContribution reuses dailyContribution
+   300→  * Prisma Player += weeklyDate/weeklyKind/weeklyProgress/weeklyClaimed → db push (additive)
+   301→  * GET /api/daily now also upserts a weekly_{week} DailyChallenge catalog row + rolls stale weekly + returns { weekly: { challenge, week, progress, claimed } }; POST /api/matches accumulates weekly progress in the same transaction, grants weeklyBonus ONCE on crossing target (claimed flag), returns weekly + weeklyBonus + weeklyJustCompleted
+   302→  * Store: WeeklyState (+week), weekly field, setWeekly; MatchSummary += weeklyBonus/weeklyJustCompleted; GameRoot boot fetch hydrates weekly; game.ts finalizeMatch parses + setWeekly + "WEEKLY CHALLENGE COMPLETE!" toast; EndScreen green ribbon (CalendarRange, mirrored rotation, delay 0.95)
+   303→  * VERIFIED end-to-end via curl: match1 25 items → weekly 25/60 no bonus; match2 +40 → 60/60 clamped, weeklyBonus 600, xpEarned 845 = 245 base + 600, justCompleted true; wk_test_1 replay → duplicate:true, xpEarned 185 (no double-anything); browser: WeeklyCard shows "WEEK 42 · DONE · Loot 60 items… 60/60 · WEEKLY QUOTA MET. GO HOME EARLY." with full green bar
+   304→- FEATURE — Create Private Room (master prompt §15 menu requirement):
+   305→  * PlayScreen: "Private Room" button (Ticket icon, maroon) generates a 6-char code from an unambiguous alphabet (no I/L/O/0/1) via crypto.getRandomValues, fills input + joins immediately; joining strip now shows a dashed protest-ticket code chip with Copy button (navigator.clipboard + execCommand fallback, 2s Check feedback, aria-label)
+   306→  * VERIFIED in browser: click → code TEZA4Q generated → joined online (running, offline:false, room=TEZA4Q, CONNECTED badge, multiplayer world)
+   307→- FEATURE — Match History in StatsPanel (endpoint returned `recent` since round 2 but UI never rendered it):
+   308→  * RecentMatch typed from API rows; renders last 10 as paper rows: tilted WIN/LOSS stamp (green/maroon), funnyTitle (fallback "Uncertified Protest"), MP badge for multiplayer, distance/checkpoints/tokens/XP/timestamp row (tabular-nums), #position chip; vc-scroll max-h-56 list; empty-state humor line
+   309→  * VERIFIED in browser: "MATCH HISTORY — LAST 2" + 2 rows (STREET KABADIWALAN, +245/+185 XP, Oct 13 · 13:33)
+   310→- STYLING (mandatory): WeeklyCard distinct leaf-green identity (gradient from-[#2e6e4e]/25, dashed orbit circle decoration, Week-N chip, green gradient progress fill), EndScreen weekly ribbon, maroon Private Room button + dashed code ticket, history stamp rows
+   311→- OPS: Next dev server restarted after prisma client regen (weekly fields) — old process served stale client → tx.player.update("weeklyDate") validation error on /api/matches; restart pattern: kill next pid tree then `( setsid bash -c 'bunx next dev -p 3000 2>&1 | tee dev.log' < /dev/null & )` from project root (plain `next` not on PATH in setsid shell; bunx works)
+   312→- All checks green: tsc (project src clean; only pre-existing skills/stock-analysis error), eslint clean, zero console errors across the whole QA session
+   313→- Test data left in DB: Protester_6328 (+wk_test_1/2 matches, 430 XP) — harmless, useful for leaderboard/history demos
+   314→
+   315→Stage Summary:
+   316→- Round 6 shipped: Weekly Challenges (full retention loop: roll → accumulate → one-time bonus → reset Monday), Create Private Room with shareable code + copy ticket, Match History UI, and a stats-display bug that had silently zeroed 8/10 lifetime cards since round 1
+   317→- Verified: weekly accumulation/bonus/idempotency (curl), WeeklyCard done-state (browser), private-room online join (browser TEZA4Q), history rows (browser), stat card values (browser)
+   318→- Risks/next: weekly ribbon renders only when a match crosses the weekly target mid-session (code path symmetric to verified daily ribbon; not triggered live this round); browser QA session localStorage was re-pointed to the test profile Protester_6328 (real users unaffected); consider emote unlocks at levels (§16), item gifting to teammates (§11), remote-hat 2-client re-verify, squad creation/invitations as the next feature front
+   319→
+   320→---
+   321→Task ID: 9
+   322→Agent: Z.ai Code (cron webDevReview round 7)
+   323→Task: QA assessment + Emote unlock progression (§16) + Squad system v1 (§15) + Daily Streak retention loop + styling polish
+   324→
+   325→Work Log:
+   326→- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002 double-fork, Caddy :81); lint clean; tsc clean for src (pre-existing smoke-test/skills errors only); menu/solo boot/movement re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+   327→- FEATURE — Emote unlock progression (§16):
+   328→  * src/lib/cosmetics.ts: EMOTE_CATALOG (8 emotes: wave/salute/facepalm/cry free, dance/flex LV2, chant LV3, chai achievement-gated via chai_guardian) + unlockedEmoteIds/emoteIsUnlocked pure helpers shared by game guard + UI
+   329→  * game.ts: playEmote now gates on unlocks (locked → warning toast "Emote locked — Reach level N / Earn medal: X", no anim, no net send); EMOTE_ANIMS map (chant→celebrate, chai→heal); EMOTE_LABELS + 2 new lines; refreshUnlockedEmotes() at match start (free seeds + GET /api/achievements w/ x-vc-token for medal codes); playRemoteEmote uses shared EMOTE_ANIMS
+   330→  * EmoteWheel.tsx: full redesign — ring of 8 protest-poster cards, locked cards grayscaled with LV-N / lock badges, center chip "N/8 UNLOCKED", footer hint "LEVEL UP & EARN MEDALS TO UNLOCK MORE CHANTS", locked click → vc-emote-shake wobble + warning toast, unlocks live-refresh (mount + focus + 15s interval, mirrors CharacterSelect pattern)
+   331→- FEATURE — Squad system v1 "protest cells" (§15, 4-player per-room cells):
+   332→  * mini-services/game-server/index.ts: roomSquads/socketSquad maps; game:squadCreate (4-char unique code, unambiguous alphabet), game:squadJoin (validate exists/not-full/auto-leave-old), game:squadLeave; emitSquad() → targeted game:squad {code, members[{id,name}]} to member sockets only; squadLeaveInternal() on leaveRoom/disconnect (orphan squad auto-disbands when last member leaves); SQUAD_NOT_FOUND / SQUAD_FULL errors via game:squadError
+   333→  * net.ts: onSquad/onSquadError events + squadCreate/squadJoin/squadLeave emitters
+   334→  * game.ts: onSquadUpdate → store + remote rig name-tag recolor (squadmates green #7ee08a via new CharacterRig.setNameColor()); registerUIActions squadCreate/squadJoin/squadLeave (offline guard + 4-char validation); leaveMatch/startMatch reset
+   335→  * store: CellMember/SquadState + squad field + setSquad + UIActions additions
+   336→  * Hud.tsx: green "CELL <code> N/4" chip with pulsing ping dot, above squad list
+   337→  * SquadPanel.tsx: protest-cell management box (multiplayer only) — Create squad button, dashed-ticket code input + Join, copyable code chip w/ Check feedback, Leave squad; member rows get green border + "CELL" badge when in your cell; "squads are multiplayer-only" note in solo
+   338→- BUGFIX (found during QA) — squad state went stale after mid-match reconnect: server dropped our socket, auto-rejoin landed in a different public room, but client chip still showed "2/4" forever. Fixed: onDisconnect clears local squad state; onConnect auto-rejoin now attempts squadJoin(lastSquadCode) (restored → "Squad X restored — back in the cell!", room changed → SQUAD_NOT_FOUND silently swallowed via squadAutoRejoin flag)
+   339→- FEATURE — Daily Streak (§16 retention loop):
+   340→  * Prisma Player += dailyStreak/lastDailyDone → db push; /api/matches: on dailyJustCompleted → streak = (lastDailyDone==yesterday ? +1 : 1) persisted; response + duplicate path + /api/profile now include dailyStreak
+   341→  * VERIFIED via curl: fresh completion → streak 1; DB-simulated yesterday-streak 4 → today 5 + streakUp true; duplicate matchId → streak 5 echoed, streakUp false, no double-claim
+   342→  * game.ts finalizeMatch parses streak/streakUp → profile + MatchSummary + "🔥 N-DAY STREAK" toast (N>1); MainMenu PlayerCard: animated 🔥 "N-DAY STREAK / DON'T BREAK IT" dashed chip (server-synced 854 XP render verified); EndScreen: streak ribbon ("Streak day N — chain unbroken" / day-1 variant), mirrors daily/weekly ribbons
+   343→- STYLING (mandatory polish): EmoteWheel poster redesign + shake keyframes (GameRoot style block), squad chip ping animation, dashed protest-ticket code chips, green cell-member rows, streak chip gradient + flame loop, EndScreen streak ribbon
+   344→- QA NOTES: 2-session squad flow fully verified (S6CQ: create → join → CELL chips 2/4 on BOTH sessions + green CELL member rows both panels); headless WebGL drops sockets every ~60s under 2 live 3D sessions (infra flake, not app bug — reconnect handled as designed); squad orphan-cleanup verified (last-member leave disbands cell); bogus-code join error path exercised via window.__vc.net.squadJoin
+   345→- OPS: game-server restarted (double-fork pattern) to load squad handlers; Next dev restarted after prisma client regen (stale-client pitfall from round 6); test data left: StreakTest player (streak 5) + streak_t1..t4 matches — harmless, useful demo data
+   346→- All checks green: tsc (src clean), eslint, zero console errors across all QA sessions
+   347→
+   348→Stage Summary:
+   349→- Round 7 shipped: emote unlock progression (8-emote catalog, locked wheel UI, game-side guard), Squad system v1 (server-authoritative 4-player cells, code join/leave, green name tags, HUD cell chip, panel management UI, reconnect-aware), Daily Streak (DB→API→PlayerCard→EndScreen), and a stale-squad-state reconnect bugfix
+   350→- Verified: 2-session squad join (both chips 2/4), emote lock/unlock paths, streak 4→5 increment + idempotency via curl, streak card render, zero console errors
+   351→- Risks/next: remote-hat + green-nametag 2-client visual re-verify in a stable env (nametag recolor runs in same handler as verified chips); HowToPlay could gain squads/emote-unlock rows; consider squad teleport-to-leader or cell bonus XP next; item gifting (§11) remains unstarted; game-server restart needed if index.ts changes again
+   352→
+   353→---
+   354→Task ID: 10
+   355→Agent: Z.ai Code (cron webDevReview round 8)
+   356→Task: QA assessment + Solidarity bonus XP (squad perk) + Squad Rally teleport + HowToPlay Career Progression docs + styling polish
+   357→
+   358→Work Log:
+   359→- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002 double-fork, Caddy :81); lint + tsc clean for src; menu/solo boot/HUD re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development (round 7 roadmap items)
+   360→- FEATURE — Solidarity bonus XP (§15 social perk, server-authoritative):
+   361→  * /api/matches: squadSize clamped 1-4 (multiplayer only); solidarityBonus = round(baseXp * 0.10 * (squadSize-1)) (max +30%); xpEarned = baseXp + solidarityBonus (feeds MatchResult/PlayerStats/levels consistently); response now returns baseXp/solidarityBonus/squadSize; duplicate path echoes solidarityBonus: 0
+   362→  * game.ts finalizeMatch: sends squadSize (from this.squad.memberIds.size, offline forced 1); parses bonus → MatchSummary + "SOLIDARITY BONUS! +N XP for marching with X cellmates" toast
+   363→  * EndScreen: green Solidarity ribbon (Handshake icon, "marched with N cellmates", +N) below streak ribbon
+   364→  * VERIFIED via curl: solo → 0 bonus; multiplayer squadSize=3 → +19 = exactly 20% of base 93; squadSize=99 clamped → 4 → +28 = 30%
+   365→- FEATURE — Squad Rally teleport perk:
+   366→  * game.ts rallyToCell(): guards (running, !offline, player.state==='normal', cellmate exists, 45s Date.now() cooldown); targets nearest FREE cellmate rig (skips detained → "No free cellmate to rally to — everyone is detained!"); player.teleport + pos.y sync + camRig.yaw reset + fx.popup('SOLIDARITY RALLY!') + success toast + AudioManager checkpoint sting + patchHud({rallyReadyAt})
+   367→  * HudState += rallyReadyAt (default 0, reset in startMatch/leaveMatch); UIActions += rallyToCell
+   368→  * SquadPanel: RALLY! button (Megaphone icon) next to Leave squad — yellow when ready, gray disabled during cooldown w/ live Ns countdown (500ms ticker) or while detained ("Cannot rally while detained" title); field manual tip updated
+   369→  * VERIFIED end-to-end 2-session (X7W7 cell, 2/4): instrumented teleport fired + "Rallied to Protester_9664" toast + cooldown set; guard paths exercised live: no-cellmate ("Rally needs a cellmate — form a squad first (Tab)") + detained-cellmate skip (B walked into police during synthetic W-hold → rally correctly refused until release — this briefly looked like a bug but is the designed guard working)
+   370→- FEATURE — HowToPlay Career Progression section:
+   371→  * 3 poster cards: PROTEST CELLS (Tab/code/green tags/RALLY/+10% per cellmate), EMOTE MASTERY (G, LV2 dance+flex, LV3 chant, Chai Guardian toast, "locked chants wobble indignantly"), DAILY STREAK (🔥 consecutive days)
+   372→  * Controls rows enriched: G + TAB + P notes updated (emote unlock hint, rally hint, wheel zoom)
+   373→- STYLING (mandatory): rally button states + countdown, solidarity ribbon, Career Progression card grid (3-color identity), updated field manual
+   374→- BUGFIX (self-inflicted during round): HudState edit accidentally replaced speedBoostUntil with rallyReadyAt → tsc caught 3 errors → restored both fields + default
+   375→- QA METHODOLOGY: (1) toast-assertion filters must match ALL possible outcomes of a guarded action (a /Rallied to/ filter masked the "No free cellmate" toast and sent me chasing a phantom no-op); (2) synthetic W-hold in headless can walk a player into police custody — check remote detained flags before interpreting teleport tests; (3) headless socket drops continue every ~60s under 2 live 3D sessions (infra)
+   376→- OPS: no server changes this round (squad handlers from round 7 unchanged; /api/matches is Next-side, hot-reloaded); test data left: SolidTest player (sol_t1..t3) + X7W7 rally session data — harmless
+   377→- All checks green: tsc (src clean), eslint, zero console errors across all QA sessions
+   378→
+   379→Stage Summary:
+   380→- Round 8 shipped: Solidarity bonus XP (+10%/cellmate, server-authoritative, EndScreen ribbon), Squad Rally teleport (45s cooldown, nearest-free-cellmate, full guard set), HowToPlay Career Progression cards, rally button styling
+   381→- Verified: solidarity math exact via curl (0/20%/30% + clamp), rally teleport + toast + cooldown + 3 guard paths live in browser, HowToPlay cards render, zero console errors
+   382→- Risks/next: solidarity counts squad size at match end (server trusts client count — acceptable social-cosmetic risk, capped +30%); item gifting (§11) still unstarted; consider squad bonus display in HUD during play, cell invite toasts, or boss-fight replay next round; remote nametag visual re-verify in stable env still open
+   383→
+   384→---
+   385→Task ID: 11
+   386→Agent: Z.ai Code (cron webDevReview round 9)
+   387→Task: QA assessment + Item Gifting §11 (eligible item sharing) + teammate-status polish + styling
+   388→
+   389→Work Log:
+   390→- QA ASSESSMENT (round start): all services healthy (Next :3000, game-server :3002, Caddy :81); lint clean; tsc clean for src (pre-existing smoke-test.ts JoinAck errors only); menu + solo boot + HUD + movement verified via agent-browser (W-hold moved player z -10.1→-12.2); zero console errors → project STABLE → chose feature development
+   391→- PLAN (this round): implement §11 "eligible item sharing" — the last unstarted §11 cooperation feature (server-validated gifting, support XP, Good Samaritan medal) + HUD cellmate status rings + styling polish; also fix stale smoke-test.ts types
+   392→
+   393→Stage Summary:
+   394→- Round 9 in progress: item gifting end-to-end (client+server+XP+medal), HUD squad polish, smoke-test type fix
+   395→- FEATURE — Item Gifting §11 "eligible item sharing" (end-to-end, server-validated, VERIFIED):
+   396→  * constants.ts: XP_TABLE.perGift=18, GIFT_RADIUS=4.5, GIFT_TYPES whitelist (chai/firstaid/snack/joke/bottle/sign/foam), new medal good_samaritan (Gift 3 items in one match, +70 XP), VICTORY_TITLES += gifts param → "The People's Gifter" at 3+
+   397→  * room.ts: room.gift() validates target exists/self/detained/type/rate(giftTimes)/distance ≤ 4.5 → targeted game:gift to receiver only; room.giftBounce() relays full-pocket returns to sender; PlayerState += giftTimes
+   398→  * index.ts: game:gift handler emits game:giftRefund to sender on ANY rejection (bad type/rate/too far/self/no room); game:giftBounce handler
+   399→  * net.ts: gift()/giftBounce() emitters + onGift/onGiftBounce/onGiftRefund events
+   400→  * game.ts: giftNearest() (F key / SquadPanel GIFT button) — nearest live player ≤4.5m, smart pick (firstaid if target hurt <55hp → chai → firstaid → snack → joke → first throwable), optimistic send + 🎁 fx popup + speech-bubble quip (GIFT_QUIPS) + support +1; onGiftReceived (inventory-full → bounce back, else item in pockets + popup + grateful wiggle + "Solidarity!" toast); onGiftBounced (item returns, gifts credit reverted); onGiftRefund (item returned, gifts credit reverted); stats.gifts → client XP calc + POST /api/matches gifts field; offline guard "Gifting needs teammates"
+   401→  * /api/matches: gifts clampInt 0..50, +gifts*perGift in baseXp, achievement check gifts>=3 → good_samaritan (server seeds it via existing count-based seeding)
+   402→  * input.ts/game-store/SettingsPanel: rebindable F key ("Gift Item" row in settings), OneShot 'gift', defaults synced (also fixed stale SettingsPanel DEFAULTS keybinds)
+   403→- FEATURE/STYLING — teammate-status + gift UI polish: HUD SquadRow green border+Cell badge for cellmates (cell-green health bar), inventory hint "1–8 use · right-click drop · F gift to teammate", SquadPanel GIFT button (mint #7de3a8, disabled when detained/empty pockets w/ titles) next to RALLY, field-manual tip, HowToPlay new F row + Protest Cells card mention, EndScreen "Gifts Given" stat card (Gift icon)
+   404→- BUGFIX — pre-existing smoke-test.ts tsc errors (stale local JoinAck + closure-narrowing 'never' on playersA/B): synced fields with net.ts JoinAck, arrays default [] → tsc now 100% clean project-wide (src+mini-services)
+   405→- OPS INCIDENT — Next dev server HUNG mid-QA (all requests timeout, port held by zombie next-server worker pid 27563): killed tree (parent shell pid alone insufficient — must kill the worker child too), restarted via setsid bunx next dev; NOTE: bash sandbox blocked one restart command containing the word "caddy" in an echo string — avoid that literal in commands
+   406→- QA VERIFIED (2 live sessions QVNA cell + curl):
+   407→  * happy path: A gifted chai → B inventory ["chai"] ✓ (server distance-validated, targeted emit)
+   408→  * bounce path: B pockets filled → A's firstaid bounced back, "pockets are full" toast, gifts credit reverted ✓
+   409→  * refund path: net.gift('bogus_target') → server reject → game:giftRefund → item back + "Gift did not land" toast, gifts stays 0 ✓
+   410→  * XP math exact via curl: gifts=3 → baseXp 207 = 50 + 35(100m) + 60(1CP) + 8(2 items) + 54(3×18) ✓; newAchievements [first_steps, good_samaritan] ✓; /api/achievements unlocked ["first_steps","good_samaritan"] ✓; duplicate matchId idempotent (echoes 207, ignores gifts=99) ✓
+   411→  * browser: solo boot + HUD hint + SquadPanel tip + Settings "Gift Item" rebind row render ✓; zero console errors both tabs ✓; lint clean; tsc clean project-wide
+   412→- Test data left in DB: GiftTest/GiftVerify/GiftCheck3 players + gift_qa_1/gift_qa_final matches (harmless demo data)
+   413→- Round 9 note: server restarted to load gift handlers (double-fork pattern); both client tabs HMR-reloaded after game.ts edits (Fast Refresh full-reload on non-component modules — expected)
+   414→
+   415→Stage Summary:
+   416→- Round 9 shipped: Item Gifting §11 complete (the last unstarted §11 cooperation feature) — F-key/button gifting with server-validated distance/rate/type, refund + bounce integrity paths, support XP (+18/gift), Good Samaritan medal, smart item pick, HUD/panel/manual/settings polish; fixed the last pre-existing tsc errors
+   417→- §11 "cooperation" checklist now fully implemented: squad create/join/leave, member markers, teammate status, revive, heal, item sharing, rescue, cooperative checkpoints
+   418→- Verified: all 3 gift paths live in browser, XP math + medal via curl, zero console errors, lint+tsc fully clean
+   419→- Risks/next: gift smart-pick prefers consumables (throwable gifting possible but second-class); gifts counted client-side (cosmetic XP only, server clamps 0..50 — same trust model as rescues/revives); consider gift targeting UI (click a squad row to gift THAT member), remote-gift 2-client visual re-verify in stable env, squad invite toasts, or boss-fight replay next round
+   420→
+   421→---
+   422→Task ID: 12
+   423→Agent: Z.ai Code (cron webDevReview round 10)
+   424→Task: QA assessment + Squad Invite System §15 (end-to-end) + targeted gifting UI §11 + styling polish
+   425→
+   426→Work Log:
+   427→- QA ASSESSMENT (round start): all services healthy (Next :3000, game-server :3002 double-fork restart to load invite handlers, Caddy :81); lint clean; tsc clean for project src; menu/solo boot/HUD/movement (W-hold z -8.0→-9.7)/emote wheel (4/8 unlocked + lock badges) re-verified via agent-browser; zero console errors → project STABLE → chose feature development (round 9 roadmap: squad invites + gift targeting)
+   428→- FEATURE — Squad Invite System (§15, server-authoritative, end-to-end):
+   429→  * Server: pendingInvites map (targetSocketId → inviterSocketId → {code, fromName, expires}), INVITE_TTL_MS 20s with setTimeout sweep + dropAllInvitesFor() on leaveRoom/disconnect (invite dies with EITHER endpoint); squadCreateInternal/squadJoinInternal extracted (create/join handlers now share them); invite auto-CREATES a cell for an inviter with no squad (zero-preparation UX); PlayerState += inviteTimes rate channel (5/s window)
+   430→  * Handlers: game:squadInvite (same-room + not-self + rate checks → TARGET_NOT_FOUND/SQUAD_FULL/ALREADY_IN_CELL errors; targeted game:squadInvite to receiver + game:squadInviteSent ack to sender), game:squadInviteAccept (validates live+unexpired → squadJoinInternal → game:squadInviteAccepted to inviter), game:squadInviteDecline (→ game:squadInviteDeclined with decliner name)
+   431→  * net.ts: squadInvite/squadInviteAccept/squadInviteDecline emitters + 5 onSquadInvite* events; store: PendingInvite + pendingInvite state + setPendingInvite; UIActions += squadInvite/squadInviteAccept/squadInviteDecline/giftTo
+   432→  * game.ts: onSquadInvite (flyer state + toast + token sting + 20s client auto-clear via clearPendingInvite, also reset in startMatch/leaveMatch); sent/accepted/declined/error handlers with toast copy ("accepted — your cell just got louder!")
+   433→- FEATURE — Gift targeting UI (§11): giftNearest refactored → shared giftItemTo core (smart pick unchanged); new giftTo(targetId) with pre-checks (teammate left / detained → "bail them out first" / distance → "X is Nm away — get within 5m"); SquadPanel per-row GIFT button for cellmates (mint, disabled when detained/empty pockets/target detained)
+   434→- UI — InviteToast.tsx (new): interactive protest-flyer at top-center (z-60 above toasts): maroon header strip + gold cell-code chip, inviter name + pitch line, green→maroon expiry meter (20s), JOIN CELL / DECLINE buttons with answered-state confirmation ("✓ Joining the cell…"), spring entrance + tilt, role=alertdialog, auto-dismiss on expiry/answer; mounted in GameRoot (all modes)
+   435→- SquadPanel: per-row INVITE button (maroon, UserPlus) for room players NOT in your cell (disabled + title when cell full), per-row GIFT for cellmates; "PROTESTERS IN THE ROOM / INVITE OR GIFT →" list header; field manual tips updated (row gift targeting + 20s invite window); empty-cell hint updated
+   436→- STYLING (mandatory): flyer design system (paper bg, dashed dividers, stamp shadows), row action buttons with hover-lift, HowToPlay Protest Cells card now documents INVITE + 20s flyer
+   437→- NEW QA TOOLING (kept in mini-services/game-server): invite-test.ts (23-assertion protocol suite) + invite-visual.ts (join+invite+stay-alive for browser visual tests) + gift-buddy.ts (join+auto-accept+gift log); fixed invite-test local JoinAck type after first run
+   438→- QA VERIFIED:
+   439→  * invite-test.ts: ALL 23 PASS — invite deliver (4-char auto cell code, inviter name, sent-ack), accept → both rosters 2/4 same cell, ALREADY_IN_CELL guard, leave → null roster + inviter back to 1/4, decline notification, 21s expiry → INVITE_EXPIRED, bogus target → TARGET_NOT_FOUND, disconnect cleanup (stale invite not acceptable after rejoin), fresh invite+accept after reconnect
+   440→  * Browser LIVE (qaB session + script courier): flyer renders (screenshot r10-flyer-final.png), JOIN CELL click → "Squad 8NU5 — 2/4 strong. Name tags recolored!" + HUD CELL chip + courier-side "ACCEPTED by Protester_6751" + roster events; inviter-disconnect mid-window correctly voids the invite (INVITE_EXPIRED path)
+   441→  * Browser LIVE gifting: seeded inventory → row GIFT on GiftBuddy → buddy log "🎁 GIFT RECEIVED: chai from Protester_6751" + inventory slot emptied + "Gifted Chai Cup to GiftBuddy — support +1" (screenshot r10-panel-gift.png)
+   442→  * Regression: smoke-test.ts ALL PASS after server changes; zero console errors across all live sessions; tsc + eslint clean project-wide
+   443→- OPS FINDINGS: (1) agent-browser `--session-name` is only a restore key — `--session <name>` is the real isolation flag (earlier 2-tab test ran in ONE shared context); (2) long-lived headless 3D tabs degrade badly (ping up to 43s, socket flaps) → protocol tests belong in bun scripts, browser only for visuals; (3) game-server double-fork restart pattern continues to work; (4) test rooms (ITST1/INV10) are socket-ephemeral — no DB pollution this round
+   444→
+   445→Stage Summary:
+   446→- Round 10 shipped: Squad Invites §15 complete (auto-cell creation on invite, 20s expiring interactive flyer, accept/decline/expiry/guards, disconnect-safe, server-authoritative) + targeted per-row gifting §11 + new invite/gift QA tooling; §15 social loop is now: create/share code OR direct-invite → cell → rally/gift/solidarity XP
+   447→- Verified: 23/23 protocol assertions, live flyer accept + roster sync both sides, live row-gift delivery, zero console errors, smoke-test regression clean
+
+[showing lines 120-447 of 449; use offset=448 with limit to continue reading]

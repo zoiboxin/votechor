@@ -50,6 +50,8 @@ export async function GET(req: Request) {
       bossKills: row.bossKills,
       bestPosition: row.bestPosition,
       totalXp: row.totalXp,
+      kudosReceived: row.kudosReceived,
+      mvpWins: row.mvpWins,
       xp: row.totalXp,
     }
 

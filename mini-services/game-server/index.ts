@@ -102,10 +102,14 @@ function leaveRoom(socketId: string) {
   squadLeaveInternal(socketId) // remove from any squad, notify remaining members
   dropAllInvitesFor(socketId) // pending invites die with either endpoint
   const player = room.removePlayer(socketId)
+  dropMvpVote(socketId, roomId) // retract the departed voter's MVP ballot (after removal → accurate room count)
   if (player) {
     io.to(room.id).emit('game:playerleft', socketId, player.name)
   }
   if (room.size === 0) {
+    const mvpState = roomMvpVotes.get(room.id)
+    if (mvpState?.timer) clearTimeout(mvpState.timer)
+    roomMvpVotes.delete(room.id)
     room.dispose()
     rooms.delete(room.id)
     if (!room.isPublic && room.code) privateRooms.delete(room.code)
@@ -198,6 +202,65 @@ function squadJoinInternal(socketId: string, roomId: string, room: Room, code: s
   socketSquad.set(socketId, { roomId, code })
   emitSquad(room, squad)
   return 'ok'
+}
+
+// ---------- post-match honors (§15 — kudos + MVP voting) ----------
+interface MvpVoteState { votes: Map<string, string>; timer: ReturnType<typeof setTimeout> | null }
+const MVP_VOTE_WINDOW_MS = 15_000
+const roomMvpVotes = new Map<string, MvpVoteState>() // roomId -> vote state
+
+function mvpTallyPayload(room: Room, state: MvpVoteState) {
+  const counts = new Map<string, number>()
+  for (const targetId of state.votes.values()) counts.set(targetId, (counts.get(targetId) ?? 0) + 1)
+  const tally = [...counts.entries()]
+    .map(([id, votes]) => ({ id, name: room.getPlayer(id)?.name ?? 'Protester', votes }))
+    .sort((a, b) => b.votes - a.votes)
+  return { tally, voters: state.votes.size, roomPlayers: room.size }
+}
+
+function finalizeMvp(roomId: string) {
+  const room = rooms.get(roomId)
+  const state = roomMvpVotes.get(roomId)
+  if (!room || !state) return
+  if (state.timer) { clearTimeout(state.timer); state.timer = null }
+  const { tally, voters } = mvpTallyPayload(room, state)
+  const top = tally[0]
+  const winner = top
+    ? tally.filter((t) => t.votes === top.votes)[Math.floor(Math.random() * tally.filter((t) => t.votes === top.votes).length)]
+    : null
+  roomMvpVotes.delete(roomId)
+  io.to(room.id).emit('game:mvpFinal', {
+    winnerId: winner?.id ?? null,
+    winnerName: winner?.name ?? null,
+    tally, voters,
+  })
+}
+
+/** Register/re-register an MVP vote and broadcast the live tally. */
+function castMvpVote(room: Room, voterId: string, targetId: string) {
+  let state = roomMvpVotes.get(room.id)
+  if (!state) {
+    state = { votes: new Map(), timer: null }
+    roomMvpVotes.set(room.id, state)
+    state.timer = setTimeout(() => finalizeMvp(room.id), MVP_VOTE_WINDOW_MS)
+    state.timer.unref?.()
+  }
+  state.votes.set(voterId, targetId)
+  io.to(room.id).emit('game:mvpTally', mvpTallyPayload(room, state))
+  if (state.votes.size >= room.size) finalizeMvp(room.id) // everyone voted → instant verdict
+}
+
+/** Remove a departing voter's ballot and refresh the tally (vote session survives). */
+function dropMvpVote(socketId: string, knownRoomId?: string) {
+  const roomId = knownRoomId ?? socketRooms.get(socketId)
+  if (!roomId) return
+  const state = roomMvpVotes.get(roomId)
+  if (!state || !state.votes.has(socketId)) return
+  state.votes.delete(socketId)
+  const room = rooms.get(roomId)
+  if (room && roomMvpVotes.has(roomId)) {
+    io.to(room.id).emit('game:mvpTally', mvpTallyPayload(room, state))
+  }
 }
 
 // socketId -> roomId
@@ -409,6 +472,36 @@ io.on('connection', (socket) => {
     if (!invite) return
     dropInvite(socket.id, fromId)
     io.to(fromId).emit('game:squadInviteDeclined', { byId: socket.id, byName: room.getPlayer(socket.id)?.name ?? 'Protester' })
+  })
+
+  socket.on('game:kudos', (data: { targetId?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    const me = room?.getPlayer(socket.id)
+    if (!room || !me) return
+    const targetId = String(data.targetId ?? '')
+    const target = targetId === socket.id ? undefined : room.getPlayer(targetId)
+    if (!target || socketRooms.get(targetId) !== roomId) return
+    if (!room.rateLimit(me, 'kudosTimes')) return // silent: spam guard
+    io.to(targetId).emit('game:kudos', { fromId: socket.id, fromName: me.name })
+    socket.emit('game:kudosSent', { targetId, targetName: target.name })
+  })
+
+  socket.on('game:mvpVote', (data: { targetId?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    if (!room || !room.getPlayer(socket.id)) return
+    const targetId = String(data.targetId ?? '')
+    if (targetId === socket.id) {
+      socket.emit('game:mvpError', { reason: 'SELF_VOTE' })
+      return
+    }
+    const target = room.getPlayer(targetId)
+    if (!target || socketRooms.get(targetId) !== roomId) {
+      socket.emit('game:mvpError', { reason: 'TARGET_LEFT' })
+      return
+    }
+    castMvpVote(room, socket.id, targetId)
   })
 
   socket.on('game:heal', (data: { targetId?: unknown } = {}) => {

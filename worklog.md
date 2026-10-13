@@ -446,3 +446,42 @@ Stage Summary:
 - Round 10 shipped: Squad Invites §15 complete (auto-cell creation on invite, 20s expiring interactive flyer, accept/decline/expiry/guards, disconnect-safe, server-authoritative) + targeted per-row gifting §11 + new invite/gift QA tooling; §15 social loop is now: create/share code OR direct-invite → cell → rally/gift/solidarity XP
 - Verified: 23/23 protocol assertions, live flyer accept + roster sync both sides, live row-gift delivery, zero console errors, smoke-test regression clean
 - Risks/next: invite flyer during pause menu works but visual verified only in playing state; invitation rate limit is 5/s per sender (no per-target cooldown — spam-bounded but chatty); headless infra still flaky under 2 WebGL sessions (use script clients for protocol QA); consider MVP voting / post-match kudos, boss-fight cinematic replay (roadmap from round 9), or cell invite deep-link from menu PlayScreen next round
+
+---
+Task ID: 13
+Agent: Z.ai Code (cron webDevReview round 11)
+Task: QA assessment + Post-match Honors §15 (Kudos + MVP voting, end-to-end) + Squad invite deep-links + ghost-player bugfix + styling polish
+
+Work Log:
+- QA ASSESSMENT (round start): all services healthy (Next :3000, game-server :3002, Caddy :81); lint + tsc clean (project src); menu render, solo boot, HUD, movement (W-hold z -8→-10, 2.12m) verified via agent-browser; zero console errors → project STABLE → chose feature development (round 10 roadmap: post-match kudos/MVP + invite deep-link)
+- FEATURE — Post-match Kudos (§15, server-authoritative, end-to-end):
+  * room.ts: PlayerState += kudosTimes rate channel (5/s window, same limiter as emotes/gifts)
+  * index.ts: game:kudos handler (same-room + not-self + rate checks → silent reject), targeted game:kudos to receiver {fromId, fromName} + game:kudosSent ack to sender; game-server restart to load handlers
+  * net.ts: kudos() emitter + onKudos/onKudosSent events
+  * game.ts: onKudosReceived (🙌 KUDOS! fx popup above player, celebrate anim, token sting, toast, bumpKudosReceived, POST /api/social {kudos:1}); kudosSentTo Set prevents double-saluting (button flips to "Saluted")
+- FEATURE — MVP voting (§15, room-level vote session):
+  * index.ts: roomMvpVotes map (voterId→targetId) + 15s finalize window (auto-finalize timer, instant finalize when voters == roomPlayers); castMvpVote broadcasts live game:mvpTally {tally(name+votes, sorted), voters, roomPlayers}; finalizeMvp broadcasts game:mvpFinal {winnerId, winnerName, tally, voters} (ties → random among top); self-vote → game:mvpError SELF_VOTE, unknown/left target → TARGET_LEFT; dropMvpVote on leaveRoom retracts the ballot + re-broadcasts (called AFTER removePlayer so roomPlayers is accurate, WITH explicit roomId because socketRooms is cleared first)
+  * game.ts: onMvpFinal → MVP chip + toast + 🏆 MVP! popup; if I won → POST /api/social {mvp:true}
+- FEATURE — Match Honors card on EndScreen (the styling centerpiece):
+  * Poster-style card (cream bg, hard shadow) with per-row KUDOS (mint→gold "Saluted") + VOTE MVP (maroon "Voted") buttons, animated live vote-tally bars (spring width by votes/voters), gold MVP crown row highlight + animated "MVP: name" gradient header chip, "N received" kudos chip with pop animation, footer "vote open · 15s window / N/M votes in / Verdict in"
+  * New store state: postMatch {kudosReceived, tally, voters, roomPlayers, mvp} + roomRoster [{id,name,archetype}] (synced from join ack + players broadcast + join/left events); resetPostMatch/bumpKudosReceived/setMvpTally/setMvpWinner/setRoomRoster; UIActions += kudosTo/mvpVote
+- FEATURE — Squad invite deep-links (§15):
+  * PlayScreen: harvests ?squad=CODE on mount (URL cleaned via history.replaceState, kept in sessionStorage vc_squad_deeplink) → gold dashed "CELL INVITE DETECTED" banner with code + dismiss
+  * game.ts onJoinAck (multiplayer only): consumes the deep link → silent-error squadJoin + "Invite link detected — joining cell CODE…" toast
+  * SquadPanel: new Link2 "copy invite link" button next to the code chip (copies {origin}/?squad=CODE, green Check feedback + toast)
+- BUGFIX — ghost protesters (found during this round's QA): EndScreen "Back to Menu" (and the 14s auto-return) never left the room → the socket stayed joined forever (old net client kept pinging) and other players saw a permanent phantom. Fix: leaveMatch(force) bypasses the matchEnded guard; EndScreen toMenu calls uiActions().leaveMatch(true); startMatch also does net.leave() first to drop any lingering previous-room socket before connecting
+- DB/API: PlayerStats += kudosReceived/mvpWins (db push OK); new /api/social route (GET totals, POST {kudos 0..10 clamp delta, mvp bool} with x-vc-token upsert-increment); /api/stats now returns both counters; StatsPanel += "Kudos Received" + "MVP Titles" cards; HowToPlay Protest Cells card documents Match Honors + invite links
+- QA VERIFIED:
+  * NEW kudos-test.ts: 21/21 PASS (kudos delivery+ack, self/garbage silent rejects, rate limit 5/window exact, self-vote SELF_VOTE, tally broadcasts, instant final 2-1 deterministic winner, mvpFinal room-wide, TARGET_LEFT, fresh session after final, voter-disconnect ballot retraction 0/2)
+  * smoke-test + invite-test: ALL PASS after server changes (no regressions)
+  * /api/social via curl: 2→+mvp→+999(clamp 10) = kudosReceived 12 / mvpWins 1; GET echoes; empty body 400; bogus token 401; /api/stats exposes both
+  * Browser LIVE: honors card renders (roster rows, buttons, MVP chip, Verdict in); Kudos click → buddy log "BUDDY-KUDOS from Protester_7758" + button → "Saluted" + toast; MVP vote → tally 1/2 broadcast → 15s window → final winner=HonorsBuddy → gold chip; zero console errors
+  * Deep-link E2E: /?squad=RY2A → banner → join DEEP1 → AUTO-JOINED cell RY2A (squad state shows CellOwner + me, HUD CELL chip 2/4); invite-link button → "Invite link copied" toast
+  * Ghost fix verified: Back to Menu after end → net.connected false + socket null
+- OPS INCIDENTS (documented for future rounds): (1) `bun --hot` game-server crashed silently under a 3-client protocol test after a messy double-instance restart — plain `bun index.ts` and a clean single instance under `bun run dev` are both stable, tests now pass in either mode; (2) Next dev had to be restarted after prisma client regen (stale-client pitfall AGAIN — kudosReceived columns unknown to the running process → 500s) and the restart must run from /home/z/my-project (a `bun run dev` fired from mini-services/game-server CWD starts the GAME server instead — check /proc/<pid>/cwd when in doubt); (3) agent-browser eval hangs on long-lived degraded 3D tabs → close --all and relaunch fresh
+- All checks green: tsc (src clean), eslint, zero console errors, all 3 protocol suites pass
+
+Stage Summary:
+- Round 11 shipped: the full §15 social loop is COMPLETE — create/share code OR invite-link OR direct-invite → cell → rally/gift/solidarity XP → post-match Match Honors (kudos 🙌 + MVP vote with live tally + crowned verdict), persisted lifetime honors (kudosReceived/mvpWins on PlayerStats, surfaced in Stats panel)
+- Verified: 21/21 kudos/MVP protocol assertions, live browser honors flow (kudos delivery + MVP crown), deep-link auto-join E2E, /api/social math/clamps/auth, ghost-player fix, full regression (smoke/invite suites + solo boot + movement)
+- Risks/next: kudosSentTo is client-local (per-match double-salute guard is cosmetic; server rate limit is the real bound); MVP tie-break is random by design ("ties go to the loudest"); honors card needs ≥1 remote player (solo/offline shows nothing — by design); consider next: MVP bonus XP (needs pre-final vote state in /api/matches), squad invite deep-link from InviteToast flyer ("share link" button), boss-fight cinematic replay, or cell kudos streaks
