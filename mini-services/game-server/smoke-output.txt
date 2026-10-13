@@ -1,0 +1,19 @@
+Smoke test → http://localhost:3002
+PASS — 2 clients connected
+PASS — game:joined ok for both clients
+PASS — playerIds assigned (eNvOtK…, 94HGem…)
+PASS — same public room: pub_1
+PASS — tokensNeeded present (12)
+PASS — matchStartedAt present
+PASS — join ack A lists 1 player(s)
+PASS — join ack B lists 2 players (expected 2)
+PASS — join ack lists npcs (31)
+PASS — join ack lists items (54)
+PASS — both players present in game:players snapshots (last: 2 players)
+PASS — snapshot player count >= 2 (got 2)
+PASS — Bob relayed with state fields (anim=idle, name=Bob)
+PASS — game:npcs snapshot received (31 npcs incl. searchlights)
+PASS — game:playerjoined seen by the other client
+———————————————————————————
+SMOKE TEST: ALL PASS
+smoke_exit=0

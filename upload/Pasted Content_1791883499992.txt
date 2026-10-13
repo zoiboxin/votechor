@@ -1,0 +1,883 @@
+# VOTECHOR.APP — COMPLETE GAME BUILD MASTER PROMPT
+## Build a Production-Ready 3D Multiplayer Satirical Protest Game
+
+### YOUR ROLE
+
+Act as an autonomous senior game development studio, including expert 3D game developers, multiplayer engineers, game designers, AI programmers, 3D artists, animators, sound designers, UI/UX designers, security engineers, and DevOps engineers.
+
+Your responsibility is to **design, implement, test, optimize, and prepare the complete VoteChor.app game for production deployment**.
+
+Do not merely generate a plan, tutorial, landing page, mockup, or basic playable demo. Implement the actual game in the existing repository.
+
+Work through all development phases sequentially and automatically. Do not stop after each phase to request my approval. Make sensible engineering decisions, verify each milestone, fix problems, and continue until the entire project is implemented or you encounter a genuine external blocker.
+
+If a third-party service, API key, deployment credential, or paid asset is unavailable, implement everything possible locally, provide a working fallback, and document the exact remaining configuration.
+
+---
+
+# 1. GAME IDENTITY
+
+**Domain:** VoteChor.app
+
+**Game title:** VoteChor: The Great Parliament Run
+
+**Tagline:** The votes are missing. The protest is on. Everybody run!
+
+**Genre:** 3D multiplayer action-comedy, obstacle course, cooperative survival, and satirical adventure.
+
+**Setting:** A fictionalized Indian city during a humorous political protest inspired by public debate surrounding voting and democracy.
+
+**Visual direction:** High-quality stylized realism, detailed Indian streets, expressive characters, realistic lighting, responsive animation, funny physics, cinematic events, and chaotic multiplayer encounters.
+
+**Platform:** Desktop browsers first, followed by optimized mobile browser support.
+
+**Business model:** Free-to-play core game, with optional cosmetic monetization considered only after the core game works.
+
+The game should offer a complete beginning, middle, and end while supporting repeatable multiplayer sessions.
+
+The political humor should be fictional and satirical. Do not impersonate real politicians, fabricate factual accusations against identifiable people, or depict real-world political violence as documentary footage.
+
+# 2. REQUIRED TECHNICAL ARCHITECTURE
+
+Inspect the existing repository before choosing or replacing any technology.
+
+If the repository is empty, use the following preferred stack:
+
+- TypeScript throughout.
+- React and Vite for the game interface.
+- Three.js with React Three Fiber and Drei, or Babylon.js if it proves better suited to the implementation.
+- Rapier for 3D physics and collision detection.
+- Node.js with TypeScript for the multiplayer server.
+- Colyseus or a comparable authoritative multiplayer framework.
+- PostgreSQL for persistent profiles, progression, and statistics.
+- A migration system and validated database access layer.
+- WebSockets for real-time game state synchronization.
+- GLB/glTF for optimized 3D models.
+- Web Audio API or an appropriate audio library for spatial audio and sound management.
+- Vitest or an equivalent testing framework.
+- Playwright for browser-level end-to-end testing where supported.
+- Docker Compose for reproducible local development when practical.
+
+Choose compatible stable versions and install only necessary dependencies.
+
+Use a modular architecture that separates gameplay, rendering, networking, backend services, data access, and user interface.
+
+Recommended project structure:
+
+- `apps/game` — 3D game client and menus.
+- `apps/server` — authoritative multiplayer server.
+- `packages/shared` — shared types, validation, constants, and protocol definitions.
+- `packages/gameplay` — reusable gameplay logic where appropriate.
+- `database` — migrations and schema.
+- `assets` — original or licensed models, textures, animations, and audio.
+- `tests` — automated unit, integration, and end-to-end tests.
+- `docs` — architecture, setup, deployment, controls, and troubleshooting.
+- `docker-compose.yml` — local infrastructure where needed.
+- `.env.example` — documented configuration placeholders.
+
+Adapt this structure if the repository already has a sound architecture. Avoid unnecessary rewrites.
+
+# 3. EXECUTION RULES
+
+Follow these rules throughout the project.
+
+1. Inspect the repository, dependencies, existing files, and current application behavior first.
+2. Preserve working functionality unless a change is necessary.
+3. Create a development checklist and maintain it as implementation progresses.
+4. Build working features, not merely placeholder interfaces.
+5. After each major phase, run relevant build, type-check, lint, and test commands.
+6. Fix failures before continuing to dependent phases.
+7. Never report a test as passed unless it actually ran and passed.
+8. Never claim that real multiplayer works without testing independent clients against the server.
+9. Never simulate multiplayer users while presenting them as real connected users.
+10. Never leave core features represented only by buttons, static images, hardcoded results, or empty functions.
+11. Use original procedural assets, existing suitable assets, or legally usable assets.
+12. If external assets are unavailable, create suitable procedural or low-poly replacements.
+13. Keep the project runnable throughout development.
+14. Avoid giant source files and unnecessary duplicated logic.
+15. Handle errors, disconnects, missing assets, and configuration failures gracefully.
+16. Continue to the next phase automatically when the current phase passes its acceptance criteria.
+17. If a phase cannot be completed because of a genuine blocker, implement the best functional fallback and document the blocker precisely.
+18. At completion, report implemented features, actual test results, known limitations, and deployment steps.
+
+Do not waste the available context on repeatedly describing what you intend to do. Implement the code.
+
+# 4. GAME WORLD AND ENVIRONMENT
+
+Build a connected, explorable, fictional Indian city.
+
+The environment must feel like a coherent place rather than separate disconnected demonstration scenes.
+
+Include the following five main zones.
+
+### Zone A — Protest Gathering Plaza
+
+Create:
+- A large public gathering area.
+- A visible match-start location.
+- Indian street-food stalls and tea vendors.
+- Colorful shops and roadside signage.
+- Protester NPCs with humorous signs.
+- Benches, trees, scooters, barriers, and environmental props.
+- A character selection and squad formation area.
+- A tutorial and practice section.
+
+### Zone B — Busy Market Streets
+
+Create:
+- Narrow roads and side lanes.
+- Street vendors, storefronts, and parked motorcycles.
+- Moving crowds and pedestrian NPCs.
+- Roadside obstacles and collectible objects.
+- Multiple navigable routes.
+- Small shortcuts and optional exploration rewards.
+- Funny interactions with environmental props.
+
+### Zone C — Security Checkpoint
+
+Create:
+- Barricades and controlled access points.
+- Fictional police patrols.
+- Searchlights and warning markers where appropriate.
+- Detectable and nondetectable routes governed by transparent game rules.
+- Jumping, sliding, sprinting, and hiding opportunities.
+- Team objectives that unlock alternative routes.
+
+### Zone D — Major Avenue
+
+Create:
+- Wide roads, flyovers, roadworks, and construction barriers.
+- Parked vehicles and predictable traffic hazards.
+- More challenging obstacle combinations.
+- Team-based checkpoints.
+- Environmental shortcuts and collectible bonuses.
+
+### Zone E — Fictional Government District
+
+Create:
+- Monumental architecture inspired by Indian civic buildings.
+- Grand avenues, plazas, and security checkpoints.
+- A large final arena outside a fictional Parliament-inspired building.
+- Dramatic lighting and crowd ambience.
+- A distinct visual transition into the final encounter.
+
+Use procedural geometry where it helps achieve a complete environment without expensive assets.
+
+Create a connected level with visible landmarks, readable navigation, reasonable collision boundaries, and efficient rendering.
+
+# 5. PLAYER CHARACTERS
+
+Implement a working character system with at least eight fictional character archetypes:
+
+- College Student.
+- IT Employee.
+- Overconfident Uncle.
+- Chai-Fueled Sprinter.
+- Amateur Journalist.
+- Street-Smart Strategist.
+- Retired Debate Champion.
+- Accidental Protester.
+
+Each archetype must have a distinctive visual appearance, personality, and animation style.
+
+Implement:
+- Character selection.
+- Cosmetic customization.
+- Clothing and accessories.
+- Hairstyles and facial hair where assets support them.
+- Multiple skin tones.
+- Backpacks, glasses, signs, and emotes.
+- Idle, walking, running, jumping, sliding, falling, recovery, healing, capture, and victory animations.
+
+Use appropriate existing animations or create procedural animation fallbacks.
+
+Do not use static images in place of playable 3D characters.
+
+# 6. MOVEMENT, CAMERA, AND PHYSICS
+
+Implement a polished third-person controller.
+
+Desktop controls:
+- WASD: movement.
+- Mouse: camera control.
+- Space: jump.
+- Shift: sprint.
+- Ctrl or C: slide.
+- E: interact, collect, revive, or use contextual objects.
+- Q: utility item.
+- G: emote wheel.
+- Tab: squad status.
+- M: map.
+- Esc: pause and settings.
+
+Provide remappable controls.
+
+Movement must include:
+- Acceleration and deceleration.
+- Responsive directional movement.
+- Camera-relative input.
+- Jumping and falling.
+- Sprint stamina.
+- Sliding with momentum.
+- Obstacle vaulting where feasible.
+- Dodging.
+- Collision response.
+- Fall recovery.
+- Controlled ragdoll effects.
+- Slope handling.
+- Ground detection.
+- Respawn and recovery boundaries.
+
+Implement forgiving collision rules for crowded environments.
+
+Prevent characters from falling through the world, becoming permanently stuck, or exploiting physics to bypass mandatory objectives.
+
+The camera must handle walls and obstacles, avoid excessive clipping, and provide configurable sensitivity and invert options.
+
+# 7. MULTIPLAYER SERVER
+
+Implement genuine multiplayer using an authoritative server.
+
+The initial design target is 32–50 players per instance, subject to actual profiling and infrastructure limits.
+
+Implement:
+- Public matchmaking.
+- Private rooms with join codes.
+- Room capacity.
+- Player join and leave events.
+- Real-time position and rotation synchronization.
+- Animation-state synchronization.
+- Interaction synchronization.
+- Shared collectible ownership.
+- Shared checkpoints and objective progress.
+- Server-authoritative capture and health decisions.
+- Server-side item validation.
+- Reconnection after temporary disconnection.
+- Ping and connection-status indicators.
+- Interest management for large environments.
+- Interpolation and prediction where suitable.
+- Graceful room shutdown and recovery.
+- Server-side rate limits and input validation.
+
+The server must be the source of truth for important gameplay events.
+
+Do not send complete world state every frame if efficient state deltas are sufficient.
+
+Build a working connection flow that can be tested with two or more independent browser sessions.
+
+Do not display fake player counts. Distinguish connected players from NPCs and optional development bots.
+
+If a hosted deployment is not possible without credentials, make the application locally runnable and provide production configuration instructions.
+
+# 8. SECURITY NPC ARTIFICIAL INTELLIGENCE
+
+Create different fictional security NPC types with distinct appearances and behaviors.
+
+### Police-inspired NPCs
+
+Implement:
+- Patrol routes.
+- Visibility and distance checks.
+- Investigation.
+- Alert states.
+- Chase behavior.
+- Capture attempts.
+- Escort-to-detention behavior.
+- Return-to-patrol behavior.
+
+### Facility-security NPCs
+
+Implement:
+- Restricted-zone patrols.
+- Coordinated alarms.
+- Checkpoint protection.
+- Team-objective gates.
+- Predictable challenge patterns.
+
+### Ceremonial perimeter guards
+
+Use them as fictional obstacle and access-control NPCs near the final zone, with non-graphic mechanics and clear boundaries.
+
+Implement a finite-state machine or behavior tree for NPC behavior.
+
+Use pathfinding or navigation suitable for the world.
+
+NPCs must:
+- Respect walls and navigation boundaries.
+- Avoid teleporting into players.
+- Have readable detection indicators.
+- Use predictable and fair capture rules.
+- React to distractions.
+- Recover from navigation errors.
+- Have appropriate idle, patrol, alert, chase, and recovery animations.
+
+Treat all security forces as fictionalized gameplay characters. Avoid graphic combat or realistic instructions for attacking real-world security personnel.
+
+# 9. CAPTURE, DETENTION, AND RETURN
+
+Implement the full detention gameplay loop.
+
+When an NPC captures a player:
+
+1. Validate the capture on the server.
+2. Temporarily restrict the player's movement.
+3. Play a humorous capture animation.
+4. Display a funny message.
+5. Move the player through a short escort sequence or controlled transition.
+6. Release the player at a designated checkpoint behind the active zone.
+7. Restore player control.
+8. Show the route and distance back to the squad.
+9. Preserve earned XP and persistent progression.
+10. Allow an eligible teammate rescue objective to shorten detention.
+
+Add a visible countdown and configurable detention duration.
+
+Prevent repeated captures from becoming an endless lockout.
+
+Test capture and release behavior under network latency, player disconnection, and multiple simultaneous captures.
+
+# 10. COLLECTIBLES AND OBJECT INTERACTIONS
+
+Create a shared item system with server-validated inventory.
+
+Include:
+- Empty plastic bottles.
+- Paper balls.
+- Cardboard signs.
+- Foam props.
+- Water bottles.
+- First-aid kits.
+- Energy snacks.
+- Cosmetic collectibles.
+- Temporary speed boosters.
+- Hidden joke items.
+
+Implement:
+- Object spawning.
+- Pickup prompts.
+- Pickup animations.
+- Inventory limits.
+- Throwing and dropping.
+- Cooldowns.
+- Object ownership.
+- Collision detection.
+- Despawn and respawn rules.
+- Audio feedback.
+- Server-side validation.
+
+Throwable objects should use physics-based trajectories, gravity, collisions, bouncing, and impact reactions.
+
+Keep combat interactions cartoonish and non-graphic. Prefer harmless props and distraction effects over injury simulation.
+
+# 11. HEALTH, REVIVAL, AND COOPERATION
+
+Implement a simple, non-graphic health and stamina system.
+
+When a player is hit by an in-game hazard:
+- Reduce health or temporarily impair movement.
+- Trigger an appropriate animation.
+- Display the player's status to teammates.
+- Permit revival during a configurable recovery window.
+- Allow first-aid items to restore health.
+- Award support points for successful assistance.
+
+Implement:
+- Squad creation.
+- Squad invitations.
+- Squad joining and leaving.
+- Team member markers.
+- Teammate status.
+- Revive interactions.
+- Healing interactions.
+- Eligible item sharing.
+- Detained-player rescue.
+- Cooperative checkpoint activation.
+- Team challenges and support rewards.
+
+Validate all health changes and revives on the server.
+
+# 12. THE GREAT VOTE COLLECTOR — FINAL BOSS
+
+Build an original, oversized fictional political boss.
+
+The Great Vote Collector wears an exaggerated costume, carries a giant stamp, protects a ballot-themed shield, and uses comical bureaucracy-inspired attacks.
+
+The boss must not be a real politician or an identifiable copy of a real person.
+
+Create a cinematic boss arena with animated props, crowd reactions, original music, lighting effects, and a visible team objective.
+
+Implement these phases.
+
+### Phase 1: The Speech
+
+The boss performs an exaggerated fictional speech while players avoid harmless paperwork hazards.
+
+### Phase 2: Bureaucracy Attack
+
+Players cooperate to sort documents, activate objective stations, and interrupt an endless paperwork routine.
+
+### Phase 3: Giant Stamp
+
+The boss telegraphs marked ground areas before deploying cartoon shockwaves. Players dodge and activate counters.
+
+### Phase 4: Teamwork Challenge
+
+Multiple objective stations require coordinated player participation. Revives and support actions contribute to success.
+
+### Phase 5: Final Vote
+
+Players complete a shared ballot-themed objective. The boss's shield disappears, triggering the final comic sequence and victory rewards.
+
+Requirements:
+- Server-authoritative boss health and phase transitions.
+- Synchronized attack telegraphs.
+- Fair hit detection.
+- Configurable difficulty.
+- Recovery windows.
+- Clear objectives.
+- Multiplayer-safe phase transitions.
+- Victory and failure conditions.
+- Rewards granted only once.
+- A replayable encounter.
+
+Do not create the illusion of a working boss with only a health bar and static animation. Implement actual state transitions and gameplay interactions.
+
+# 13. AUDIO AND ANIMATION
+
+Implement a centralized audio manager.
+
+Include:
+- Footsteps that vary by surface.
+- Crowd ambience.
+- Distant traffic.
+- Whistles and sirens used sparingly.
+- Object pickup and collision sounds.
+- Jump, landing, sliding, and falling sounds.
+- Capture and release cues.
+- Healing and revival feedback.
+- NPC alert audio.
+- Boss dialogue.
+- Boss music.
+- Victory and failure themes.
+- UI sound effects.
+
+Use original or licensed audio. Use synthesized sound effects or placeholders that are clearly identified if appropriate assets are unavailable.
+
+Implement:
+- Animation state transitions.
+- Movement blending.
+- Jump and landing transitions.
+- Collision reactions.
+- Ragdoll recovery.
+- Item interaction animations.
+- Squad emotes.
+- Boss animation states.
+- Victory sequences.
+
+Audio and animation must respond to real game events rather than play only as decorative loops.
+
+Provide volume controls, mute options, captions for important cues, and reduced-effects accessibility settings.
+
+# 14. HUMOR AND SATIRICAL CONTENT
+
+Use original, playful Indian-English and optional Hindi-English humor.
+
+Example notifications:
+- “Detained for Excessive Sprinting.”
+- “Breaking News: Uncle Ji Has Entered the Restricted Zone.”
+- “Your Squad Has Lost the Plot.”
+- “Achievement Unlocked: Professional Barricade Jumper.”
+- “The Chai Supply Is Under Threat.”
+- “The Boss Has Requested Another Committee Meeting.”
+- “Your Teammate Has Been Promoted to Traffic Cone.”
+- “Democracy Is Loading… Please Wait.”
+
+Create a reusable localization and dialogue system so new jokes can be added without changing gameplay code.
+
+Keep jokes focused on fictional political absurdity, bureaucracy, and multiplayer mishaps rather than protected groups or real-world victims.
+
+# 15. USER INTERFACE
+
+Create a professional interface with a distinctive visual identity for VoteChor.app.
+
+### Main menu
+
+Implement:
+- Play Now.
+- Join Server.
+- Create Private Room.
+- Character Customization.
+- Squad.
+- Leaderboards.
+- Achievements.
+- Settings.
+- How to Play.
+
+### In-game HUD
+
+Implement:
+- Health.
+- Stamina.
+- Current objective.
+- Squad members.
+- Mini-map.
+- Checkpoint progress.
+- Item inventory.
+- Capture countdown.
+- Revive status.
+- Connection quality.
+- Player count.
+- Event notifications.
+
+### End-of-match screen
+
+Show:
+- Finishing position.
+- Distance traveled.
+- Checkpoints completed.
+- Teammates rescued.
+- Revives completed.
+- Items collected.
+- Boss contribution.
+- XP earned.
+- Achievements.
+- Funny performance titles.
+
+All buttons must have real functionality.
+
+Create loading screens, empty states, error messages, reconnecting screens, and onboarding tutorials.
+
+Provide responsive layouts for desktop and mobile.
+
+# 16. PROGRESSION AND LEADERBOARDS
+
+Implement persistent player progression.
+
+Features:
+- XP and levels.
+- Achievements.
+- Cosmetic unlocks.
+- Emotes.
+- Character outfits.
+- Daily and weekly challenges.
+- Squad challenges.
+- Match history.
+- Personal statistics.
+- Global leaderboard.
+- Friends-only leaderboard if a friend system exists.
+- Cosmetic event rewards.
+
+Use server-validated progression and database transactions for reward claims.
+
+Prevent duplicated XP, duplicate item grants, and repeated boss rewards caused by reconnection or replayed requests.
+
+Keep competitive balance fair. Do not require payment for gameplay advantages.
+
+# 17. DATABASE AND BACKEND
+
+Design a clean, documented database schema.
+
+Potential entities:
+- Users.
+- PlayerProfiles.
+- CharacterCosmetics.
+- PlayerProgress.
+- Achievements.
+- PlayerAchievements.
+- MatchResults.
+- PlayerStatistics.
+- Squads.
+- SquadMemberships.
+- ChallengeProgress.
+- RewardClaims.
+- ModerationReports.
+
+Separate persistent data from rapidly changing real-time game state.
+
+Implement:
+- Schema migrations.
+- Database indexes.
+- Input validation.
+- Transaction-safe reward handling.
+- Error handling.
+- Connection pooling.
+- Environment-based configuration.
+- Secure authentication if accounts are enabled.
+- Guest identity with appropriate limits.
+- Data retention and deletion considerations.
+
+Do not require users to register before they can test the game. Support guest play where practical.
+
+Never put database credentials or privileged secrets in frontend bundles.
+
+# 18. PERFORMANCE AND DEVICE SUPPORT
+
+Optimize the game for modern browsers.
+
+Targets:
+- Approximately 60 FPS on capable desktop hardware.
+- A reasonable 30 FPS target on supported mobile devices.
+- Responsive controls.
+- Efficient asset loading.
+- Reasonable initial download size.
+- Stable memory usage.
+- Smooth player interpolation.
+- Controlled NPC processing.
+- Efficient collision detection.
+- Reduced graphics settings for weaker hardware.
+
+Implement:
+- Level-of-detail models.
+- Frustum culling.
+- Instanced rendering.
+- Compressed textures.
+- Compressed or optimized models.
+- Lazy loading.
+- Object pooling.
+- Adaptive shadow quality.
+- Adjustable particle counts.
+- Reduced mobile NPC counts.
+- Configurable server update frequency.
+- Network interest management.
+- Performance monitoring in development.
+
+Do not claim a performance target has been met until it has been measured on appropriate hardware.
+
+# 19. SECURITY, MODERATION, AND RELIABILITY
+
+Implement appropriate safeguards:
+- Server-side validation.
+- Secure WebSocket configuration.
+- Input validation.
+- Rate limiting.
+- Anti-duplication logic.
+- Basic anti-cheat checks.
+- Chat moderation.
+- Mute and report functions if chat is implemented.
+- Safe username handling.
+- Error logging.
+- Health checks.
+- Graceful shutdown.
+- Reconnection support.
+- Safe environment-variable handling.
+- Database migration validation.
+- Backup and recovery guidance.
+
+Do not allow clients to directly award themselves XP, complete boss objectives, set their health, or claim arbitrary inventory.
+
+If voice or text chat is not implemented, do not display non-functional chat controls.
+
+# 20. AUTOMATED TESTING
+
+Create and run tests for:
+
+### Gameplay
+- Movement and ground detection.
+- Jumping and collision boundaries.
+- Item collection.
+- Inventory limits.
+- Throwing and object interactions.
+- Health and healing.
+- Revival.
+- Capture and detention.
+- Respawn and reconnection.
+- Checkpoint activation.
+- Boss phase transitions.
+- Reward granting.
+
+### Multiplayer
+- Multiple clients joining the same room.
+- Player movement synchronization.
+- Player disconnect and reconnect.
+- Simultaneous interactions.
+- Invalid client input.
+- Duplicate reward prevention.
+- Shared objective updates.
+- Server capacity limits.
+
+### Interface
+- Main menu navigation.
+- Character selection.
+- Settings persistence.
+- Error and reconnect states.
+- Mobile control layout.
+- End-of-match screens.
+
+### Production readiness
+- Clean production build.
+- Type checking.
+- Database migration validation.
+- Environment configuration validation.
+- Browser smoke tests.
+- Performance profiling.
+- Dependency and security checks where available.
+
+Report the actual result of every test category. Distinguish tests that passed, failed, were skipped, or could not run.
+
+# 21. COMPLETE EXECUTION SEQUENCE
+
+Execute the following phases in order. Do not stop for routine approval between them.
+
+## Phase 1 — Repository inspection and foundation
+
+Inspect the repository and identify the current stack.
+
+Set up the required project structure, dependencies, shared types, environment configuration, scripts, and documentation.
+
+Create a checklist and ensure the initial application builds.
+
+**Acceptance:** The application and server start successfully in development, or the existing project starts without regression.
+
+## Phase 2 — Playable 3D prototype
+
+Create the scene, third-person character, camera, lighting, ground, collision boundaries, and core movement.
+
+Add jumping, sprinting, sliding, and a basic obstacle course.
+
+**Acceptance:** A real player can control a 3D character, navigate the environment, and interact with collisions.
+
+## Phase 3 — Multiplayer foundation
+
+Create the authoritative server and client connection flow.
+
+Implement rooms, real player synchronization, join and leave events, and basic reconnection.
+
+**Acceptance:** Two or more independent browser clients can connect to the same room and observe one another moving.
+
+## Phase 4 — Core gameplay systems
+
+Implement the item system, health, stamina, interaction prompts, capture mechanics, detention, release, checkpoints, and revival.
+
+**Acceptance:** All mechanics function in a single-player environment and synchronize correctly in multiplayer.
+
+## Phase 5 — NPC intelligence
+
+Implement patrols, detection, investigation, chase, capture, navigation, and recovery.
+
+**Acceptance:** NPCs can complete the defined behavior loop without routinely getting stuck or behaving unfairly.
+
+## Phase 6 — Complete city environment
+
+Build all five zones, connect them, populate them with optimized assets, and add navigable routes, collectibles, and checkpoints.
+
+**Acceptance:** Players can traverse the full level without broken transitions, missing critical assets, or impassable mandatory paths.
+
+## Phase 7 — Squad and cooperative systems
+
+Implement squads, team markers, healing, revives, rescue objectives, shared progress, and support rewards.
+
+**Acceptance:** Multiple players can cooperate on actual synchronized objectives.
+
+## Phase 8 — Final boss encounter
+
+Implement the full boss arena, phases, attacks, objectives, synchronization, victory, failure, and rewards.
+
+**Acceptance:** A multiplayer group can enter, complete, and replay the boss encounter.
+
+## Phase 9 — Content, audio, and polish
+
+Add character customization, original humor, animation polish, sound effects, music, UI transitions, and visual effects.
+
+**Acceptance:** Major gameplay actions produce appropriate visual, audio, and interface feedback.
+
+## Phase 10 — Progression and backend
+
+Implement profiles, saved progression, achievements, statistics, leaderboards, and reward persistence.
+
+**Acceptance:** Player progress remains correct after leaving and rejoining.
+
+## Phase 11 — Optimization and mobile support
+
+Profile rendering, networking, memory, asset delivery, and server performance. Implement adaptive quality and mobile controls.
+
+**Acceptance:** The game operates within documented performance budgets on the devices that can actually be tested.
+
+## Phase 12 — Security and reliability
+
+Review client trust boundaries, validate server events, handle errors, and test disconnects, invalid requests, and duplicate reward claims.
+
+**Acceptance:** The primary game loop survives ordinary errors and rejects invalid gameplay requests.
+
+## Phase 13 — End-to-end testing
+
+Run the full build, automated tests, browser smoke tests, and multiplayer tests. Resolve all critical failures.
+
+**Acceptance:** The main gameplay loop can be completed from joining a match to defeating the boss and receiving rewards.
+
+## Phase 14 — Deployment preparation
+
+Prepare:
+- Production frontend build.
+- Multiplayer server deployment.
+- Database migrations.
+- Production environment configuration.
+- WebSocket routing.
+- HTTPS configuration.
+- Domain setup instructions for VoteChor.app.
+- Logging and monitoring.
+- Backup and recovery instructions.
+- Deployment and rollback documentation.
+
+Deploy only if the necessary infrastructure and credentials are available.
+
+**Acceptance:** The application can be deployed using documented steps, and the deployed game can connect to its actual multiplayer server.
+
+# 22. FINAL COMPLETION CHECKLIST
+
+Before declaring the project complete, verify each item:
+
+- [ ] The game starts successfully.
+- [ ] A controllable 3D character exists.
+- [ ] The city is explorable.
+- [ ] Movement and physics work.
+- [ ] Independent users can join the same multiplayer server.
+- [ ] Player positions synchronize.
+- [ ] NPCs patrol and chase.
+- [ ] Capture and detention work.
+- [ ] Players can return to the active zone.
+- [ ] Collectibles and throwing work.
+- [ ] Healing and revival work.
+- [ ] Squads and shared objectives work.
+- [ ] The full route and checkpoints work.
+- [ ] The final boss encounter is functional.
+- [ ] Victory and failure states work.
+- [ ] Rewards persist correctly.
+- [ ] Audio and animation respond to gameplay.
+- [ ] The UI is responsive.
+- [ ] Error handling and reconnection work.
+- [ ] Automated tests have been run.
+- [ ] Production build has been verified.
+- [ ] Deployment instructions are complete.
+
+If any item is incomplete, do not falsely mark it complete. Finish the implementation if possible; otherwise, record the exact blocker and the next required action.
+
+# 23. FINAL INSTRUCTIONS TO GLM
+
+Begin now by inspecting the existing project.
+
+Then execute every phase sequentially and autonomously, implementing real functionality, running tests, correcting failures, and continuing until the full scope is complete.
+
+Do not return only a proposed architecture, implementation plan, code snippets, or instructions for me to implement manually.
+
+Create and modify the actual project files using the tools available in your environment.
+
+Do not stop after building a landing page or a simple character demo.
+
+Do not replace real multiplayer with fake players.
+
+Do not represent unavailable assets, APIs, or services as working.
+
+Use sensible fallbacks when necessary, preserve a runnable project, and document any genuine external blocker.
+
+At the end, provide a concise completion report containing:
+
+1. What was actually implemented.
+2. Which development phases are complete.
+3. Build and test results.
+4. How to start the game locally.
+5. How to run the multiplayer server.
+6. How to configure the database.
+7. How to deploy to VoteChor.app.
+8. Any remaining blockers or incomplete features.
+
+**Ultimate objective:** Deliver a real, polished, funny, cooperative 3D multiplayer game at VoteCh

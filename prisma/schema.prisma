@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Guest-identity based player profile. token is stored in localStorage.
+model Player {
+  id            String   @id @default(cuid())
+  token         String   @unique
+  name          String
+  archetype     String   @default("student")
+  xp            Int      @default(0)
+  level         Int      @default(1)
+  cosmetics     String   @default("{}") // JSON: {hat,glasses,sign,skinTone,shirtColor...}
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  matches       MatchResult[]
+  achievements  PlayerAchievement[]
+  stats         PlayerStats?
+}
+
+model MatchResult {
+  id               String   @id // server-issued matchId to prevent duplicate rewards
+  playerId         String
+  victory          Boolean  @default(false)
+  position         Int      @default(0)
+  distance         Float    @default(0)
+  checkpoints      Int      @default(0)
+  rescues          Int      @default(0)
+  revives          Int      @default(0)
+  itemsCollected   Int      @default(0)
+  bossContribution Float    @default(0)
+  detentions       Int      @default(0)
+  tokens           Int      @default(0) // vote tokens collected this match (lifetime sum drives token_collector)
+  xpEarned         Int      @default(0)
+  funnyTitle       String   @default("")
+  multiplayer      Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  player           Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId])
+  @@index([xpEarned])
+}
+
+model PlayerStats {
+  playerId      String @id
+  matchesPlayed Int    @default(0)
+  wins          Int    @default(0)
+  totalDistance Float  @default(0)
+  totalRescues  Int    @default(0)
+  totalRevives  Int    @default(0)
+  totalItems    Int    @default(0)
+  detentions    Int    @default(0)
+  bossKills     Int    @default(0)
+  bestPosition  Int    @default(0) // 0 = none, 1 = best
+  totalXp       Int    @default(0)
+  player        Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+}
+
+model Achievement {
+  id          String   @id // stable code e.g. "chai_guardian"
+  name        String
+  description String
+  icon        String   @default("award")
+  xpReward    Int      @default(50)
+  players     PlayerAchievement[]
+}
+
+model PlayerAchievement {
+  playerId      String
+  achievementId String
+  unlockedAt    DateTime @default(now())
+  player        Player       @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  achievement   Achievement  @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@id([playerId, achievementId])
+}
+
+model DailyChallenge {
+  id        String   @id @default(cuid())
+  day       String   // YYYY-MM-DD
+  kind      String   // distance | items | rescues | boss
+  target    Float
+  reward    Int      @default(100)
+  desc      String
+}

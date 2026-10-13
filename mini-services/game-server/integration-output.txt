@@ -1,0 +1,28 @@
+PASS — both joined the same room (pub_3)
+PASS — join ack includes dormant boss payload
+PASS — revive on non-dazed target rejected (no game:health)
+PASS — heal applied + capped at 100 (got 100,false)
+PASS — checkpoint 1 activated by Tester ([{"cp":1,"by":"Tester","total":1}])
+PASS — game:capture(playerId, until, message) received
+PASS — detention ≈15s for accidental archetype (15.0s left)
+PASS — capture message: "Detained pending a full inquiry into why you were running so cheerfully."
+PASS — snapshot shows detained=true during detention (detained=true)
+PASS — detained state updates ignored (pos -6,-12)
+PASS — released at cp1 detention (10,-70): got (10,-70)
+PASS — token pickup → game:tokens(1) (got 1)
+PASS — game:items shows A_tok_1 taken by Tester
+PASS — >25m jump snapped back to last valid pos (-26,-44)
+PASS — vehicle damage (35,'auto') received (got {"amount":35,"kind":"auto"})
+PASS — server-tracked health after hit = 65 (got 65, dazed=false)
+PASS — heal after damage: 65+30=95 (got 95)
+PASS — gate closed → z snapped to -477 (got -477)
+PASS — game:ping → game:pong echo
+PASS — valid throw relayed to room with owner
+PASS — throw with |v|>=30 rejected (no relay)
+PASS — emote rate-limited to 5/s (got 5)
+PASS — quickmsg 9 relayed
+PASS — quickmsg 12 (invalid) not relayed
+PASS — private room pri_DEMO01 joined via code 'demo01'
+PASS — playerleft emitted for both disconnect and leave (got 2: Dropper,Leaver)
+———————————————————————————
+INTEGRATION: 0 FAILURE(S)
