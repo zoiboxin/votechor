@@ -49,7 +49,7 @@ function Toast({ n }: { n: Notification }) {
 export default function NotificationStack() {
   const notifications = useGameStore((s) => s.notifications)
   return (
-    <div className="pointer-events-none fixed left-1/2 top-3 z-50 flex -translate-x-1/2 flex-col items-center gap-1.5">
+    <div className="pointer-events-none fixed left-1/2 top-11 z-50 flex -translate-x-1/2 flex-col items-center gap-1.5">
       <AnimatePresence mode="popLayout">
         {notifications.map((n) => (
           <Toast key={n.id} n={n} />

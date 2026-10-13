@@ -6,6 +6,8 @@ import { Loader2, Vote } from 'lucide-react'
 import { motion } from 'framer-motion'
 import MainMenu from './MainMenu'
 import Hud from './Hud'
+import Compass from './Compass'
+import CinematicOverlay from './CinematicOverlay'
 import BossBar from './BossBar'
 import NotificationStack from './NotificationStack'
 import EmoteWheel from './EmoteWheel'
@@ -92,29 +94,43 @@ export default function GameRoot() {
       void (async () => {
         try {
           const saved = localStorage.getItem('votechor_profile')
+          let token: string | null = null
           if (saved) {
             const parsed = JSON.parse(saved) as { token?: string; profile?: Profile }
+            token = parsed?.token ?? null
             if (parsed?.profile) {
               st.setProfile(parsed.profile)
               st.setProfileLoading(false)
-              return
             }
           }
-          const fallbackName = localStorage.getItem('votechor_name') || `Protester_${Math.floor(1000 + Math.random() * 9000)}`
-          const res = await fetch('/api/profile', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: fallbackName }),
-          })
-          if (res.ok) {
-            const data = (await res.json()) as { token: string; profile: Parameters<typeof st.setProfile>[0] }
-            if (data?.profile) {
-              localStorage.setItem('votechor_profile', JSON.stringify({ token: data.token, profile: data.profile }))
-              localStorage.setItem('votechor_name', data.profile.name)
-              st.setProfile(data.profile)
+          if (!st.profile) {
+            const fallbackName = localStorage.getItem('votechor_name') || `Protester_${Math.floor(1000 + Math.random() * 9000)}`
+            const res = await fetch('/api/profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: fallbackName }),
+            })
+            if (res.ok) {
+              const data = (await res.json()) as { token: string; profile: Parameters<typeof st.setProfile>[0] }
+              if (data?.profile) {
+                localStorage.setItem('votechor_profile', JSON.stringify({ token: data.token, profile: data.profile }))
+                localStorage.setItem('votechor_name', data.profile.name)
+                st.setProfile(data.profile)
+                token = data.token
+              }
+            } else {
+              st.notify('The profile office is closed for lunch. You protest as an unregistered citizen.', 'warning')
             }
-          } else {
-            st.notify('The profile office is closed for lunch. You protest as an unregistered citizen.', 'warning')
+          }
+          // ---- daily challenge fetch ----
+          if (token) {
+            try {
+              const dres = await fetch('/api/daily', { headers: { 'x-vc-token': token } })
+              if (dres.ok) {
+                const d = (await dres.json()) as { challenge: { kind: string; desc: string; target: number; reward: number }; progress: number; claimed: boolean }
+                st.setDaily({ kind: d.challenge.kind, desc: d.challenge.desc, target: d.challenge.target, reward: d.challenge.reward, progress: d.progress, claimed: d.claimed })
+              }
+            } catch { /* daily is optional sugar */ }
           }
         } catch {
           st.notify('Profile registry unreachable. Offline protesters still count.', 'warning')
@@ -147,6 +163,8 @@ export default function GameRoot() {
         @keyframes vc-stamp-in { 0% { transform: scale(2.4) rotate(-8deg); opacity: 0; } 55% { transform: scale(0.94) rotate(-8deg); opacity: 1; } 100% { transform: scale(1) rotate(-8deg); opacity: 1; } }
         @keyframes vc-wobble { 0%, 100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
         @keyframes vc-ping-ring { 0% { transform: scale(0.8); opacity: 0.8; } 100% { transform: scale(1.6); opacity: 0; } }
+        @keyframes vc-grain { 0% { transform: translate(0, 0); } 25% { transform: translate(-4%, 3%); } 50% { transform: translate(3%, -4%); } 75% { transform: translate(-3%, -2%); } 100% { transform: translate(0, 0); } }
+        @keyframes vc-mote { 0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; } 8% { opacity: var(--mote-o, 0.5); } 92% { opacity: var(--mote-o, 0.5); } 100% { transform: translateY(-110vh) translateX(var(--mote-x, 30px)) rotate(300deg); opacity: 0; } }
         .vc-scroll::-webkit-scrollbar { width: 10px; }
         .vc-scroll::-webkit-scrollbar-track { background: rgba(28,26,23,0.08); border-radius: 8px; }
         .vc-scroll::-webkit-scrollbar-thumb { background: #8c1f28; border-radius: 8px; border: 2px solid #f5efdc; }
@@ -176,6 +194,8 @@ export default function GameRoot() {
       {inMatch && (
         <>
           <Hud minimapBuffer={minimapBufferRef} />
+          <Compass />
+          <CinematicOverlay />
           <BossBar />
           <SquadPanel />
           <BigMap minimapBuffer={minimapBufferRef} />

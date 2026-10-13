@@ -13,6 +13,7 @@ import { ItemSystem } from './items'
 import { BossClient } from './boss'
 import { NetClient, type JoinAck } from './net'
 import { AudioManager } from './audio'
+import { FxSystem } from './fx'
 import { buildWorldDef } from './shared/world-def'
 import { createNpcStates, tickNpc, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
 import { createBossBrain, tickBoss, grabBallot, depositBallot, registerBossHit, type BossBrain } from './shared/boss-brain'
@@ -53,6 +54,7 @@ export class Game {
   private vehicles!: VehicleSystem
   private items!: ItemSystem
   private bossClient = new BossClient()
+  private fx = new FxSystem()
   private net = new NetClient()
   private world = buildWorldDef()
 
@@ -96,6 +98,7 @@ export class Game {
   private reviveProgress = 0
   private reviveTargetId: string | null = null
   private bossActiveLocal = false
+  private bossCinematic = { active: false, t: 0, fired: false }
 
   async boot(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
@@ -104,6 +107,7 @@ export class Game {
     this.worldRenderer = new WorldRenderer(this.world, 'high')
     this.engine.scene.add(this.worldRenderer.group)
     this.engine.scene.add(this.bossClient.group)
+    this.engine.scene.add(this.fx.group)
 
     this.input = new InputManager(canvas)
     this.input.onOneShot = (a) => this.handleOneShot(a)
@@ -212,6 +216,8 @@ export class Game {
     // reset world states
     this.worldRenderer.setBossGateOpen(false)
     this.bossClient.hideAll()
+    this.fx.clear()
+    this.bossCinematic = { active: false, t: 0, fired: false }
     for (const it of this.items.items) { it.taken = false; it.group.visible = true; it.respawnAt = 0 }
     for (const [id] of this.remotePlayers) this.removeRemote(id)
     this.localBoss = createBossBrain(this.world.bossArena)
@@ -403,6 +409,7 @@ export class Game {
     if (this.activatedCheckpoints.has(cp)) return
     this.activatedCheckpoints.add(cp)
     this.stats.checkpoints = total
+    if (this.player) this.fx.popup('CHECKPOINT +60 XP', '#4e9b6e', this.player.pos.x, 2.1, this.player.pos.z)
     this.store.notify(`Checkpoint ${cp} unlocked by ${byName}! (${total}/4)`, 'achievement')
     AudioManager.play('checkpoint')
   }
@@ -462,6 +469,7 @@ export class Game {
         if (d < 4 && registerBossHit(this.localBoss, this.net.playerId || 'local', Date.now())) {
           this.stats.bossHits++
           AudioManager.play('bossHit')
+          this.fx.popup('BONK! -1 SHIELD', '#ff9f1c', ix, 3, iz)
         }
       }
     }
@@ -488,6 +496,7 @@ export class Game {
       case 'firstaid':
         p.heal(50)
         AudioManager.play('heal')
+        this.fx.popup('+50 HP', '#ff8fa3', p.pos.x, 1.9, p.pos.z)
         this.store.notify('Patched up with one (1) band-aid.', 'info')
         break
       case 'snack':
@@ -599,6 +608,7 @@ export class Game {
           this.activatedCheckpoints.add(cp.id)
           this.stats.checkpoints = this.activatedCheckpoints.size
           AudioManager.play('checkpoint')
+          this.fx.popup('CHECKPOINT +60 XP', '#4e9b6e', this.player.pos.x, 2.1, this.player.pos.z)
           this.store.notify(`Checkpoint ${cp.id} — ${cp.name} unlocked! (${this.activatedCheckpoints.size}/4)`, 'achievement')
         }
       }
@@ -756,6 +766,8 @@ export class Game {
       this.tokens++
       this.stats.tokens++
       AudioManager.play('token')
+      this.fx.popup('+45 XP', '#f2c14e', this.player.pos.x, 1.9, this.player.pos.z)
+      this.fx.popup('VOTE RECOVERED!', '#7de3a8', this.player.pos.x, 2.4, this.player.pos.z)
       if (this.tokens === this.tokensNeeded) {
         this.store.notify(`All ${this.tokensNeeded} votes recovered! The boss gate is OPEN!`, 'achievement')
         AudioManager.play('gate')
@@ -769,6 +781,7 @@ export class Game {
       this.stats.itemsCollected++
       this.inventory.push({ uid: `${type}_${Date.now().toString(36)}_${Math.floor(Math.random() * 999)}`, type })
       AudioManager.play('pickup')
+      this.fx.popup(ITEM_CONFIG[type].icon + ' ' + ITEM_CONFIG[type].name, '#f5efdc', this.player.pos.x, 1.9, this.player.pos.z)
     }
     this.player.playAnim('heal', 0.3)
     this.syncHud()
@@ -829,6 +842,11 @@ export class Game {
   private renderUpdate(dt: number) {
     if (!this.player) return
     const store = useGameStore.getState()
+    // fx update (floating popups)
+    this.fx.update(dt)
+
+    // boss intro cinematic — orbit the boss once on activation
+    this.updateBossCinematic(dt)
     // remote player interpolation
     for (const [, r] of this.remotePlayers) {
       r.rig.group.position.lerp(new THREE.Vector3(r.target.x, r.target.y, r.target.z), Math.min(1, dt * 10))
@@ -849,8 +867,10 @@ export class Game {
 
     // camera
     const focus = this.player.pos
-    const [ldx, ldy] = playing ? [0, 0] : [0, 0]
-    this.camRig.update(dt, focus, ldx, ldy)
+    if (!this.bossCinematic.active) {
+      const [ldx, ldy] = playing ? [0, 0] : [0, 0]
+      this.camRig.update(dt, focus, ldx, ldy)
+    }
     this.engine.trackSun(focus)
     const fog = this.engine.scene.fog as THREE.Fog
     fog.near = 60
@@ -879,6 +899,38 @@ export class Game {
   }
   private lastZoneIdx = -1
 
+  /** 4s cinematic orbit when the boss activates; freezes input. */
+  private updateBossCinematic(dt: number) {
+    const started = (this.offline && this.localBoss?.started) || (!this.offline && this.bossClient.visible)
+    if (started && !this.bossCinematic.fired) {
+      this.bossCinematic = { active: true, t: 0, fired: true }
+      this.player?.teleport(this.player.pos.x, this.player.pos.z) // stop momentum
+      if (this.player) this.player.state = 'frozen'
+      useGameStore.getState().patchHud({ cinematic: true })
+      AudioManager.setTheme('boss')
+      AudioManager.play('gate')
+    }
+    if (!this.bossCinematic.active) return
+    this.bossCinematic.t += dt
+    const t = this.bossCinematic.t
+    const DUR = 4.2
+    const b = this.world.bossArena
+    const bossZ = b.z - 14
+    // orbit from the gate side toward the side view, slightly rising
+    const ang = Math.PI * 0.5 + Math.sin((t / DUR) * Math.PI * 0.5) * 0.9
+    const r = 16 - (t / DUR) * 3
+    const cx = Math.sin(ang) * r
+    const cz = bossZ + Math.cos(ang) * r
+    const cy = 4.5 + (t / DUR) * 2.5
+    this.engine.camera.position.set(cx, cy, cz)
+    this.engine.camera.lookAt(b.x, 6.5, bossZ)
+    if (t >= DUR || useGameStore.getState().uiMode !== 'playing') {
+      this.bossCinematic.active = false
+      if (this.player && this.player.state === 'frozen') this.player.state = 'normal'
+      useGameStore.getState().patchHud({ cinematic: false })
+    }
+  }
+
   // ================= HUD / minimap =================
   private syncHud() {
     if (!this.player) return
@@ -891,6 +943,32 @@ export class Game {
     const squad = [...this.remotePlayers.entries()].map(([id, r]) => ({
       id, name: r.name, health: r.health, detained: r.detained, dazed: r.anim === 'dazed', archetype: '', distance: Math.hypot(r.target.x - p.pos.x, r.target.z - p.pos.z),
     }))
+    // compass markers (relative to camera yaw so up = where you look)
+    const yawDeg = ((this.camRig.yaw * 180) / Math.PI + 360) % 360
+    const rel = (x: number, z: number) => {
+      let a = Math.atan2(x - p.pos.x, -(z - p.pos.z)) * (180 / Math.PI) - yawDeg
+      a = ((a + 540) % 360) - 180
+      return { deg: a, dist: Math.round(Math.hypot(x - p.pos.x, z - p.pos.z)) }
+    }
+    const markers: import('@/lib/game-store').CompassMarker[] = []
+    // nearest untaken token within 90m
+    let bestTok: { d: number; x: number; z: number } | null = null
+    for (const it of this.items.items) {
+      if (it.taken || it.def.type !== 'token') continue
+      const d = Math.hypot(it.def.x - p.pos.x, it.def.z - p.pos.z)
+      if (d < 90 && (!bestTok || d < bestTok.d)) bestTok = { d, x: it.def.x, z: it.def.z }
+    }
+    if (bestTok) markers.push({ kind: 'token', ...rel(bestTok.x, bestTok.z) })
+    // next unactivated checkpoint
+    const nextCp = this.world.checkpoints.find(cp => !this.activatedCheckpoints.has(cp.id))
+    if (nextCp) markers.push({ kind: 'checkpoint', ...rel(nextCp.x, nextCp.z) })
+    // boss arena once gate open
+    if (this.gateOpen) markers.push({ kind: 'boss', ...rel(this.world.bossArena.x, this.world.bossArena.z) })
+    // squad
+    for (const s of squad) {
+      const r = [...this.remotePlayers.entries()].find(([id]) => id === s.id)?.[1]
+      if (r) markers.push({ kind: 'squad', ...rel(r.target.x, r.target.z) })
+    }
     store.patchHud({
       health: Math.round(p.health), maxHealth: p.maxHealth, stamina: Math.round(p.stamina),
       zoneName: zone?.name ?? 'Unknown', zoneHint: zone?.hint ?? '',
@@ -902,6 +980,7 @@ export class Game {
       squad, matchTime: this.matchTime, distance: Math.round(p.distance),
       speedBoostUntil: p.speedBoostUntil, carryingBallot: this.carryingBallot,
       score: this.stats.tokens * 45 + this.stats.checkpoints * 60,
+      compass: { yawDeg, markers },
     })
   }
 
@@ -1029,6 +1108,9 @@ export class Game {
     let leveledUp = false
     let newLevel = store.profile?.level ?? 1
     let xpEarned = xp
+    let dailyBonus = 0
+    let dailyDesc: string | undefined
+    let dailyJustCompleted = false
     const profileRaw = typeof window !== 'undefined' ? localStorage.getItem('votechor_profile') : null
     const token = profileRaw ? (JSON.parse(profileRaw) as { token: string }).token : null
     if (token) {
@@ -1045,20 +1127,42 @@ export class Game {
           }),
         })
         if (res.ok) {
-          const data = await res.json() as { xpEarned: number; level: number; leveledUp: boolean; newAchievements: { id: string; name: string }[]; profile: { xp: number; level: number } }
+          const data = await res.json() as {
+            xpEarned: number; level: number; leveledUp: boolean
+            newAchievements: { id: string; name: string }[]
+            profile: { xp: number; level: number }
+            dailyBonus?: number
+            daily?: { kind: string; desc: string; target: number; reward: number; progress: number; claimed: boolean; justCompleted: boolean } | null
+          }
           xpEarned = data.xpEarned
           newAchievements = data.newAchievements ?? []
           leveledUp = data.leveledUp
           newLevel = data.level
+          if (data.daily) {
+            dailyBonus = data.dailyBonus ?? 0
+            dailyDesc = data.daily.desc
+            dailyJustCompleted = !!data.daily.justCompleted
+            useGameStore.getState().setDaily({ kind: data.daily.kind, desc: data.daily.desc, target: data.daily.target, reward: data.daily.reward, progress: data.daily.progress, claimed: data.daily.claimed })
+          }
           if (data.profile && store.profile) {
-            store.setProfile({ ...store.profile, xp: data.profile.xp, level: data.profile.level })
+            const updated = { ...store.profile, xp: data.profile.xp, level: data.profile.level }
+            store.setProfile(updated)
+            // keep localStorage in sync so the menu shows fresh progress after reload
+            try {
+              const raw = localStorage.getItem('votechor_profile')
+              if (raw) {
+                const parsed = JSON.parse(raw) as { token: string; profile: unknown }
+                localStorage.setItem('votechor_profile', JSON.stringify({ token: parsed.token, profile: updated }))
+              }
+            } catch { /* non-fatal */ }
           }
           for (const a of newAchievements) store.notify(`Achievement: ${a.name}!`, 'achievement')
+          if (dailyJustCompleted) store.notify(`DAILY CHALLENGE COMPLETE! +${dailyBonus} bonus XP!`, 'achievement')
           if (leveledUp) { store.notify(`LEVEL UP — Level ${newLevel}!`, 'achievement'); AudioManager.play('victory') }
         }
       } catch { /* offline persistence failure is fine */ }
     }
-    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1 }
+    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted }
     store.setMatchSummary(summary)
     store.setUIMode('ended')
     AudioManager.setTheme('menu')

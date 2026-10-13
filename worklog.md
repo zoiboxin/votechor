@@ -141,3 +141,30 @@ Stage Summary:
 - COMPLETE GAME LOOP VERIFIED END-TO-END: menu → play → move/pickup/throw → capture/detention → checkpoints → token gate → 5-phase boss → victory → XP/level/achievements persisted → leaderboard-ready
 - Multiplayer is real (2 sessions verified), server-authoritative (captures, damage, items, boss)
 - Known limitations: headless perf, ESLint clean, tsc clean for game/UI/api
+
+---
+Task ID: 4
+Agent: Z.ai Code (cron webDevReview round 2)
+Task: QA pass + Daily Challenge system + navigation/juice features + styling polish
+
+Work Log:
+- QA: all services healthy (Next :3000 fresh Prisma client after restart, game-server :3002, Caddy :81); movement/pickup/connection re-verified in browser
+- FEATURE — Daily Challenge system (end-to-end, verified):
+  * Schema: Player.dailyDate/dailyKind/dailyProgress/dailyClaimed + db push
+  * src/lib/daily.ts — deterministic per-day roll (hash of YYYY-MM-DD over 6-challenge pool: distance/items/tokens/checkpoints/rescues/boss)
+  * GET /api/daily (rolls + tracks per-player progress), POST /api/matches now accumulates daily progress per match, grants bonus XP once (dailyBonus + justCompleted flags, idempotent via claimed)
+  * Browser-verified: match1 checkpoints=2 → progress 2/3; match2 → 3/3 → dailyBonus 160, xpEarned includes bonus
+  * MainMenu DailyCard (reward chip, progress bar, claimed state) + EndScreen bonus ribbon + store setDaily
+- FEATURE — Compass strip (top-center): cardinal N/E/S/W relative to camera yaw, 15° ticks, markers for nearest token (≤90m), next checkpoint, boss (gate open), squadmates, with distance labels + edge-cling indicators when off-screen; hidden during cinematic/detained
+- FEATURE — Floating world popups (new src/game/fx.ts): canvas-sprite pooled text popups that rise/fade — token (+45 XP / VOTE RECOVERED!), item names, +50 HP, CHECKPOINT +60 XP, boss BONK! -1 SHIELD
+- FEATURE — Boss intro cinematic: 4.2s orbiting camera + letterbox bars + "THE GREAT VOTE COLLECTOR — Minister of Missing Votes · 14-term champion of paperwork" banner, input frozen (state 'frozen'), boss theme + gate sting; verified firing and releasing control
+- STYLING — CinematicOverlay: vignette (deepens at low HP), low-health pulse ring, animated SVG film grain (respects reducedEffects), boss letterbox; MainMenu drifting paper motes (vc-mote keyframes, 14 flyers)
+- BUGFIX — localStorage profile went stale after matches (menu showed old level/XP on reload): finalizeMatch now syncs votechor_profile with fresh xp/level
+- BUGFIX — toasts overlapped compass: NotificationStack moved top-3 → top-11
+- OPS — Next dev server restarted to pick up regenerated Prisma client (old process cached pre-dailyDate client → PrismaClientValidationError on /api/daily)
+- All checks clean: eslint, tsc (game/UI/lib/api), no page errors
+
+Stage Summary:
+- Round 2 shipped: Daily Challenges (retention loop), compass navigation, world-space juice popups, boss cinematic, film-grain/vignette dressing
+- Verified: daily API accumulation + bonus grant, compass markers w/ live distances, cinematic trigger/release, popup rendering, menu card
+- Risks/next: compass markers could include chai/firstaid when needed (kind exists); consider zone-entry vignette tinting; game-server restart needed if shared world-def patrol changes again

@@ -5,7 +5,7 @@ import { useGameStore, uiActions } from '@/lib/game-store'
 import { xpForLevel, levelFromXp } from '@/game/shared/constants'
 import {
   Vote, Crown, Skull, Trophy, Footprints, Flag, KeyRound, HeartPulse, Package, Zap,
-  Timer, Users, Play, Home, Medal, X,
+  Timer, Users, Play, Home, Medal, X, CalendarCheck,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -159,6 +159,19 @@ export default function EndScreen() {
               </div>
             </div>
           </div>
+          {summary.dailyJustCompleted && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, rotate: -1 }}
+              animate={{ opacity: 1, scale: 1, rotate: -1 }}
+              transition={{ delay: 0.8 }}
+              className="mt-2 flex items-center justify-between rounded-xl border-2 border-dashed border-[#8c1f28] bg-[#f2c14e]/40 px-3 py-1.5"
+            >
+              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-[#8c1f28]">
+                <CalendarCheck className="h-3.5 w-3.5" /> Daily challenge complete
+              </span>
+              <span className="text-xs font-black tabular-nums text-[#8c1f28]">+{summary.dailyBonus ?? 0} bonus</span>
+            </motion.div>
+          )}
           {summary.leveledUp && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}

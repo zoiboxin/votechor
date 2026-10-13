@@ -6,7 +6,7 @@ import { uiActions } from '@/lib/game-store'
 import { ARCHETYPES, archetypeById, xpForLevel, levelFromXp, RANDOM_NOTIFICATIONS } from '@/game/shared/constants'
 import {
   Play, Users, PersonStanding, BookOpen, Settings, Trophy, Medal, BarChart3,
-  Pencil, Check, Vote, Megaphone, Wifi, WifiOff,
+  Pencil, Check, Vote, Megaphone, Wifi, WifiOff, CalendarDays,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import CharacterSelect from './CharacterSelect'
@@ -63,6 +63,57 @@ function MenuButton({
         {sub && <span className="block truncate text-[11px] font-semibold opacity-70">{sub}</span>}
       </span>
     </button>
+  )
+}
+
+// drifting protest flyers
+const MOTE_COLORS = ['#f2c14e', '#e8e0c8', '#b54a32', '#8c9b6e', '#f5efdc']
+const MOTES = Array.from({ length: 14 }, (_, i) => ({
+  x: (i * 7.3 + 4) % 100,
+  x2: -40 + ((i * 37) % 80),
+  s: 5 + ((i * 13) % 7),
+  d: 16 + ((i * 7) % 14),
+  delay: -(i * 2.7),
+  o: 0.25 + ((i * 17) % 30) / 100,
+  c: MOTE_COLORS[i % MOTE_COLORS.length],
+}))
+
+function DailyCard() {
+  const daily = useGameStore((s) => s.daily)
+  if (!daily) return null
+  const pct = Math.min(100, (daily.progress / Math.max(1, daily.target)) * 100)
+  return (
+    <div className="rounded-2xl border-2 border-[#1c1a17]/80 bg-gradient-to-b from-[#f2c14e]/45 to-[#f5efdc] p-3 shadow-[4px_4px_0_#1c1a17]">
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.22em] text-[#8c1f28]">
+          <CalendarDays className="h-3.5 w-3.5" /> Daily Challenge
+        </span>
+        {daily.claimed ? (
+          <span className="flex items-center gap-1 rounded-full border border-[#2e6e4e] bg-[#2e6e4e] px-2 py-0.5 text-[9px] font-black uppercase text-[#f5efdc]">
+            <Check className="h-3 w-3" /> Done
+          </span>
+        ) : (
+          <span className="rounded-full border border-[#1c1a17] bg-[#1c1a17] px-2 py-0.5 text-[9px] font-black uppercase text-[#f2c14e]">
+            +{daily.reward} XP
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 text-[11px] font-bold leading-snug text-[#1c1a17]/85">{daily.desc}</p>
+      <div className="mt-2 flex items-center gap-2">
+        <div className="h-2 flex-1 overflow-hidden rounded-full border border-[#1c1a17]/40 bg-[#f5efdc]">
+          <div
+            className={`h-full transition-[width] duration-700 ${daily.claimed ? 'bg-[#2e6e4e]' : 'bg-[#f2a541]'}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="text-[9px] font-black tabular-nums text-[#1c1a17]/60">
+          {Math.floor(daily.progress)}/{daily.target}
+        </span>
+      </div>
+      <p className="mt-1 text-[9px] font-semibold uppercase tracking-wider text-[#1c1a17]/45">
+        {daily.claimed ? 'Collected. The committee is jealous.' : 'Progress saves after every match.'}
+      </p>
+    </div>
   )
 }
 
@@ -216,6 +267,25 @@ export default function MainMenu() {
     <div className="vc-paper pointer-events-auto fixed inset-0 z-30 flex min-h-0 flex-col overflow-hidden">
       {/* subtle protest-poster stripes */}
       <div className="pointer-events-none absolute inset-0 opacity-[0.05] [background:repeating-linear-gradient(-35deg,#8c1f28_0_18px,transparent_18px_36px,#2e6e4e_36px_54px,transparent_54px_72px)]" />
+      {/* drifting paper motes */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {MOTES.map((m, i) => (
+          <span
+            key={i}
+            className="absolute rounded-[2px]"
+            style={{
+              left: `${m.x}%`,
+              top: '104vh',
+              width: m.s,
+              height: m.s * 0.72,
+              backgroundColor: m.c,
+              animation: `vc-mote ${m.d}s linear ${m.delay}s infinite`,
+              ['--mote-x' as string]: `${m.x2}px`,
+              ['--mote-o' as string]: String(m.o),
+            }}
+          />
+        ))}
+      </div>
 
       {/* Hero */}
       <header className="relative shrink-0 border-b-2 border-[#1c1a17]/80">
@@ -314,6 +384,7 @@ export default function MainMenu() {
             className="space-y-3 lg:justify-self-end"
           >
             <PlayerCard />
+            <DailyCard />
             <div className="vc-paper rounded-2xl border-2 border-[#1c1a17]/80 p-3 shadow-[4px_4px_0_#1c1a17]">
               <ConnectionChip />
               <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[#1c1a17]/60">

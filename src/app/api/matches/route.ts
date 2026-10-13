@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ACHIEVEMENTS, VICTORY_TITLES, XP_TABLE, levelFromXp } from '@/game/shared/constants'
+import { dailyForDate, todayKey, dailyContribution, type DailyDef } from '@/lib/daily'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -205,8 +206,43 @@ export async function POST(req: Request) {
       })
       const totalTokens = tokenAgg._sum.tokens ?? 0
 
-      // 3. player xp + level
-      const newXp = player.xp + xpEarned
+      // 3. player xp + level + daily challenge progress
+      const day = todayKey()
+      let daily: DailyDef | null = null
+      let dailyBonus = 0
+      let dailyProgress = 0
+      let dailyClaimed = false
+      let dailyJustCompleted = false
+
+      // Roll a fresh challenge if stale
+      let activePlayer = player
+      if (activePlayer.dailyDate !== day) {
+        const def = dailyForDate(day)
+        activePlayer = await tx.player.update({
+          where: { id: player.id },
+          data: { dailyDate: day, dailyKind: def.kind, dailyProgress: 0, dailyClaimed: false },
+        })
+      }
+
+      if (activePlayer.dailyKind) {
+        const def = dailyForDate(day)
+        daily = def
+        const contribution = activePlayer.dailyClaimed ? 0 : dailyContribution(def.kind, { distance, itemsCollected, tokens, checkpoints, rescues, victory })
+        const rawProgress = (activePlayer.dailyProgress ?? 0) + contribution
+        dailyProgress = Math.min(rawProgress, def.target)
+        dailyClaimed = activePlayer.dailyClaimed
+        if (!activePlayer.dailyClaimed && rawProgress >= def.target) {
+          dailyJustCompleted = true
+          dailyClaimed = true
+          dailyBonus = def.reward
+        }
+        await tx.player.update({
+          where: { id: player.id },
+          data: { dailyProgress: rawProgress, dailyClaimed, dailyKind: def.kind, dailyDate: day },
+        })
+      }
+
+      const newXp = player.xp + xpEarned + dailyBonus
       const newLevel = levelFromXp(newXp)
       const updatedPlayer = await tx.player.update({
         where: { id: player.id },
@@ -247,11 +283,14 @@ export async function POST(req: Request) {
         }
       }
 
-      return { newXp, newLevel, updatedPlayer, newAchievements }
+      return { newXp, newLevel, updatedPlayer, newAchievements, dailyBonus, daily, dailyProgress, dailyClaimed, dailyJustCompleted }
     })
 
     return NextResponse.json({
-      xpEarned,
+      xpEarned: xpEarned + outcome.dailyBonus,
+      baseXp: xpEarned,
+      dailyBonus: outcome.dailyBonus,
+      daily: outcome.daily ? { kind: outcome.daily.kind, desc: outcome.daily.desc, target: outcome.daily.target, reward: outcome.daily.reward, progress: outcome.dailyProgress, claimed: outcome.dailyClaimed, justCompleted: outcome.dailyJustCompleted } : null,
       level: outcome.newLevel,
       leveledUp: outcome.newLevel > player.level,
       newAchievements: outcome.newAchievements,

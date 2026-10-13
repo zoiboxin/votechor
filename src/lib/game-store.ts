@@ -10,6 +10,8 @@ export interface Notification { id: number; text: string; kind: 'info' | 'captur
 
 export interface SquadMember { id: string; name: string; health: number; detained: boolean; dazed: boolean; archetype: string; distance: number }
 
+export interface CompassMarker { kind: 'token' | 'checkpoint' | 'boss' | 'chai' | 'squad'; deg: number; dist: number }
+
 export interface HudState {
   health: number
   maxHealth: number
@@ -37,6 +39,8 @@ export interface HudState {
   revivedProgress: number | null // 0..1 while reviving
   carryingBallot: boolean
   score: number
+  compass: { yawDeg: number; markers: CompassMarker[] }
+  cinematic: boolean
 }
 
 export interface BossHud {
@@ -71,6 +75,9 @@ export interface MatchSummary extends MatchEndPayload {
   newAchievements: { id: string; name: string }[]
   leveledUp: boolean
   newLevel: number
+  dailyBonus?: number
+  dailyDesc?: string
+  dailyJustCompleted?: boolean
 }
 
 export interface Profile {
@@ -82,11 +89,21 @@ export interface Profile {
   cosmetics: { hat?: string; glasses?: boolean; signText?: string; skinTone?: string }
 }
 
+export interface DailyState {
+  kind: string
+  desc: string
+  target: number
+  reward: number
+  progress: number
+  claimed: boolean
+}
+
 export interface GameState {
   uiMode: UIMode
   menuScreen: MenuScreen
   profile: Profile | null
   profileLoading: boolean
+  daily: DailyState | null
   hud: HudState
   boss: BossHud
   notifications: Notification[]
@@ -104,6 +121,7 @@ export interface GameState {
   setMenuScreen: (s: MenuScreen) => void
   setProfile: (p: Profile | null) => void
   setProfileLoading: (v: boolean) => void
+  setDaily: (d: DailyState | null) => void
   patchHud: (h: Partial<HudState>) => void
   patchBoss: (b: Partial<BossHud>) => void
   notify: (text: string, kind?: Notification['kind']) => void
@@ -127,6 +145,8 @@ const defaultHud: HudState = {
   squad: [], playersOnline: 1, ping: 0, connection: 'connecting',
   speedBoostUntil: 0, interactPrompt: null, matchTime: 0, distance: 0,
   revivedProgress: null, carryingBallot: false, score: 0,
+  compass: { yawDeg: 0, markers: [] },
+  cinematic: false,
 }
 
 const defaultBoss: BossHud = {
@@ -148,6 +168,7 @@ export const useGameStore = create<GameState>((set) => ({
   menuScreen: 'main',
   profile: null,
   profileLoading: true,
+  daily: null,
   hud: defaultHud,
   boss: defaultBoss,
   notifications: [],
@@ -165,6 +186,7 @@ export const useGameStore = create<GameState>((set) => ({
   setMenuScreen: (s) => set({ menuScreen: s }),
   setProfile: (p) => set({ profile: p }),
   setProfileLoading: (v) => set({ profileLoading: v }),
+  setDaily: (d) => set({ daily: d }),
   patchHud: (h) => set((st) => ({ hud: { ...st.hud, ...h } })),
   patchBoss: (b) => set((st) => ({ boss: { ...st.boss, ...b } })),
   notify: (text, kind = 'info') => set((st) => ({
