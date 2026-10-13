@@ -89,6 +89,8 @@ export interface MatchSummary extends MatchEndPayload {
   dailyBonus?: number
   dailyDesc?: string
   dailyJustCompleted?: boolean
+  weeklyBonus?: number
+  weeklyJustCompleted?: boolean
 }
 
 export interface Profile {
@@ -109,12 +111,17 @@ export interface DailyState {
   claimed: boolean
 }
 
+export interface WeeklyState extends DailyState {
+  week?: string
+}
+
 export interface GameState {
   uiMode: UIMode
   menuScreen: MenuScreen
   profile: Profile | null
   profileLoading: boolean
   daily: DailyState | null
+  weekly: WeeklyState | null
   hud: HudState
   boss: BossHud
   notifications: Notification[]
@@ -136,6 +143,7 @@ export interface GameState {
   setProfile: (p: Profile | null) => void
   setProfileLoading: (v: boolean) => void
   setDaily: (d: DailyState | null) => void
+  setWeekly: (w: WeeklyState | null) => void
   patchHud: (h: Partial<HudState>) => void
   patchBoss: (b: Partial<BossHud>) => void
   notify: (text: string, kind?: Notification['kind']) => void
@@ -188,6 +196,7 @@ export const useGameStore = create<GameState>((set) => ({
   profile: null,
   profileLoading: true,
   daily: null,
+  weekly: null,
   hud: defaultHud,
   boss: defaultBoss,
   notifications: [],
@@ -209,6 +218,7 @@ export const useGameStore = create<GameState>((set) => ({
   setProfile: (p) => set({ profile: p }),
   setProfileLoading: (v) => set({ profileLoading: v }),
   setDaily: (d) => set({ daily: d }),
+  setWeekly: (w) => set({ weekly: w }),
   patchHud: (h) => set((st) => ({ hud: { ...st.hud, ...h } })),
   patchBoss: (b) => set((st) => ({ boss: { ...st.boss, ...b } })),
   notify: (text, kind = 'info') => set((st) => ({

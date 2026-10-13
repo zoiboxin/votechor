@@ -6,7 +6,7 @@ import { uiActions } from '@/lib/game-store'
 import { ARCHETYPES, archetypeById, xpForLevel, levelFromXp, RANDOM_NOTIFICATIONS } from '@/game/shared/constants'
 import {
   Play, Users, PersonStanding, BookOpen, Settings, Trophy, Medal, BarChart3,
-  Pencil, Check, Vote, Megaphone, Wifi, WifiOff, CalendarDays,
+  Pencil, Check, Vote, Megaphone, Wifi, WifiOff, CalendarDays, CalendarRange,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import CharacterSelect from './CharacterSelect'
@@ -114,6 +114,52 @@ function DailyCard() {
       </div>
       <p className="mt-1 text-[9px] font-semibold uppercase tracking-wider text-[#1c1a17]/45">
         {daily.claimed ? 'Collected. The committee is jealous.' : 'Progress saves after every match.'}
+      </p>
+    </div>
+  )
+}
+
+function WeeklyCard() {
+  const weekly = useGameStore((s) => s.weekly)
+  if (!weekly) return null
+  const pct = Math.min(100, (weekly.progress / Math.max(1, weekly.target)) * 100)
+  const weekLabel = weekly.week ? weekly.week.split('-W')[1] : null
+  return (
+    <div className="relative overflow-hidden rounded-2xl border-2 border-[#1c1a17]/80 bg-gradient-to-b from-[#2e6e4e]/25 to-[#f5efdc] p-3 shadow-[4px_4px_0_#1c1a17]">
+      <div className="pointer-events-none absolute -right-3 -top-3 h-12 w-12 rotate-12 rounded-full border-2 border-dashed border-[#2e6e4e]/30" />
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.22em] text-[#2e6e4e]">
+          <CalendarRange className="h-3.5 w-3.5" /> Weekly Challenge
+        </span>
+        {weekLabel && (
+          <span className="rounded border border-[#2e6e4e]/60 px-1 py-0.5 text-[8px] font-black uppercase tracking-wider text-[#2e6e4e]/80">
+            Week {weekLabel}
+          </span>
+        )}
+        {weekly.claimed ? (
+          <span className="flex items-center gap-1 rounded-full border border-[#2e6e4e] bg-[#2e6e4e] px-2 py-0.5 text-[9px] font-black uppercase text-[#f5efdc]">
+            <Check className="h-3 w-3" /> Done
+          </span>
+        ) : (
+          <span className="rounded-full border border-[#1c1a17] bg-[#1c1a17] px-2 py-0.5 text-[9px] font-black uppercase text-[#8fd3a8]">
+            +{weekly.reward} XP
+          </span>
+        )}
+      </div>
+      <p className="mt-1.5 text-[11px] font-bold leading-snug text-[#1c1a17]/85">{weekly.desc}</p>
+      <div className="mt-2 flex items-center gap-2">
+        <div className="h-2 flex-1 overflow-hidden rounded-full border border-[#1c1a17]/40 bg-[#f5efdc]">
+          <div
+            className={`h-full transition-[width] duration-700 ${weekly.claimed ? 'bg-[#2e6e4e]' : 'bg-gradient-to-r from-[#4c8f68] to-[#2e6e4e]'}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="text-[9px] font-black tabular-nums text-[#1c1a17]/60">
+          {Math.floor(weekly.progress)}/{weekly.target}
+        </span>
+      </div>
+      <p className="mt-1 text-[9px] font-semibold uppercase tracking-wider text-[#1c1a17]/45">
+        {weekly.claimed ? 'Weekly quota met. Go home early.' : 'Resets Monday. Every match counts.'}
       </p>
     </div>
   )
@@ -455,6 +501,7 @@ export default function MainMenu() {
           >
             <PlayerCard />
             <DailyCard />
+            <WeeklyCard />
             <div className="vc-paper rounded-2xl border-2 border-[#1c1a17]/80 p-3 shadow-[4px_4px_0_#1c1a17]">
               <ConnectionChip />
               <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[#1c1a17]/60">

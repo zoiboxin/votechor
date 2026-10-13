@@ -18,7 +18,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
     }
 
-    const stats = await db.playerStats.upsert({
+    const row = await db.playerStats.upsert({
       where: { playerId: player.id },
       create: { playerId: player.id },
       update: {},
@@ -28,6 +28,30 @@ export async function GET(req: Request) {
       orderBy: { createdAt: 'desc' },
       take: 10,
     })
+    // Lifetime aggregates for stats that live only in MatchResult rows
+    const agg = await db.matchResult.aggregate({
+      _sum: { tokens: true, checkpoints: true, bossContribution: true },
+      where: { playerId: player.id },
+    })
+
+    // Normalized keys (UI contract) + legacy raw keys for compatibility
+    const stats = {
+      matches: row.matchesPlayed,
+      matchesPlayed: row.matchesPlayed,
+      wins: row.wins,
+      tokens: agg._sum.tokens ?? 0,
+      distance: row.totalDistance,
+      checkpoints: agg._sum.checkpoints ?? 0,
+      rescues: row.totalRescues,
+      revives: row.totalRevives,
+      itemsCollected: row.totalItems,
+      bossHits: Math.round(agg._sum.bossContribution ?? 0),
+      detentions: row.detentions,
+      bossKills: row.bossKills,
+      bestPosition: row.bestPosition,
+      totalXp: row.totalXp,
+      xp: row.totalXp,
+    }
 
     return NextResponse.json({ stats, recent })
   } catch (err) {

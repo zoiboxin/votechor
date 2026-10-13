@@ -1278,6 +1278,8 @@ export class Game {
     let dailyBonus = 0
     let dailyDesc: string | undefined
     let dailyJustCompleted = false
+    let weeklyBonus = 0
+    let weeklyJustCompleted = false
     const profileRaw = typeof window !== 'undefined' ? localStorage.getItem('votechor_profile') : null
     const token = profileRaw ? (JSON.parse(profileRaw) as { token: string }).token : null
     if (token) {
@@ -1300,6 +1302,8 @@ export class Game {
             profile: { xp: number; level: number }
             dailyBonus?: number
             daily?: { kind: string; desc: string; target: number; reward: number; progress: number; claimed: boolean; justCompleted: boolean } | null
+            weeklyBonus?: number
+            weekly?: { kind: string; desc: string; target: number; reward: number; progress: number; claimed: boolean; justCompleted: boolean } | null
           }
           xpEarned = data.xpEarned
           newAchievements = data.newAchievements ?? []
@@ -1310,6 +1314,11 @@ export class Game {
             dailyDesc = data.daily.desc
             dailyJustCompleted = !!data.daily.justCompleted
             useGameStore.getState().setDaily({ kind: data.daily.kind, desc: data.daily.desc, target: data.daily.target, reward: data.daily.reward, progress: data.daily.progress, claimed: data.daily.claimed })
+          }
+          if (data.weekly) {
+            weeklyBonus = data.weeklyBonus ?? 0
+            weeklyJustCompleted = !!data.weekly.justCompleted
+            useGameStore.getState().setWeekly({ kind: data.weekly.kind, desc: data.weekly.desc, target: data.weekly.target, reward: data.weekly.reward, progress: data.weekly.progress, claimed: data.weekly.claimed })
           }
           if (data.profile && store.profile) {
             const updated = { ...store.profile, xp: data.profile.xp, level: data.profile.level }
@@ -1325,11 +1334,12 @@ export class Game {
           }
           for (const a of newAchievements) store.notify(`Achievement: ${a.name}!`, 'achievement')
           if (dailyJustCompleted) store.notify(`DAILY CHALLENGE COMPLETE! +${dailyBonus} bonus XP!`, 'achievement')
+          if (weeklyJustCompleted) store.notify(`WEEKLY CHALLENGE COMPLETE! +${weeklyBonus} bonus XP!`, 'achievement')
           if (leveledUp) { store.notify(`LEVEL UP — Level ${newLevel}!`, 'achievement'); AudioManager.play('victory') }
         }
       } catch { /* offline persistence failure is fine */ }
     }
-    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted }
+    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted }
     store.setMatchSummary(summary)
     store.setUIMode('ended')
     AudioManager.setTheme('menu')

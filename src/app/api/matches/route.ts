@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ACHIEVEMENTS, VICTORY_TITLES, XP_TABLE, levelFromXp } from '@/game/shared/constants'
 import { dailyForDate, todayKey, dailyContribution, type DailyDef } from '@/lib/daily'
+import { weeklyForDate, weekKey } from '@/lib/weekly'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -242,7 +243,44 @@ export async function POST(req: Request) {
         })
       }
 
-      const newXp = player.xp + xpEarned + dailyBonus
+      // ---- weekly challenge (same accumulation rules, ISO-week cadence) ----
+      const week = weekKey()
+      const wdef = weeklyForDate(week)
+      let weeklyBonus = 0
+      let weeklyProgress = 0
+      let weeklyClaimed = false
+      let weeklyJustCompleted = false
+
+      let activePlayer2 = activePlayer
+      if (activePlayer2.weeklyDate !== week) {
+        activePlayer2 = await tx.player.update({
+          where: { id: player.id },
+          data: { weeklyDate: week, weeklyKind: wdef.kind, weeklyProgress: 0, weeklyClaimed: false },
+        })
+      }
+      if (activePlayer2.weeklyKind !== wdef.kind) {
+        activePlayer2 = await tx.player.update({
+          where: { id: player.id },
+          data: { weeklyKind: wdef.kind, weeklyProgress: 0, weeklyClaimed: false },
+        })
+      }
+      {
+        const contribution = activePlayer2.weeklyClaimed ? 0 : dailyContribution(wdef.kind, { distance, itemsCollected, tokens, checkpoints, rescues, victory })
+        const rawProgress = (activePlayer2.weeklyProgress ?? 0) + contribution
+        weeklyProgress = Math.min(rawProgress, wdef.target)
+        weeklyClaimed = activePlayer2.weeklyClaimed
+        if (!activePlayer2.weeklyClaimed && rawProgress >= wdef.target) {
+          weeklyJustCompleted = true
+          weeklyClaimed = true
+          weeklyBonus = wdef.reward
+        }
+        await tx.player.update({
+          where: { id: player.id },
+          data: { weeklyProgress: rawProgress, weeklyClaimed, weeklyKind: wdef.kind, weeklyDate: week },
+        })
+      }
+
+      const newXp = player.xp + xpEarned + dailyBonus + weeklyBonus
       const newLevel = levelFromXp(newXp)
       const updatedPlayer = await tx.player.update({
         where: { id: player.id },
@@ -283,14 +321,17 @@ export async function POST(req: Request) {
         }
       }
 
-      return { newXp, newLevel, updatedPlayer, newAchievements, dailyBonus, daily, dailyProgress, dailyClaimed, dailyJustCompleted }
+      return { newXp, newLevel, updatedPlayer, newAchievements, dailyBonus, daily, dailyProgress, dailyClaimed, dailyJustCompleted, weeklyBonus, weeklyProgress, weeklyClaimed, weeklyJustCompleted }
     })
 
+    const wdef2 = weeklyForDate(weekKey())
     return NextResponse.json({
-      xpEarned: xpEarned + outcome.dailyBonus,
+      xpEarned: xpEarned + outcome.dailyBonus + outcome.weeklyBonus,
       baseXp: xpEarned,
       dailyBonus: outcome.dailyBonus,
+      weeklyBonus: outcome.weeklyBonus,
       daily: outcome.daily ? { kind: outcome.daily.kind, desc: outcome.daily.desc, target: outcome.daily.target, reward: outcome.daily.reward, progress: outcome.dailyProgress, claimed: outcome.dailyClaimed, justCompleted: outcome.dailyJustCompleted } : null,
+      weekly: { kind: wdef2.kind, desc: wdef2.desc, target: wdef2.target, reward: wdef2.reward, progress: outcome.weeklyProgress, claimed: outcome.weeklyClaimed, justCompleted: outcome.weeklyJustCompleted },
       level: outcome.newLevel,
       leveledUp: outcome.newLevel > player.level,
       newAchievements: outcome.newAchievements,

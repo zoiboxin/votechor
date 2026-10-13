@@ -5,7 +5,7 @@ import { useGameStore, uiActions } from '@/lib/game-store'
 import { xpForLevel, levelFromXp } from '@/game/shared/constants'
 import {
   Vote, Crown, Skull, Trophy, Footprints, Flag, KeyRound, HeartPulse, Package, Zap,
-  Timer, Users, Play, Home, Medal, X, CalendarCheck,
+  Timer, Users, Play, Home, Medal, X, CalendarCheck, CalendarRange,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -170,6 +170,19 @@ export default function EndScreen() {
                 <CalendarCheck className="h-3.5 w-3.5" /> Daily challenge complete
               </span>
               <span className="text-xs font-black tabular-nums text-[#8c1f28]">+{summary.dailyBonus ?? 0} bonus</span>
+            </motion.div>
+          )}
+          {summary.weeklyJustCompleted && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, rotate: 1 }}
+              animate={{ opacity: 1, scale: 1, rotate: 1 }}
+              transition={{ delay: 0.95 }}
+              className="mt-2 flex items-center justify-between rounded-xl border-2 border-dashed border-[#2e6e4e] bg-[#dcebe0] px-3 py-1.5"
+            >
+              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-[#2e6e4e]">
+                <CalendarRange className="h-3.5 w-3.5" /> Weekly challenge complete
+              </span>
+              <span className="text-xs font-black tabular-nums text-[#2e6e4e]">+{summary.weeklyBonus ?? 0} bonus</span>
             </motion.div>
           )}
           {summary.leveledUp && (

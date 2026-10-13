@@ -4,14 +4,25 @@ import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/lib/game-store'
 import { uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { ArrowLeft, Users, Zap, Shuffle, KeyRound, Server, Loader2, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Users, Zap, Shuffle, KeyRound, Server, Loader2, AlertTriangle, Ticket, Copy, Check } from 'lucide-react'
 import { motion } from 'framer-motion'
+
+/** Unambiguous room-code alphabet (no I/L/O/0/1 — the committee gave up on fonts). */
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+function generateRoomCode(): string {
+  let code = ''
+  const rnd = new Uint32Array(6)
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(rnd)
+  for (let i = 0; i < 6; i++) code += CODE_ALPHABET[(rnd[i] ?? Math.floor(Math.random() * 1e9)) % CODE_ALPHABET.length]
+  return code
+}
 
 export default function PlayScreen({ onBack }: { onBack: () => void }) {
   const joining = useGameStore((s) => s.joining)
   const joinError = useGameStore((s) => s.joinError)
   const profile = useGameStore((s) => s.profile)
   const [roomCode, setRoomCode] = useState('')
+  const [copied, setCopied] = useState(false)
   const soloStarted = useRef(false)
 
   // reset join state when arriving on this screen
@@ -32,6 +43,36 @@ export default function PlayScreen({ onBack }: { onBack: () => void }) {
     soloStarted.current = true
     useGameStore.getState().setJoining(true)
     uiActions().startSolo()
+  }
+
+  const createPrivate = () => {
+    if (joining || soloStarted.current) return
+    const code = generateRoomCode()
+    setRoomCode(code)
+    setCopied(false)
+    useGameStore.getState().setRoomCode(code)
+    uiActions().joinMultiplayer(code)
+  }
+
+  const copyCode = async () => {
+    const code = cleanCode || (joining ? useGameStore.getState().roomCode ?? '' : '')
+    if (!code) return
+    try {
+      await navigator.clipboard.writeText(code)
+    } catch {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = code
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      } catch { /* clipboard unavailable */ }
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
   const arch = archetypeById(profile?.archetype ?? 'student')
@@ -118,13 +159,22 @@ export default function PlayScreen({ onBack }: { onBack: () => void }) {
               >
                 {cleanCode ? `Join Room ${cleanCode}` : 'Join Public Protest'}
               </button>
-              <button
-                onClick={() => join(null)}
-                disabled={joining}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-[#1c1a17]/80 bg-[#f2c14e] px-4 py-2.5 text-sm font-black uppercase tracking-tight text-[#1c1a17] shadow-[4px_4px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:opacity-50"
-              >
-                <Shuffle className="h-4 w-4" /> Quick Match
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => join(null)}
+                  disabled={joining}
+                  className="flex items-center justify-center gap-2 rounded-2xl border-2 border-[#1c1a17]/80 bg-[#f2c14e] px-4 py-2.5 text-sm font-black uppercase tracking-tight text-[#1c1a17] shadow-[4px_4px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:opacity-50"
+                >
+                  <Shuffle className="h-4 w-4" /> Quick Match
+                </button>
+                <button
+                  onClick={createPrivate}
+                  disabled={joining}
+                  className="flex items-center justify-center gap-2 rounded-2xl border-2 border-[#1c1a17]/80 bg-[#8c1f28] px-4 py-2.5 text-sm font-black uppercase tracking-tight text-[#f5efdc] shadow-[4px_4px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:opacity-50"
+                >
+                  <Ticket className="h-4 w-4" /> Private Room
+                </button>
+              </div>
             </div>
           </motion.section>
 
@@ -138,12 +188,22 @@ export default function PlayScreen({ onBack }: { onBack: () => void }) {
             {joining && (
               <div className="flex items-center gap-3 rounded-2xl border-2 border-[#1c1a17]/80 bg-[#f2c14e]/50 px-4 py-3 shadow-[4px_4px_0_#1c1a17]">
                 <Loader2 className="h-5 w-5 animate-spin text-[#8c1f28]" />
-                <div>
+                <div className="min-w-0 flex-1">
                   <div className="text-sm font-black uppercase tracking-tight text-[#1c1a17]">Filing protest paperwork…</div>
                   <div className="text-[11px] font-semibold text-[#1c1a17]/60">
                     Negotiating with the server committee. Stamp incoming.
                   </div>
                 </div>
+                {cleanCode && (
+                  <button
+                    onClick={copyCode}
+                    className="flex shrink-0 items-center gap-1.5 rounded-xl border-2 border-dashed border-[#8c1f28] bg-[#f5efdc] px-3 py-1.5 transition-colors hover:bg-[#f2c14e]"
+                    aria-label={`Copy room code ${cleanCode}`}
+                  >
+                    <span className="text-base font-black tracking-[0.2em] text-[#8c1f28]">{cleanCode}</span>
+                    {copied ? <Check className="h-4 w-4 text-[#2e6e4e]" /> : <Copy className="h-4 w-4 text-[#8c1f28]" />}
+                  </button>
+                )}
               </div>
             )}
             {joinError && (

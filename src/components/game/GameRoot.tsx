@@ -142,13 +142,20 @@ export default function GameRoot() {
               }
             } catch { /* offline — cached profile stays */ }
           }
-          // ---- daily challenge fetch ----
+          // ---- daily + weekly challenge fetch ----
           if (token) {
             try {
               const dres = await fetch('/api/daily', { headers: { 'x-vc-token': token } })
               if (dres.ok) {
-                const d = (await dres.json()) as { challenge: { kind: string; desc: string; target: number; reward: number }; progress: number; claimed: boolean }
+                const d = (await dres.json()) as {
+                  challenge: { kind: string; desc: string; target: number; reward: number }
+                  progress: number; claimed: boolean
+                  weekly?: { challenge: { kind: string; desc: string; target: number; reward: number }; week?: string; progress: number; claimed: boolean }
+                }
                 st.setDaily({ kind: d.challenge.kind, desc: d.challenge.desc, target: d.challenge.target, reward: d.challenge.reward, progress: d.progress, claimed: d.claimed })
+                if (d.weekly) {
+                  st.setWeekly({ kind: d.weekly.challenge.kind, desc: d.weekly.challenge.desc, target: d.weekly.challenge.target, reward: d.weekly.challenge.reward, progress: d.weekly.progress, claimed: d.weekly.claimed, week: d.weekly.week })
+                }
               }
             } catch { /* daily is optional sugar */ }
           }

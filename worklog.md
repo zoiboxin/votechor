@@ -284,3 +284,35 @@ Stage Summary:
 - Round 5 shipped: in-world social bubbles (emotes + quick messages, local + remote, with 3 related bugs fixed incl. a previously-dead net relay), mobile drag-to-look camera, photo-mode wheel/button zoom (plus the per-frame override bug that would have broken it), WANTED chase alarm, chai compass guidance, and stat-bar polish
 - Remote quickmsg bubble verified by code-path symmetry with the round-4-verified onEmote flow (2-session CLI limitation noted; recommend 2-session replay next round)
 - Risks/next: consider squad emote propagation polish, remote-hat render re-verify with 2 clients, zone-entry vignette tinting exists (done round 4); game-server unchanged this round (no restart needed); worklog cumulative console note above
+
+---
+Task ID: 8
+Agent: Z.ai Code (cron webDevReview round 6)
+Task: QA assessment + Weekly Challenge system + Create Private Room + match history UI + stats key-mismatch bugfix
+
+Work Log:
+- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002, Caddy :81); menu/solo boot/movement (z -8→-11 via synthetic key hold) re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+- BUGFIX (pre-existing, found during QA) — 8 of 10 lifetime stat cards ALWAYS showed 0:
+  * /api/stats returned the raw Prisma PlayerStats row (keys: matchesPlayed, totalDistance, totalItems…) while StatsPanel CARDS expect (matches, distance, itemsCollected, tokens, checkpoints, bossHits…) — only wins/detentions ever matched
+  * Fixed server-side: route now returns normalized keys (UI contract) alongside legacy raw keys, plus NEW lifetime aggregates via MatchResult _sum: tokens, checkpoints, bossHits (= Σ bossContribution, rounded); browser-verified cards now show 200 m / 65 items for the test profile
+- FEATURE — Weekly Challenge system (master prompt §16 "Daily and weekly challenges"; completes the pair):
+  * src/lib/weekly.ts (new): WEEKLY_POOL (6 kinds, 4-5× daily targets, 600-950 XP rewards), weekKey() ISO-8601 Monday weeks ("2026-W42"), weeklyForDate() deterministic djb2 hash roll, weeklyContribution reuses dailyContribution
+  * Prisma Player += weeklyDate/weeklyKind/weeklyProgress/weeklyClaimed → db push (additive)
+  * GET /api/daily now also upserts a weekly_{week} DailyChallenge catalog row + rolls stale weekly + returns { weekly: { challenge, week, progress, claimed } }; POST /api/matches accumulates weekly progress in the same transaction, grants weeklyBonus ONCE on crossing target (claimed flag), returns weekly + weeklyBonus + weeklyJustCompleted
+  * Store: WeeklyState (+week), weekly field, setWeekly; MatchSummary += weeklyBonus/weeklyJustCompleted; GameRoot boot fetch hydrates weekly; game.ts finalizeMatch parses + setWeekly + "WEEKLY CHALLENGE COMPLETE!" toast; EndScreen green ribbon (CalendarRange, mirrored rotation, delay 0.95)
+  * VERIFIED end-to-end via curl: match1 25 items → weekly 25/60 no bonus; match2 +40 → 60/60 clamped, weeklyBonus 600, xpEarned 845 = 245 base + 600, justCompleted true; wk_test_1 replay → duplicate:true, xpEarned 185 (no double-anything); browser: WeeklyCard shows "WEEK 42 · DONE · Loot 60 items… 60/60 · WEEKLY QUOTA MET. GO HOME EARLY." with full green bar
+- FEATURE — Create Private Room (master prompt §15 menu requirement):
+  * PlayScreen: "Private Room" button (Ticket icon, maroon) generates a 6-char code from an unambiguous alphabet (no I/L/O/0/1) via crypto.getRandomValues, fills input + joins immediately; joining strip now shows a dashed protest-ticket code chip with Copy button (navigator.clipboard + execCommand fallback, 2s Check feedback, aria-label)
+  * VERIFIED in browser: click → code TEZA4Q generated → joined online (running, offline:false, room=TEZA4Q, CONNECTED badge, multiplayer world)
+- FEATURE — Match History in StatsPanel (endpoint returned `recent` since round 2 but UI never rendered it):
+  * RecentMatch typed from API rows; renders last 10 as paper rows: tilted WIN/LOSS stamp (green/maroon), funnyTitle (fallback "Uncertified Protest"), MP badge for multiplayer, distance/checkpoints/tokens/XP/timestamp row (tabular-nums), #position chip; vc-scroll max-h-56 list; empty-state humor line
+  * VERIFIED in browser: "MATCH HISTORY — LAST 2" + 2 rows (STREET KABADIWALAN, +245/+185 XP, Oct 13 · 13:33)
+- STYLING (mandatory): WeeklyCard distinct leaf-green identity (gradient from-[#2e6e4e]/25, dashed orbit circle decoration, Week-N chip, green gradient progress fill), EndScreen weekly ribbon, maroon Private Room button + dashed code ticket, history stamp rows
+- OPS: Next dev server restarted after prisma client regen (weekly fields) — old process served stale client → tx.player.update("weeklyDate") validation error on /api/matches; restart pattern: kill next pid tree then `( setsid bash -c 'bunx next dev -p 3000 2>&1 | tee dev.log' < /dev/null & )` from project root (plain `next` not on PATH in setsid shell; bunx works)
+- All checks green: tsc (project src clean; only pre-existing skills/stock-analysis error), eslint clean, zero console errors across the whole QA session
+- Test data left in DB: Protester_6328 (+wk_test_1/2 matches, 430 XP) — harmless, useful for leaderboard/history demos
+
+Stage Summary:
+- Round 6 shipped: Weekly Challenges (full retention loop: roll → accumulate → one-time bonus → reset Monday), Create Private Room with shareable code + copy ticket, Match History UI, and a stats-display bug that had silently zeroed 8/10 lifetime cards since round 1
+- Verified: weekly accumulation/bonus/idempotency (curl), WeeklyCard done-state (browser), private-room online join (browser TEZA4Q), history rows (browser), stat card values (browser)
+- Risks/next: weekly ribbon renders only when a match crosses the weekly target mid-session (code path symmetric to verified daily ribbon; not triggered live this round); browser QA session localStorage was re-pointed to the test profile Protester_6328 (real users unaffected); consider emote unlocks at levels (§16), item gifting to teammates (§11), remote-hat 2-client re-verify, squad creation/invitations as the next feature front
