@@ -126,6 +126,7 @@ export async function POST(req: Request) {
     const bossContribution = clampFloat(body.bossContribution, 0, 30)
     const detentions = clampInt(body.detentions, 0, 50)
     const tokens = clampInt(body.tokens, 0, 16)
+    const gifts = clampInt(body.gifts, 0, 50)
     const position = clampInt(body.position, 0, 50)
     // protest-cell solidarity: marching with cellmates pays (§15 social perk)
     const squadSize = multiplayer ? clampInt(body.squadSize, 1, 4) : 1
@@ -142,6 +143,7 @@ export async function POST(req: Request) {
         rescues * XP_TABLE.perRescue +
         revives * XP_TABLE.perRevive +
         itemsCollected * XP_TABLE.perItem +
+        gifts * XP_TABLE.perGift +
         bossContribution * XP_TABLE.bossHit +
         (victory ? XP_TABLE.victoryBonus : 0),
     )
@@ -156,6 +158,7 @@ export async function POST(req: Request) {
       items: itemsCollected,
       distance,
       victory,
+      gifts,
     })
 
     await ensureAchievementsSeeded()
@@ -181,7 +184,6 @@ export async function POST(req: Request) {
           multiplayer,
         },
       })
-
       // 2. stats upsert
       const prevStats = await tx.playerStats.findUnique({ where: { playerId: player.id } })
       const stats = prevStats
@@ -326,6 +328,7 @@ export async function POST(req: Request) {
       if (victory) earned.add('boss_slayer')
       if (victory && multiplayer) earned.add('democracy_defender')
       if (stats.detentions >= 10) earned.add('traffic_cone')
+      if (gifts >= 3) earned.add('good_samaritan')
 
       let newAchievements: { id: string; name: string }[] = []
       if (earned.size > 0) {

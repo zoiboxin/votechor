@@ -304,6 +304,21 @@ io.on('connection', (socket) => {
     room?.heal(socket.id, data.targetId)
   })
 
+  socket.on('game:gift', (data: { targetId?: unknown; type?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    // rejected gifts (bad type / rate limit / too far / self) are refunded client-side
+    if (!room || !room.gift(socket.id, data.targetId, data.type)) {
+      socket.emit('game:giftRefund', { type: String(data.type ?? '') })
+    }
+  })
+
+  socket.on('game:giftBounce', (data: { targetId?: unknown; type?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    room?.giftBounce(socket.id, data.targetId, data.type)
+  })
+
   socket.on('game:bossHit', () => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined

@@ -5,7 +5,7 @@ import { useGameStore, uiActions } from '@/lib/game-store'
 import { xpForLevel, levelFromXp } from '@/game/shared/constants'
 import {
   Vote, Crown, Skull, Trophy, Footprints, Flag, KeyRound, HeartPulse, Package, Zap,
-  Timer, Users, Play, Home, Medal, X, CalendarCheck, CalendarRange, Handshake,
+  Timer, Users, Play, Home, Medal, X, CalendarCheck, CalendarRange, Handshake, Gift,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -61,6 +61,7 @@ export default function EndScreen() {
     { icon: KeyRound, label: 'Rescues', value: summary.rescues },
     { icon: HeartPulse, label: 'Revives', value: summary.revives },
     { icon: Package, label: 'Items Grabbed', value: summary.itemsCollected },
+    { icon: Gift, label: 'Gifts Given', value: summary.gifts ?? 0 },
     { icon: Zap, label: 'Boss Hits', value: summary.bossContribution },
     { icon: Skull, label: 'Detentions', value: summary.detentions },
     { icon: Timer, label: 'Duration', value: `${Math.floor(summary.duration / 60)}m ${Math.floor(summary.duration % 60)}s` },

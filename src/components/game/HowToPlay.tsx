@@ -12,6 +12,7 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['C'], action: 'Slide', note: 'Slide under searchlights. Very cinematic.' },
   { keys: ['E'], action: 'Interact / Rescue', note: 'Checkpoints, ballots, bailing out friends' },
   { keys: ['Q'], action: 'Throw Item', note: 'Bottles distract patrols. The bottle is fine.' },
+  { keys: ['F'], action: 'Gift Item', note: 'Hand your best item to the nearest teammate — support points + Good Samaritan medal at 3 gifts' },
   { keys: ['G'], action: 'Emote Wheel', note: '4 unlocked by default — level up & earn medals for the rest' },
   { keys: ['T'], action: 'Quick Messages' },
   { keys: ['M'], action: 'Big Map' },
@@ -127,7 +128,7 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
                 <Users className="h-3.5 w-3.5" /> Protest Cells
               </div>
               <p className="text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
-                Tab → create a cell, share the 4-letter code. Cellmates get green name tags, a RALLY teleport (45s cooldown) and a <b>+10% XP solidarity bonus per cellmate</b> at match end.
+                Tab → create a cell, share the 4-letter code. Cellmates get green name tags, a RALLY teleport (45s cooldown), <b>F to gift supplies</b> and a <b>+10% XP solidarity bonus per cellmate</b> at match end.
               </p>
             </div>
             <div className="rounded-xl border-2 border-[#b07d1e]/60 bg-[#f2c14e]/25 p-2.5">

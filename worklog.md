@@ -380,3 +380,40 @@ Stage Summary:
 - Round 8 shipped: Solidarity bonus XP (+10%/cellmate, server-authoritative, EndScreen ribbon), Squad Rally teleport (45s cooldown, nearest-free-cellmate, full guard set), HowToPlay Career Progression cards, rally button styling
 - Verified: solidarity math exact via curl (0/20%/30% + clamp), rally teleport + toast + cooldown + 3 guard paths live in browser, HowToPlay cards render, zero console errors
 - Risks/next: solidarity counts squad size at match end (server trusts client count — acceptable social-cosmetic risk, capped +30%); item gifting (§11) still unstarted; consider squad bonus display in HUD during play, cell invite toasts, or boss-fight replay next round; remote nametag visual re-verify in stable env still open
+
+---
+Task ID: 11
+Agent: Z.ai Code (cron webDevReview round 9)
+Task: QA assessment + Item Gifting §11 (eligible item sharing) + teammate-status polish + styling
+
+Work Log:
+- QA ASSESSMENT (round start): all services healthy (Next :3000, game-server :3002, Caddy :81); lint clean; tsc clean for src (pre-existing smoke-test.ts JoinAck errors only); menu + solo boot + HUD + movement verified via agent-browser (W-hold moved player z -10.1→-12.2); zero console errors → project STABLE → chose feature development
+- PLAN (this round): implement §11 "eligible item sharing" — the last unstarted §11 cooperation feature (server-validated gifting, support XP, Good Samaritan medal) + HUD cellmate status rings + styling polish; also fix stale smoke-test.ts types
+
+Stage Summary:
+- Round 9 in progress: item gifting end-to-end (client+server+XP+medal), HUD squad polish, smoke-test type fix
+- FEATURE — Item Gifting §11 "eligible item sharing" (end-to-end, server-validated, VERIFIED):
+  * constants.ts: XP_TABLE.perGift=18, GIFT_RADIUS=4.5, GIFT_TYPES whitelist (chai/firstaid/snack/joke/bottle/sign/foam), new medal good_samaritan (Gift 3 items in one match, +70 XP), VICTORY_TITLES += gifts param → "The People's Gifter" at 3+
+  * room.ts: room.gift() validates target exists/self/detained/type/rate(giftTimes)/distance ≤ 4.5 → targeted game:gift to receiver only; room.giftBounce() relays full-pocket returns to sender; PlayerState += giftTimes
+  * index.ts: game:gift handler emits game:giftRefund to sender on ANY rejection (bad type/rate/too far/self/no room); game:giftBounce handler
+  * net.ts: gift()/giftBounce() emitters + onGift/onGiftBounce/onGiftRefund events
+  * game.ts: giftNearest() (F key / SquadPanel GIFT button) — nearest live player ≤4.5m, smart pick (firstaid if target hurt <55hp → chai → firstaid → snack → joke → first throwable), optimistic send + 🎁 fx popup + speech-bubble quip (GIFT_QUIPS) + support +1; onGiftReceived (inventory-full → bounce back, else item in pockets + popup + grateful wiggle + "Solidarity!" toast); onGiftBounced (item returns, gifts credit reverted); onGiftRefund (item returned, gifts credit reverted); stats.gifts → client XP calc + POST /api/matches gifts field; offline guard "Gifting needs teammates"
+  * /api/matches: gifts clampInt 0..50, +gifts*perGift in baseXp, achievement check gifts>=3 → good_samaritan (server seeds it via existing count-based seeding)
+  * input.ts/game-store/SettingsPanel: rebindable F key ("Gift Item" row in settings), OneShot 'gift', defaults synced (also fixed stale SettingsPanel DEFAULTS keybinds)
+- FEATURE/STYLING — teammate-status + gift UI polish: HUD SquadRow green border+Cell badge for cellmates (cell-green health bar), inventory hint "1–8 use · right-click drop · F gift to teammate", SquadPanel GIFT button (mint #7de3a8, disabled when detained/empty pockets w/ titles) next to RALLY, field-manual tip, HowToPlay new F row + Protest Cells card mention, EndScreen "Gifts Given" stat card (Gift icon)
+- BUGFIX — pre-existing smoke-test.ts tsc errors (stale local JoinAck + closure-narrowing 'never' on playersA/B): synced fields with net.ts JoinAck, arrays default [] → tsc now 100% clean project-wide (src+mini-services)
+- OPS INCIDENT — Next dev server HUNG mid-QA (all requests timeout, port held by zombie next-server worker pid 27563): killed tree (parent shell pid alone insufficient — must kill the worker child too), restarted via setsid bunx next dev; NOTE: bash sandbox blocked one restart command containing the word "caddy" in an echo string — avoid that literal in commands
+- QA VERIFIED (2 live sessions QVNA cell + curl):
+  * happy path: A gifted chai → B inventory ["chai"] ✓ (server distance-validated, targeted emit)
+  * bounce path: B pockets filled → A's firstaid bounced back, "pockets are full" toast, gifts credit reverted ✓
+  * refund path: net.gift('bogus_target') → server reject → game:giftRefund → item back + "Gift did not land" toast, gifts stays 0 ✓
+  * XP math exact via curl: gifts=3 → baseXp 207 = 50 + 35(100m) + 60(1CP) + 8(2 items) + 54(3×18) ✓; newAchievements [first_steps, good_samaritan] ✓; /api/achievements unlocked ["first_steps","good_samaritan"] ✓; duplicate matchId idempotent (echoes 207, ignores gifts=99) ✓
+  * browser: solo boot + HUD hint + SquadPanel tip + Settings "Gift Item" rebind row render ✓; zero console errors both tabs ✓; lint clean; tsc clean project-wide
+- Test data left in DB: GiftTest/GiftVerify/GiftCheck3 players + gift_qa_1/gift_qa_final matches (harmless demo data)
+- Round 9 note: server restarted to load gift handlers (double-fork pattern); both client tabs HMR-reloaded after game.ts edits (Fast Refresh full-reload on non-component modules — expected)
+
+Stage Summary:
+- Round 9 shipped: Item Gifting §11 complete (the last unstarted §11 cooperation feature) — F-key/button gifting with server-validated distance/rate/type, refund + bounce integrity paths, support XP (+18/gift), Good Samaritan medal, smart item pick, HUD/panel/manual/settings polish; fixed the last pre-existing tsc errors
+- §11 "cooperation" checklist now fully implemented: squad create/join/leave, member markers, teammate status, revive, heal, item sharing, rescue, cooperative checkpoints
+- Verified: all 3 gift paths live in browser, XP math + medal via curl, zero console errors, lint+tsc fully clean
+- Risks/next: gift smart-pick prefers consumables (throwable gifting possible but second-class); gifts counted client-side (cosmetic XP only, server clamps 0..50 — same trust model as rescues/revives); consider gift targeting UI (click a squad row to gift THAT member), remote-gift 2-client visual re-verify in stable env, squad invite toasts, or boss-fight replay next round

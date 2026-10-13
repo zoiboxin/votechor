@@ -50,6 +50,9 @@ export type NetEvents = {
   onGate: (open: boolean) => void
   onSquad: (squad: { code: string; members: { id: string; name: string }[] } | null) => void
   onSquadError: (reason: 'SQUAD_NOT_FOUND' | 'SQUAD_FULL') => void
+  onGift: (g: { fromId: string; fromName: string; type: string }) => void
+  onGiftBounce: (g: { toId: string; toName: string; type: string }) => void
+  onGiftRefund: (type: string) => void
   onDisconnect: () => void
   onConnect: () => void
   onPing: (ms: number) => void
@@ -112,6 +115,9 @@ export class NetClient {
         socket.on('game:gate', (open: boolean) => this.ev.onGate?.(open))
         socket.on('game:squad', (s: { code: string; members: { id: string; name: string }[] } | null) => this.ev.onSquad?.(s))
         socket.on('game:squadError', (reason: 'SQUAD_NOT_FOUND' | 'SQUAD_FULL') => this.ev.onSquadError?.(reason))
+        socket.on('game:gift', (g: { fromId: string; fromName: string; type: string }) => this.ev.onGift?.(g))
+        socket.on('game:giftBounce', (g: { toId: string; toName: string; type: string }) => this.ev.onGiftBounce?.(g))
+        socket.on('game:giftRefund', (r: { type: string }) => this.ev.onGiftRefund?.(r.type))
         socket.on('game:pong', (sentAt: number) => {
           this.ping = Math.round(performance.now() - sentAt)
           this.ev.onPing?.(this.ping)
@@ -150,6 +156,8 @@ export class NetClient {
   squadCreate() { this.socket?.emit('game:squadCreate') }
   squadJoin(code: string) { this.socket?.emit('game:squadJoin', { code }) }
   squadLeave() { this.socket?.emit('game:squadLeave') }
+  gift(targetId: string, type: string) { this.socket?.emit('game:gift', { targetId, type }) }
+  giftBounce(targetId: string, type: string) { this.socket?.emit('game:giftBounce', { targetId, type }) }
   leave() {
     this.socket?.emit('game:leave')
     this.socket?.disconnect()

@@ -13,7 +13,7 @@ import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor } 
 const KEYBIND_LABELS: Record<string, string> = {
   forward: 'Move Forward', back: 'Move Back', left: 'Move Left', right: 'Move Right',
   jump: 'Jump', sprint: 'Sprint', slide: 'Slide', interact: 'Interact / Revive',
-  throw: 'Throw Item', emote: 'Emote Wheel', map: 'Big Map', squad: 'Squad Panel', pause: 'Pause',
+  throw: 'Throw Item', gift: 'Gift Item', emote: 'Emote Wheel', map: 'Big Map', squad: 'Squad Panel', pause: 'Pause',
 }
 
 function prettyKey(code: string): string {
@@ -32,7 +32,7 @@ const DEFAULTS: Settings = {
   masterVolume: 0.8, musicVolume: 0.5, sfxVolume: 0.9,
   mouseSensitivity: 1, invertY: false, quality: 'auto',
   showFps: false, reducedEffects: false,
-  keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape' },
+  keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 
 function SectionTitle({ icon: Icon, children }: { icon: typeof Volume2; children: React.ReactNode }) {

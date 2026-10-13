@@ -27,9 +27,15 @@ interface JoinAck {
   error?: string
   playerId: string
   roomId: string
+  roomCode?: string
   tokensNeeded: number
   tokensCollected: number
   matchStartedAt: number
+  players?: { id: string }[]
+  npcs?: { id: string }[]
+  items?: { id: string }[]
+  checkpoints?: number[]
+  boss?: unknown
 }
 
 function waitJoin(s: Socket): Promise<JoinAck> {
@@ -47,8 +53,8 @@ async function main() {
 
   const ackA = await (a.emit('game:join', { name: 'Alice', archetype: 'student' }), waitJoin(a))
   // attach snapshot listeners BEFORE the second join so no events are missed
-  let playersA: { id: string; anim: string; name: string }[] | null = null
-  let playersB: { id: string; anim: string; name: string }[] | null = null
+  let playersA: { id: string; anim: string; name: string }[] = []
+  let playersB: { id: string; anim: string; name: string }[] = []
   let npcCount = -1
   let sawNpcs = false
   a.on('game:players', (p: { id: string; anim: string; name: string }[]) => { playersA = p })

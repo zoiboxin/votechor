@@ -25,6 +25,7 @@ import {
   MATCH_TIME_LIMIT,
   CAPTURE_MESSAGES,
   archetypeById,
+  GIFT_TYPES,
 } from '../../src/game/shared/constants'
 import type {
   AnimName,
@@ -46,6 +47,7 @@ const BOUNDS_Z_MAX = 9
 const MAX_STATE_DIST = 25 // max meters between accepted state updates (else snap)
 const PICKUP_RADIUS = 3
 const REVIVE_RADIUS = 3
+const GIFT_RADIUS = 4.5
 const ITEM_RESPAWN_MS = 30000
 const VEHICLE_HIT_COOLDOWN_MS = 1200
 const VEHICLE_RADIUS: Record<string, number> = { auto: 1.7, bus: 2.6, cow: 1.4 }
@@ -85,6 +87,7 @@ export interface PlayerState {
   lastZ: number
   noiseTimes: number[]
   emoteTimes: number[]
+  giftTimes: number[]
 }
 
 export interface ItemState {
@@ -182,6 +185,7 @@ export class Room {
       lastZ: WORLD.spawn.z,
       noiseTimes: [],
       emoteTimes: [],
+      giftTimes: [],
     }
     this.players.set(socketId, p)
     this.start()
@@ -276,7 +280,7 @@ export class Room {
   }
 
   /** Rate limiter: max 5 events/s per player per channel. */
-  rateLimit(p: PlayerState, channel: 'noiseTimes' | 'emoteTimes'): boolean {
+  rateLimit(p: PlayerState, channel: 'noiseTimes' | 'emoteTimes' | 'giftTimes'): boolean {
     const now = Date.now()
     const arr = p[channel]
     while (arr.length && now - arr[0] > RATE_LIMIT_WINDOW_MS) arr.shift()
@@ -306,6 +310,37 @@ export class Room {
     if (dist2d(by.x, by.z, target.x, target.z) > REVIVE_RADIUS) return false
     target.health = Math.min(target.maxHealth, target.health + 30)
     this.emitRoom('game:health', target.id, target.health, target.dazed)
+    return true
+  }
+
+  /**
+   * Gift an item to a nearby player (§11 eligible item sharing).
+   * Server validates: type whitelist, rate limit, neither detained, distance ≤ GIFT_RADIUS.
+   * Inventory lives client-side, so the receiver may bounce the gift back if full.
+   */
+  gift(byId: string, targetId: unknown, itemType: unknown): boolean {
+    const by = this.players.get(byId)
+    const target = typeof targetId === 'string' ? this.players.get(targetId) : undefined
+    if (!by || !target || by.detained || target.detained) return false
+    if (by.id === target.id) return false
+    const type = String(itemType ?? '')
+    if (!GIFT_TYPES.includes(type)) return false
+    if (!this.rateLimit(by, 'giftTimes')) return false
+    if (dist2d(by.x, by.z, target.x, target.z) > GIFT_RADIUS) return false
+    // targeted emit — only the receiver sees the incoming gift
+    this.io.to(target.id).emit('game:gift', { fromId: by.id, fromName: by.name, type })
+    return true
+  }
+
+  /** Receiver's pockets were full — return the item card to the sender. */
+  giftBounce(byId: string, targetId: unknown, itemType: unknown): boolean {
+    const by = this.players.get(byId)
+    const target = typeof targetId === 'string' ? this.players.get(targetId) : undefined
+    if (!by || !target || by.id === target.id) return false
+    const type = String(itemType ?? '')
+    if (!GIFT_TYPES.includes(type)) return false
+    if (!this.rateLimit(by, 'giftTimes')) return false
+    this.io.to(target.id).emit('game:giftBounce', { toId: by.id, toName: by.name, type })
     return true
   }
 

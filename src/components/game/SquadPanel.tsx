@@ -3,13 +3,14 @@
 import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone } from 'lucide-react'
+import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone, Gift } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const TIPS = [
   'Hold E next to a DETAINED teammate to bail them out. No bribe required — the paperwork is free today.',
   'Squadmates get green name tags in the world. Spot your cell instantly in a stampede.',
   'Press RALLY to teleport to the nearest free cellmate — 45s cooldown between rallies.',
+  'Press F (or the GIFT button) to hand your best item to the nearest teammate. Support points included.',
   'Press G for the emote wheel. Morale is a legitimate tactic.',
   'Press M for the big map — checkpoints, tokens and chasers, beautifully framed.',
   'The journalist archetype spots police on the minimap from farther away. Bring one. Or become one.',
@@ -98,6 +99,25 @@ export default function SquadPanel() {
                     {squad.members.length}/4 members · share the code
                   </span>
                   <div className="flex items-center gap-1.5">
+                    {/* gifting perk — hand an item to the nearest live teammate (§11) */}
+                    <button
+                      onClick={() => uiActions().giftNearest()}
+                      disabled={hud.detained || hud.inventory.length === 0}
+                      title={
+                        hud.detained
+                          ? 'Cannot gift while detained'
+                          : hud.inventory.length === 0
+                            ? 'Pockets are empty — nothing to gift'
+                            : 'Gift your best item to the nearest teammate (F)'
+                      }
+                      className={`flex items-center gap-1 rounded-lg border-2 px-2 py-1 text-[9px] font-black uppercase tracking-widest shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-all ${
+                        hud.detained || hud.inventory.length === 0
+                          ? 'cursor-not-allowed border-[#1c1a17]/40 bg-[#e7dfc9] text-[#1c1a17]/40'
+                          : 'border-[#1c1a17]/70 bg-[#7de3a8] text-[#1c1a17] hover:-translate-y-0.5 hover:bg-[#a7efc3]'
+                      }`}
+                    >
+                      <Gift className="h-3 w-3" /> Gift
+                    </button>
                     {/* rally perk — teleport to nearest free cellmate, 45s cooldown */}
                     {(() => {
                       const remainMs = hud.rallyReadyAt - now

@@ -61,17 +61,24 @@ function InventorySlot({ uid, type, index }: { uid: string; type: string; index:
   )
 }
 
-function SquadRow({ m }: { m: { id: string; name: string; health: number; detained: boolean; dazed: boolean } }) {
+function SquadRow({ m, inCell }: { m: { id: string; name: string; health: number; detained: boolean; dazed: boolean }; inCell: boolean }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-[#1c1a17]/60 bg-[#f5efdc]/90 px-2 py-1">
+    <div
+      className={`flex items-center gap-2 rounded-lg border bg-[#f5efdc]/90 px-2 py-1 ${
+        inCell ? 'border-[#2e6e4e] shadow-[0_0_0_1px_rgba(46,110,78,0.35)]' : 'border-[#1c1a17]/60'
+      }`}
+    >
       <span className="min-w-0 flex-1 truncate text-[10px] font-black uppercase tracking-tight text-[#1c1a17]">{m.name}</span>
+      {inCell && (
+        <span className="rounded border border-[#2e6e4e] bg-[#2e6e4e] px-1 text-[8px] font-black uppercase text-[#f5efdc]">Cell</span>
+      )}
       {m.detained ? (
         <span className="rounded border border-[#8c1f28] bg-[#8c1f28] px-1 text-[8px] font-black uppercase text-[#f5efdc]">Detained</span>
       ) : m.dazed ? (
         <span className="rounded border border-[#b07d1e] bg-[#f2c14e] px-1 text-[8px] font-black uppercase text-[#1c1a17]">Dazed</span>
       ) : (
         <div className="h-1.5 w-12 overflow-hidden rounded-full border border-[#1c1a17]/60 bg-[#1c1a17]/20">
-          <div className="h-full bg-[#4e9b6e]" style={{ width: `${Math.max(0, Math.min(100, m.health))}%` }} />
+          <div className={`h-full ${inCell ? 'bg-[#2e6e4e]' : 'bg-[#4e9b6e]'}`} style={{ width: `${Math.max(0, Math.min(100, m.health))}%` }} />
         </div>
       )}
     </div>
@@ -302,7 +309,7 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
         {(hud.squad.length > 0 || squadOpen) && (
           <div className="pointer-events-auto w-44 space-y-1 rounded-2xl border-2 border-[#1c1a17]/80 bg-[#f5efdc]/92 p-1.5 shadow-[4px_4px_0_rgba(28,26,23,0.8)] backdrop-blur-sm">
             <div className="px-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Squad</div>
-            {hud.squad.map((m) => <SquadRow key={m.id} m={m} />)}
+            {hud.squad.map((m) => <SquadRow key={m.id} m={m} inCell={squad?.members.some((c) => c.id === m.id) ?? false} />)}
             {hud.squad.length === 0 && (
               <div className="px-1 pb-0.5 text-[9px] font-semibold text-[#1c1a17]/50">No squad. Press Tab for tips.</div>
             )}
@@ -351,7 +358,7 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
           ))}
         </div>
         <div className="w-fit rounded-lg bg-[#1c1a17]/75 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-[#f5efdc]/80">
-          1–8 use · right-click drop
+          1–8 use · right-click drop · F gift to teammate
         </div>
       </div>
 

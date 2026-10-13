@@ -21,7 +21,7 @@ import { createBossBrain, tickBoss, grabBallot, depositBallot, registerBossHit, 
 import {
   MOVE, TOKENS_NEEDED, DETENTION_SECONDS, MATCH_TIME_LIMIT, ITEM_CONFIG, INVENTORY_MAX,
   archetypeById, XP_TABLE, levelFromXp, CAPTURE_MESSAGES, RANDOM_NOTIFICATIONS, BOSS_NAME,
-  BOSS_PHASE_NAMES,
+  BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES,
 } from './shared/constants'
 import type { AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
@@ -58,6 +58,15 @@ const EMOTE_ANIMS: Record<string, AnimName> = {
   chai: 'heal',
 }
 
+/** Speech-bubble quips when handing a gift over. */
+const GIFT_QUIPS = [
+  'For the cause!',
+  'Mutual aid in action.',
+  'The committee hates this trick.',
+  'From my pockets to yours.',
+  'Share the supplies. Share the sentence.',
+]
+
 interface MatchStats {
   tokens: number
   checkpoints: number
@@ -67,6 +76,7 @@ interface MatchStats {
   detentions: number
   bossHits: number
   distractions: number
+  gifts: number
 }
 
 export class Game {
@@ -112,7 +122,7 @@ export class Game {
   private gateOpen = false
   private activatedCheckpoints = new Set<number>()
   private inventory: { uid: string; type: ItemType }[] = []
-  private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0 }
+  private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0 }
   private detainUntil = 0
   private carryingBallot = false
   private carryingBallotId: string | null = null
@@ -190,6 +200,9 @@ export class Game {
       onTokens: (count) => { this.tokens = count; this.checkGate() },
       onGate: (open) => this.setGate(open),
       onSquad: (s) => this.onSquadUpdate(s),
+      onGift: (g) => this.onGiftReceived(g),
+      onGiftBounce: (g) => this.onGiftBounced(g),
+      onGiftRefund: (type) => this.onGiftRefund(type),
       onSquadError: (reason) => {
         if (this.squadAutoRejoin) {
           this.squadAutoRejoin = false
@@ -286,6 +299,7 @@ export class Game {
       },
       squadLeave: () => this.net.squadLeave(),
       rallyToCell: () => this.rallyToCell(),
+      giftNearest: () => this.giftNearest(),
     })
 
     this.ensurePhotoKeyHandler()
@@ -320,7 +334,7 @@ export class Game {
     this.gateOpen = false
     this.activatedCheckpoints.clear()
     this.inventory = []
-    this.stats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0 }
+    this.stats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0 }
     this.carryingBallot = false
     this.carryingBallotId = null
     this.matchTime = 0
@@ -638,6 +652,86 @@ export class Game {
     AudioManager.play('checkpoint')
   }
 
+  // ================= gifting (§11 eligible item sharing) =================
+
+  /**
+   * Gift the most useful inventory item to the nearest live teammate (F key).
+   * Server validates distance/rate/type; a rejected gift is refunded via game:giftRefund,
+   * and a full-pocket receiver bounces the item back via game:giftBounce.
+   */
+  giftNearest() {
+    const store = useGameStore.getState()
+    if (!this.player || !this.running) return
+    if (this.offline) { store.notify('Gifting needs teammates — go multiplayer!', 'warning'); return }
+    if (this.player.isDetained || this.player.isDazed) { store.notify('Cannot gift while detained or dazed', 'warning'); return }
+    if (this.inventory.length === 0) { store.notify('Pockets are empty — nothing to gift!', 'info'); return }
+    // nearest live player within gift range (interpolated positions ≈ server positions)
+    let best: { id: string; name: string; d: number; health: number } | null = null
+    for (const [id, r] of this.remotePlayers) {
+      if (r.detained) continue
+      const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
+      if (d <= GIFT_RADIUS && (!best || d < best.d)) best = { id, name: r.name, d, health: r.health }
+    }
+    if (!best) { store.notify(`No teammate within ${GIFT_RADIUS}m — get closer to share supplies`, 'info'); return }
+    // pick the most useful item: firstaid when they are hurt, chai, other consumables, then throwables
+    const has = (t: string) => this.inventory.find((i) => i.type === t)
+    const pick =
+      (best.health < 55 ? has('firstaid') : undefined) ??
+      has('chai') ?? has('firstaid') ?? has('snack') ?? has('joke') ??
+      this.inventory.find((i) => GIFT_TYPES.includes(i.type))
+    if (!pick) { store.notify('That item cannot be gifted', 'info'); return }
+    const idx = this.inventory.findIndex((i) => i.uid === pick.uid)
+    this.inventory.splice(idx, 1)
+    this.net.gift(best.id, pick.type)
+    this.player.playAnim('heal', 0.35)
+    this.fx.popup(`🎁 GIFT → ${best.name}`, '#f2c14e', this.player.pos.x, 2.2, this.player.pos.z)
+    this.sayBubble('me', randomOf(GIFT_QUIPS))
+    AudioManager.play('pickup')
+    this.stats.gifts++
+    this.store.notify(`Gifted ${ITEM_CONFIG[pick.type as ItemType]?.name ?? pick.type} to ${best.name} — support +1`, 'squad')
+    this.syncHud()
+  }
+
+  /** A teammate handed us an item (server-validated, targeted event). */
+  private onGiftReceived(g: { fromId: string; fromName: string; type: string }) {
+    if (this.inventory.length >= INVENTORY_MAX) {
+      this.net.giftBounce(g.fromId, g.type)
+      this.store.notify(`${g.fromName} tried to gift you ${ITEM_CONFIG[g.type as ItemType]?.name ?? g.type} — pockets full, it bounced!`, 'warning')
+      return
+    }
+    this.inventory.push({ uid: `${g.type}_gift_${Date.now().toString(36)}_${Math.floor(Math.random() * 999)}`, type: g.type as ItemType })
+    AudioManager.play('token')
+    const r = this.remotePlayers.get(g.fromId)
+    if (r) {
+      const pos = r.rig.group.position
+      this.fx.popup('🎁 GIFT!', '#7de3a8', pos.x, 2.2, pos.z)
+    }
+    this.sayBubble(g.fromId, randomOf(GIFT_QUIPS))
+    this.player?.playAnim('heal', 0.3) // grateful wiggle
+    this.store.notify(`${g.fromName} gifted you a ${ITEM_CONFIG[g.type as ItemType]?.name ?? g.type}! Solidarity!`, 'squad')
+    this.syncHud()
+  }
+
+  /** Receiver's pockets were full — the item card comes back to us. */
+  private onGiftBounced(g: { toId: string; toName: string; type: string }) {
+    if (GIFT_TYPES.includes(g.type) && this.inventory.length < INVENTORY_MAX) {
+      this.inventory.push({ uid: `${g.type}_back_${Date.now().toString(36)}_${Math.floor(Math.random() * 999)}`, type: g.type as ItemType })
+    }
+    this.stats.gifts = Math.max(0, this.stats.gifts - 1) // bounced = no support credit
+    this.store.notify(`${g.toName}'s pockets are full — your gift bounced back`, 'warning')
+    this.syncHud()
+  }
+
+  /** Server rejected the gift (distance/rate/type) — refund the item locally. */
+  private onGiftRefund(type: string) {
+    if (GIFT_TYPES.includes(type) && this.inventory.length < INVENTORY_MAX) {
+      this.inventory.push({ uid: `${type}_refund_${Date.now().toString(36)}_${Math.floor(Math.random() * 999)}`, type: type as ItemType })
+    }
+    this.store.notify('Gift did not land — item returned to your pockets', 'warning')
+    this.stats.gifts = Math.max(0, this.stats.gifts - 1)
+    this.syncHud()
+  }
+
   private onSquadUpdate(s: { code: string; members: { id: string; name: string }[] } | null) {
     const me = this.net.playerId
     if (!s) {
@@ -679,6 +773,7 @@ export class Game {
       case 'emote': store.toggleEmoteWheel(); break
       case 'map': store.toggleMap(); break
       case 'squad': store.toggleSquad(); break
+      case 'gift': this.giftNearest(); break
     }
   }
 
@@ -1411,17 +1506,19 @@ export class Game {
       itemsCollected: serverPayload?.itemsCollected ?? this.stats.itemsCollected,
       bossContribution: serverPayload?.bossContribution ?? this.stats.bossHits,
       detentions,
+      gifts: this.stats.gifts,
     }
     // XP calculation (client display)
     const xp = Math.round(
       XP_TABLE.participation + stats.distance * XP_TABLE.perMeter +
       stats.checkpoints * XP_TABLE.perCheckpoint + stats.tokens * XP_TABLE.perToken +
       stats.rescues * XP_TABLE.perRescue + stats.revives * XP_TABLE.perRevive +
-      stats.itemsCollected * XP_TABLE.perItem + stats.bossContribution * XP_TABLE.bossHit +
+      stats.itemsCollected * XP_TABLE.perItem + stats.gifts * XP_TABLE.perGift +
+      stats.bossContribution * XP_TABLE.bossHit +
       (victory ? XP_TABLE.victoryBonus : 0),
     )
     const { VICTORY_TITLES } = await import('./shared/constants')
-    const title = VICTORY_TITLES({ detentions, rescues: stats.rescues, revives: stats.revives, items: stats.itemsCollected, distance: stats.distance, victory })
+    const title = VICTORY_TITLES({ detentions, rescues: stats.rescues, revives: stats.revives, items: stats.itemsCollected, distance: stats.distance, victory, gifts: stats.gifts })
     // persist
     let newAchievements: { id: string; name: string }[] = []
     let leveledUp = false
@@ -1448,6 +1545,7 @@ export class Game {
             victory, distance: stats.distance, checkpoints: stats.checkpoints,
             rescues: stats.rescues, revives: stats.revives, itemsCollected: stats.itemsCollected,
             bossContribution: stats.bossContribution, detentions, tokens: stats.tokens,
+            gifts: stats.gifts,
             position: stats.position, multiplayer: !this.offline,
             squadSize: this.offline ? 1 : Math.min(4, Math.max(1, this.squad.memberIds.size || 1)),
           }),

@@ -131,10 +131,15 @@ export const XP_TABLE = {
   perRescue: 90,
   perRevive: 70,
   perItem: 4,
+  perGift: 18,
   bossHit: 12,
   victoryBonus: 400,
   participation: 50,
 }
+
+// ---------- Gifting (§11 eligible item sharing) ----------
+export const GIFT_RADIUS = 4.5 // server-side max distance between giver & receiver
+export const GIFT_TYPES: string[] = ['chai', 'firstaid', 'snack', 'joke', 'bottle', 'sign', 'foam']
 
 export const levelFromXp = (xp: number): number => Math.max(1, Math.floor(Math.sqrt(xp / 120)) + 1)
 export const xpForLevel = (level: number): number => Math.pow(level - 1, 2) * 120
@@ -153,6 +158,7 @@ export const ACHIEVEMENTS = [
   { id: 'democracy_defender', name: 'Democracy Defender', description: 'Win a multiplayer match', icon: 'landmark', xpReward: 150 },
   { id: 'traffic_cone', name: 'Promoted to Traffic Cone', description: 'Get detained 10 times. Congratulations?', icon: 'cone', xpReward: 50 },
   { id: 'sniper', name: 'Bottle Sniper', description: 'Distract 10 police patrols with bottles', icon: 'target', xpReward: 80 },
+  { id: 'good_samaritan', name: 'Good Samaritan', description: 'Gift 3 items to teammates in one match', icon: 'gift', xpReward: 70 },
 ]
 
 // ---------- Humor ----------
@@ -189,11 +195,12 @@ export const RESCUE_MESSAGES = [
 ]
 
 export const VICTORY_TITLES = (p: {
-  detentions: number; rescues: number; revives: number; items: number; distance: number; victory: boolean
+  detentions: number; rescues: number; revives: number; items: number; distance: number; victory: boolean; gifts?: number
 }): string => {
   if (!p.victory && p.detentions >= 5) return 'The Committee’s Favourite Guest'
   if (p.rescues >= 3) return 'Jailbreak Legend'
   if (p.revives >= 3) return 'Squad’s Belomed Angel'
+  if ((p.gifts ?? 0) >= 3) return 'The People’s Gifter'
   if (p.distance > 1600) return 'Human Auto-Rickshaw'
   if (p.items >= 25) return 'Street Kabadiwalan'
   if (p.detentions === 0) return 'Ghost of the Galli'

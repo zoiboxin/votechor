@@ -10,12 +10,12 @@ export interface InputState {
   lookDy: number
 }
 
-type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem'
+type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem' | 'gift'
 
 export class InputManager {
   state: InputState = { forward: 0, strafe: 0, jump: false, sprint: false, slide: false, interact: false, lookDx: 0, lookDy: 0 }
   keys = new Set<string>()
-  keybinds: Record<string, string> = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape' }
+  keybinds: Record<string, string> = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' }
   enabled = false
   pointerLocked = false
   sensitivity = 1
@@ -73,6 +73,7 @@ export class InputManager {
       if (bind('map')) this.onOneShot?.('map')
       if (bind('squad')) this.onOneShot?.('squad')
       if (bind('pause')) this.onOneShot?.('pause')
+      if (bind('gift')) this.onOneShot?.('gift')
     }
     this.sync()
   }

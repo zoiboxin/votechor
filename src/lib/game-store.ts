@@ -96,6 +96,7 @@ export interface MatchSummary extends MatchEndPayload {
   streakUp?: boolean
   solidarityBonus?: number
   squadSize?: number
+  gifts?: number
 }
 
 export interface Profile {
@@ -203,7 +204,7 @@ const defaultSettings: Settings = {
   masterVolume: 0.8, musicVolume: 0.5, sfxVolume: 0.9,
   mouseSensitivity: 1, invertY: false, quality: 'auto',
   showFps: false, reducedEffects: false,
-  keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape' },
+  keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 
 let notifId = 1
@@ -278,6 +279,7 @@ export interface UIActions {
   squadJoin: (code: string) => void
   squadLeave: () => void
   rallyToCell: () => void
+  giftNearest: () => void
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }
