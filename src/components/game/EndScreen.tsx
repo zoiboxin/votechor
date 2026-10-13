@@ -5,7 +5,7 @@ import { useGameStore, uiActions } from '@/lib/game-store'
 import { xpForLevel, levelFromXp } from '@/game/shared/constants'
 import {
   Vote, Crown, Skull, Trophy, Footprints, Flag, KeyRound, HeartPulse, Package, Zap,
-  Timer, Users, Play, Home, Medal, X, CalendarCheck, CalendarRange,
+  Timer, Users, Play, Home, Medal, X, CalendarCheck, CalendarRange, Handshake,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -206,6 +206,20 @@ export default function EndScreen() {
               <span className="text-[9px] font-black uppercase tracking-widest text-[#8c1f28]">
                 {summary.streak === 1 ? 'Day 1' : `×${summary.streak}`}
               </span>
+            </motion.div>
+          )}
+          {(summary.solidarityBonus ?? 0) > 0 && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, rotate: 1 }}
+              animate={{ opacity: 1, scale: 1, rotate: 1 }}
+              transition={{ delay: 1.15 }}
+              className="mt-2 flex items-center justify-between rounded-xl border-2 border-[#2e6e4e] bg-gradient-to-r from-[#2e6e4e]/20 to-[#2e6e4e]/5 px-3 py-1.5"
+            >
+              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-[#2e6e4e]">
+                <Handshake className="h-3.5 w-3.5" />
+                Solidarity bonus — marched with {(summary.squadSize ?? 2) - 1} cellmate{(summary.squadSize ?? 2) === 2 ? '' : 's'}
+              </span>
+              <span className="text-xs font-black tabular-nums text-[#2e6e4e]">+{summary.solidarityBonus}</span>
             </motion.div>
           )}
           {summary.leveledUp && (

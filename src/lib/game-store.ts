@@ -42,6 +42,7 @@ export interface HudState {
   ping: number
   connection: 'connected' | 'connecting' | 'offline'
   speedBoostUntil: number
+  rallyReadyAt: number
   interactPrompt: string | null
   matchTime: number
   distance: number
@@ -93,6 +94,8 @@ export interface MatchSummary extends MatchEndPayload {
   weeklyJustCompleted?: boolean
   streak?: number
   streakUp?: boolean
+  solidarityBonus?: number
+  squadSize?: number
 }
 
 export interface Profile {
@@ -183,7 +186,7 @@ const defaultHud: HudState = {
   inventory: [], inventoryMax: 8,
   detained: false, detainRemain: 0, dazed: false,
   squad: [], playersOnline: 1, ping: 0, connection: 'connecting',
-  speedBoostUntil: 0, interactPrompt: null, matchTime: 0, distance: 0,
+  speedBoostUntil: 0, rallyReadyAt: 0, interactPrompt: null, matchTime: 0, distance: 0,
   revivedProgress: null, carryingBallot: false, score: 0,
   compass: { yawDeg: 0, markers: [] },
   cinematic: false,
@@ -274,6 +277,7 @@ export interface UIActions {
   squadCreate: () => void
   squadJoin: (code: string) => void
   squadLeave: () => void
+  rallyToCell: () => void
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }

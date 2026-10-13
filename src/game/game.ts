@@ -139,6 +139,8 @@ export class Game {
   private squad = { code: null as string | null, memberIds: new Set<string>() }
   private lastSquadCode: string | null = null
   private squadAutoRejoin = false
+  private rallyReadyAt = 0
+  private static RALLY_COOLDOWN_MS = 45000
 
   async boot(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
@@ -283,6 +285,7 @@ export class Game {
         this.net.squadJoin(clean)
       },
       squadLeave: () => this.net.squadLeave(),
+      rallyToCell: () => this.rallyToCell(),
     })
 
     this.ensurePhotoKeyHandler()
@@ -325,6 +328,7 @@ export class Game {
     this.squad = { code: null, memberIds: new Set() }
     this.lastSquadCode = null
     this.squadAutoRejoin = false
+    this.rallyReadyAt = 0
     useGameStore.getState().setSquad(null)
 
     const profile = store.profile
@@ -455,7 +459,8 @@ export class Game {
     this.squad = { code: null, memberIds: new Set() }
     this.lastSquadCode = null
     this.squadAutoRejoin = false
-    useGameStore.getState().patchHud({ hunted: false })
+    this.rallyReadyAt = 0
+    useGameStore.getState().patchHud({ hunted: false, rallyReadyAt: 0 })
     useGameStore.getState().setSquad(null)
     AudioManager.setTheme('menu')
     AudioManager.setCrowdLevel(0.25)
@@ -603,6 +608,35 @@ export class Game {
   }
 
   // ================= squads (§15) =================
+
+  /** Rally perk: teleport to the nearest free cellmate (45s cooldown, multiplayer only). */
+  rallyToCell() {
+    const store = useGameStore.getState()
+    if (!this.player || !this.running) return
+    if (this.offline) { store.notify('Rallying needs a live room — go multiplayer!', 'warning'); return }
+    if (this.player.state !== 'normal') { store.notify('Cannot rally while detained or dazed', 'warning'); return }
+    if (this.squad.memberIds.size < 2) { store.notify('Rally needs a cellmate — form a squad first (Tab)', 'warning'); return }
+    if (Date.now() < this.rallyReadyAt) {
+      store.notify(`Rally recharging — ${Math.ceil((this.rallyReadyAt - Date.now()) / 1000)}s`, 'warning')
+      return
+    }
+    let best: { id: string; name: string; x: number; y: number; z: number; d: number } | null = null
+    for (const [id, r] of this.remotePlayers) {
+      if (!this.squad.memberIds.has(id) || r.detained) continue
+      const p = r.rig.group.position
+      const d = this.player.pos.distanceTo(p)
+      if (!best || d < best.d) best = { id, name: r.name, x: p.x, y: p.y, z: p.z, d }
+    }
+    if (!best) { store.notify('No free cellmate to rally to — everyone is detained!', 'warning'); return }
+    this.player.teleport(best.x, best.z)
+    this.player.pos.y = best.y
+    this.camRig.yaw = 0
+    this.rallyReadyAt = Date.now() + Game.RALLY_COOLDOWN_MS
+    useGameStore.getState().patchHud({ rallyReadyAt: this.rallyReadyAt })
+    this.fx.popup('SOLIDARITY RALLY!', '#2e6e4e', best.x, 2.4, best.z)
+    this.store.notify(`Rallied to ${best.name} (${Math.round(best.d)}m closer to the cause)`, 'squad')
+    AudioManager.play('checkpoint')
+  }
 
   private onSquadUpdate(s: { code: string; members: { id: string; name: string }[] } | null) {
     const me = this.net.playerId
@@ -1400,6 +1434,8 @@ export class Game {
     let weeklyJustCompleted = false
     let streak: number | undefined
     let streakUp = false
+    let solidarityBonus = 0
+    let squadSize = 1
     const profileRaw = typeof window !== 'undefined' ? localStorage.getItem('votechor_profile') : null
     const token = profileRaw ? (JSON.parse(profileRaw) as { token: string }).token : null
     if (token) {
@@ -1413,6 +1449,7 @@ export class Game {
             rescues: stats.rescues, revives: stats.revives, itemsCollected: stats.itemsCollected,
             bossContribution: stats.bossContribution, detentions, tokens: stats.tokens,
             position: stats.position, multiplayer: !this.offline,
+            squadSize: this.offline ? 1 : Math.min(4, Math.max(1, this.squad.memberIds.size || 1)),
           }),
         })
         if (res.ok) {
@@ -1426,6 +1463,8 @@ export class Game {
             weekly?: { kind: string; desc: string; target: number; reward: number; progress: number; claimed: boolean; justCompleted: boolean } | null
             streak?: number
             streakUp?: boolean
+            solidarityBonus?: number
+            squadSize?: number
           }
           xpEarned = data.xpEarned
           newAchievements = data.newAchievements ?? []
@@ -1433,6 +1472,8 @@ export class Game {
           newLevel = data.level
           streak = data.streak
           streakUp = !!data.streakUp
+          solidarityBonus = data.solidarityBonus ?? 0
+          squadSize = data.squadSize ?? 1
           if (data.daily) {
             dailyBonus = data.dailyBonus ?? 0
             dailyDesc = data.daily.desc
@@ -1460,11 +1501,12 @@ export class Game {
           if (dailyJustCompleted) store.notify(`DAILY CHALLENGE COMPLETE! +${dailyBonus} bonus XP!`, 'achievement')
           if (weeklyJustCompleted) store.notify(`WEEKLY CHALLENGE COMPLETE! +${weeklyBonus} bonus XP!`, 'achievement')
           if (streakUp && streak && streak > 1) store.notify(`🔥 ${streak}-DAY STREAK — don't break the chain!`, 'achievement')
+          if (solidarityBonus > 0) store.notify(`SOLIDARITY BONUS! +${solidarityBonus} XP for marching with ${squadSize - 1} cellmate${squadSize === 2 ? '' : 's'}`, 'squad')
           if (leveledUp) { store.notify(`LEVEL UP — Level ${newLevel}!`, 'achievement'); AudioManager.play('victory') }
         }
       } catch { /* offline persistence failure is fine */ }
     }
-    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted, streak, streakUp }
+    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted, streak, streakUp, solidarityBonus, squadSize }
     store.setMatchSummary(summary)
     store.setUIMode('ended')
     AudioManager.setTheme('menu')

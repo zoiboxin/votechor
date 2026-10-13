@@ -1,14 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket } from 'lucide-react'
+import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const TIPS = [
   'Hold E next to a DETAINED teammate to bail them out. No bribe required — the paperwork is free today.',
   'Squadmates get green name tags in the world. Spot your cell instantly in a stampede.',
+  'Press RALLY to teleport to the nearest free cellmate — 45s cooldown between rallies.',
   'Press G for the emote wheel. Morale is a legitimate tactic.',
   'Press M for the big map — checkpoints, tokens and chasers, beautifully framed.',
   'The journalist archetype spots police on the minimap from farther away. Bring one. Or become one.',
@@ -22,6 +23,14 @@ export default function SquadPanel() {
   const matchMode = useGameStore((s) => s.matchMode)
   const [joinCode, setJoinCode] = useState('')
   const [copied, setCopied] = useState(false)
+  const [now, setNow] = useState(Date.now())
+
+  // cheap ticker for the rally cooldown countdown
+  useEffect(() => {
+    if (!squadOpen) return
+    const t = window.setInterval(() => setNow(Date.now()), 500)
+    return () => window.clearInterval(t)
+  }, [squadOpen])
 
   if (!squadOpen) return null
 
@@ -88,12 +97,41 @@ export default function SquadPanel() {
                   <span className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/50">
                     {squad.members.length}/4 members · share the code
                   </span>
-                  <button
-                    onClick={() => { setJoinCode(''); uiActions().squadLeave() }}
-                    className="flex items-center gap-1 rounded-lg border-2 border-[#1c1a17]/60 bg-[#e7dfc9] px-2 py-1 text-[9px] font-black uppercase tracking-widest text-[#1c1a17]/80 shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-colors hover:bg-[#f2c14e]"
-                  >
-                    <LogOut className="h-3 w-3" /> Leave squad
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {/* rally perk — teleport to nearest free cellmate, 45s cooldown */}
+                    {(() => {
+                      const remainMs = hud.rallyReadyAt - now
+                      const cooling = remainMs > 0
+                      const cellmatesFree = squad.members.length > 1 && !hud.detained
+                      return (
+                        <button
+                          onClick={() => uiActions().rallyToCell()}
+                          disabled={cooling || !cellmatesFree}
+                          title={
+                            hud.detained
+                              ? 'Cannot rally while detained'
+                              : cooling
+                                ? `Rally recharging — ${Math.ceil(remainMs / 1000)}s`
+                                : 'Teleport to the nearest free cellmate'
+                          }
+                          className={`flex items-center gap-1 rounded-lg border-2 px-2 py-1 text-[9px] font-black uppercase tracking-widest shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-all ${
+                            cooling || !cellmatesFree
+                              ? 'cursor-not-allowed border-[#1c1a17]/40 bg-[#e7dfc9] text-[#1c1a17]/40'
+                              : 'border-[#1c1a17]/70 bg-[#f2c14e] text-[#1c1a17] hover:-translate-y-0.5 hover:bg-[#f2a541]'
+                          }`}
+                        >
+                          <Megaphone className="h-3 w-3" />
+                          {cooling ? `${Math.ceil(remainMs / 1000)}s` : hud.detained ? 'Rally' : 'Rally!'}
+                        </button>
+                      )
+                    })()}
+                    <button
+                      onClick={() => { setJoinCode(''); uiActions().squadLeave() }}
+                      className="flex items-center gap-1 rounded-lg border-2 border-[#1c1a17]/60 bg-[#e7dfc9] px-2 py-1 text-[9px] font-black uppercase tracking-widest text-[#1c1a17]/80 shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-colors hover:bg-[#f2c14e]"
+                    >
+                      <LogOut className="h-3 w-3" /> Leave squad
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (

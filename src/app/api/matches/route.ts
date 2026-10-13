@@ -102,6 +102,9 @@ export async function POST(req: Request) {
       return NextResponse.json({
         duplicate: true,
         xpEarned: existing.xpEarned,
+        baseXp: existing.xpEarned,
+        solidarityBonus: 0,
+        squadSize: 1,
         level: player.level,
         leveledUp: false,
         newAchievements: [],
@@ -124,12 +127,14 @@ export async function POST(req: Request) {
     const detentions = clampInt(body.detentions, 0, 50)
     const tokens = clampInt(body.tokens, 0, 16)
     const position = clampInt(body.position, 0, 50)
+    // protest-cell solidarity: marching with cellmates pays (§15 social perk)
+    const squadSize = multiplayer ? clampInt(body.squadSize, 1, 4) : 1
 
     // current streak snapshot (returned for client refresh even when unchanged)
     let streakOut = player.dailyStreak
 
     // ---- server-authoritative XP ----
-    const xpEarned = Math.round(
+    const baseXp = Math.round(
       XP_TABLE.participation +
         distance * XP_TABLE.perMeter +
         checkpoints * XP_TABLE.perCheckpoint +
@@ -140,6 +145,9 @@ export async function POST(req: Request) {
         bossContribution * XP_TABLE.bossHit +
         (victory ? XP_TABLE.victoryBonus : 0),
     )
+    // +10% of base XP per extra cellmate (max 3 → +30%), multiplayer only
+    const solidarityBonus = multiplayer && squadSize > 1 ? Math.round(baseXp * 0.10 * (squadSize - 1)) : 0
+    const xpEarned = baseXp + solidarityBonus
 
     const funnyTitle = VICTORY_TITLES({
       detentions,
@@ -347,7 +355,9 @@ export async function POST(req: Request) {
     const wdef2 = weeklyForDate(weekKey())
     return NextResponse.json({
       xpEarned: xpEarned + outcome.dailyBonus + outcome.weeklyBonus,
-      baseXp: xpEarned,
+      baseXp,
+      solidarityBonus,
+      squadSize,
       dailyBonus: outcome.dailyBonus,
       weeklyBonus: outcome.weeklyBonus,
       daily: outcome.daily ? { kind: outcome.daily.kind, desc: outcome.daily.desc, target: outcome.daily.target, reward: outcome.daily.reward, progress: outcome.dailyProgress, claimed: outcome.dailyClaimed, justCompleted: outcome.dailyJustCompleted } : null,

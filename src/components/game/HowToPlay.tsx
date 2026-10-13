@@ -1,7 +1,7 @@
 'use client'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { BookOpen, Keyboard, Crown, ScrollText, Megaphone } from 'lucide-react'
+import { BookOpen, Keyboard, Crown, ScrollText, Megaphone, Users, Flame, Sparkles } from 'lucide-react'
 import { BOSS_NAME, BOSS_PHASE_NAMES } from '@/game/shared/constants'
 
 const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
@@ -12,12 +12,12 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['C'], action: 'Slide', note: 'Slide under searchlights. Very cinematic.' },
   { keys: ['E'], action: 'Interact / Rescue', note: 'Checkpoints, ballots, bailing out friends' },
   { keys: ['Q'], action: 'Throw Item', note: 'Bottles distract patrols. The bottle is fine.' },
-  { keys: ['G'], action: 'Emote Wheel' },
+  { keys: ['G'], action: 'Emote Wheel', note: '4 unlocked by default — level up & earn medals for the rest' },
   { keys: ['T'], action: 'Quick Messages' },
   { keys: ['M'], action: 'Big Map' },
-  { keys: ['TAB'], action: 'Squad Panel' },
+  { keys: ['TAB'], action: 'Squad Panel', note: 'Create a protest cell, share the 4-letter code, RALLY to cellmates' },
   { keys: ['1–8'], action: 'Use Inventory Item', note: 'Right-click a slot to drop it' },
-  { keys: ['P'], action: 'Photo Mode', note: 'O cycles filters · K saves a snapshot PNG' },
+  { keys: ['P'], action: 'Photo Mode', note: 'O cycles filters · wheel zooms · K saves a snapshot PNG' },
   { keys: ['ESC'], action: 'Pause', note: 'The police do not pause. Ever.' },
 ]
 
@@ -114,6 +114,39 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
             <li>• The cow on Grand Avenue is not a bug. Give it the respect it demands.</li>
             <li>• Reviving squadmates gives more XP than letting them think about their choices.</li>
           </ul>
+        </section>
+
+        {/* Progression: squads, emotes, streaks */}
+        <section>
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.22em] text-[#8c1f28]">
+            <Sparkles className="h-3.5 w-3.5" /> Career Progression
+          </div>
+          <div className="grid gap-1.5 sm:grid-cols-3">
+            <div className="rounded-xl border-2 border-[#2e6e4e]/60 bg-[#dcebe0] p-2.5">
+              <div className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-[#2e6e4e]">
+                <Users className="h-3.5 w-3.5" /> Protest Cells
+              </div>
+              <p className="text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
+                Tab → create a cell, share the 4-letter code. Cellmates get green name tags, a RALLY teleport (45s cooldown) and a <b>+10% XP solidarity bonus per cellmate</b> at match end.
+              </p>
+            </div>
+            <div className="rounded-xl border-2 border-[#b07d1e]/60 bg-[#f2c14e]/25 p-2.5">
+              <div className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-[#b07d1e]">
+                <Sparkles className="h-3.5 w-3.5" /> Emote Mastery
+              </div>
+              <p className="text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
+                The emote wheel (G) grows with you: dance &amp; flex at level 2, the CHANT at level 3, and the Chai Toast for Chai Guardians. Locked chants wobble indignantly.
+              </p>
+            </div>
+            <div className="rounded-xl border-2 border-[#8c1f28]/50 bg-[#f5efdc] p-2.5">
+              <div className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-[#8c1f28]">
+                <Flame className="h-3.5 w-3.5" /> Daily Streak
+              </div>
+              <p className="text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
+                Complete the daily challenge on consecutive days to build a 🔥 streak. Miss a day and the committee wins. Your card displays it proudly.
+              </p>
+            </div>
+          </div>
         </section>
       </DialogContent>
     </Dialog>

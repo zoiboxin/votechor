@@ -349,3 +349,34 @@ Stage Summary:
 - Round 7 shipped: emote unlock progression (8-emote catalog, locked wheel UI, game-side guard), Squad system v1 (server-authoritative 4-player cells, code join/leave, green name tags, HUD cell chip, panel management UI, reconnect-aware), Daily Streak (DB→API→PlayerCard→EndScreen), and a stale-squad-state reconnect bugfix
 - Verified: 2-session squad join (both chips 2/4), emote lock/unlock paths, streak 4→5 increment + idempotency via curl, streak card render, zero console errors
 - Risks/next: remote-hat + green-nametag 2-client visual re-verify in a stable env (nametag recolor runs in same handler as verified chips); HowToPlay could gain squads/emote-unlock rows; consider squad teleport-to-leader or cell bonus XP next; item gifting (§11) remains unstarted; game-server restart needed if index.ts changes again
+
+---
+Task ID: 10
+Agent: Z.ai Code (cron webDevReview round 8)
+Task: QA assessment + Solidarity bonus XP (squad perk) + Squad Rally teleport + HowToPlay Career Progression docs + styling polish
+
+Work Log:
+- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002 double-fork, Caddy :81); lint + tsc clean for src; menu/solo boot/HUD re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development (round 7 roadmap items)
+- FEATURE — Solidarity bonus XP (§15 social perk, server-authoritative):
+  * /api/matches: squadSize clamped 1-4 (multiplayer only); solidarityBonus = round(baseXp * 0.10 * (squadSize-1)) (max +30%); xpEarned = baseXp + solidarityBonus (feeds MatchResult/PlayerStats/levels consistently); response now returns baseXp/solidarityBonus/squadSize; duplicate path echoes solidarityBonus: 0
+  * game.ts finalizeMatch: sends squadSize (from this.squad.memberIds.size, offline forced 1); parses bonus → MatchSummary + "SOLIDARITY BONUS! +N XP for marching with X cellmates" toast
+  * EndScreen: green Solidarity ribbon (Handshake icon, "marched with N cellmates", +N) below streak ribbon
+  * VERIFIED via curl: solo → 0 bonus; multiplayer squadSize=3 → +19 = exactly 20% of base 93; squadSize=99 clamped → 4 → +28 = 30%
+- FEATURE — Squad Rally teleport perk:
+  * game.ts rallyToCell(): guards (running, !offline, player.state==='normal', cellmate exists, 45s Date.now() cooldown); targets nearest FREE cellmate rig (skips detained → "No free cellmate to rally to — everyone is detained!"); player.teleport + pos.y sync + camRig.yaw reset + fx.popup('SOLIDARITY RALLY!') + success toast + AudioManager checkpoint sting + patchHud({rallyReadyAt})
+  * HudState += rallyReadyAt (default 0, reset in startMatch/leaveMatch); UIActions += rallyToCell
+  * SquadPanel: RALLY! button (Megaphone icon) next to Leave squad — yellow when ready, gray disabled during cooldown w/ live Ns countdown (500ms ticker) or while detained ("Cannot rally while detained" title); field manual tip updated
+  * VERIFIED end-to-end 2-session (X7W7 cell, 2/4): instrumented teleport fired + "Rallied to Protester_9664" toast + cooldown set; guard paths exercised live: no-cellmate ("Rally needs a cellmate — form a squad first (Tab)") + detained-cellmate skip (B walked into police during synthetic W-hold → rally correctly refused until release — this briefly looked like a bug but is the designed guard working)
+- FEATURE — HowToPlay Career Progression section:
+  * 3 poster cards: PROTEST CELLS (Tab/code/green tags/RALLY/+10% per cellmate), EMOTE MASTERY (G, LV2 dance+flex, LV3 chant, Chai Guardian toast, "locked chants wobble indignantly"), DAILY STREAK (🔥 consecutive days)
+  * Controls rows enriched: G + TAB + P notes updated (emote unlock hint, rally hint, wheel zoom)
+- STYLING (mandatory): rally button states + countdown, solidarity ribbon, Career Progression card grid (3-color identity), updated field manual
+- BUGFIX (self-inflicted during round): HudState edit accidentally replaced speedBoostUntil with rallyReadyAt → tsc caught 3 errors → restored both fields + default
+- QA METHODOLOGY: (1) toast-assertion filters must match ALL possible outcomes of a guarded action (a /Rallied to/ filter masked the "No free cellmate" toast and sent me chasing a phantom no-op); (2) synthetic W-hold in headless can walk a player into police custody — check remote detained flags before interpreting teleport tests; (3) headless socket drops continue every ~60s under 2 live 3D sessions (infra)
+- OPS: no server changes this round (squad handlers from round 7 unchanged; /api/matches is Next-side, hot-reloaded); test data left: SolidTest player (sol_t1..t3) + X7W7 rally session data — harmless
+- All checks green: tsc (src clean), eslint, zero console errors across all QA sessions
+
+Stage Summary:
+- Round 8 shipped: Solidarity bonus XP (+10%/cellmate, server-authoritative, EndScreen ribbon), Squad Rally teleport (45s cooldown, nearest-free-cellmate, full guard set), HowToPlay Career Progression cards, rally button styling
+- Verified: solidarity math exact via curl (0/20%/30% + clamp), rally teleport + toast + cooldown + 3 guard paths live in browser, HowToPlay cards render, zero console errors
+- Risks/next: solidarity counts squad size at match end (server trusts client count — acceptable social-cosmetic risk, capped +30%); item gifting (§11) still unstarted; consider squad bonus display in HUD during play, cell invite toasts, or boss-fight replay next round; remote nametag visual re-verify in stable env still open
