@@ -150,7 +150,9 @@ export class Game {
   private lastSquadCode: string | null = null
   private squadAutoRejoin = false
   private rallyReadyAt = 0
+  private inviteClearTimer: ReturnType<typeof setTimeout> | null = null
   private static RALLY_COOLDOWN_MS = 45000
+  private static INVITE_TTL_MS = 20000
 
   async boot(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
@@ -203,6 +205,21 @@ export class Game {
       onGift: (g) => this.onGiftReceived(g),
       onGiftBounce: (g) => this.onGiftBounced(g),
       onGiftRefund: (type) => this.onGiftRefund(type),
+      onSquadInvite: (inv) => this.onSquadInvite(inv),
+      onSquadInviteSent: (s) => this.store.notify(`Invite sent to ${s.targetName} — the cell awaits`, 'squad'),
+      onSquadInviteAccepted: (s) => {
+        AudioManager.play('checkpoint')
+        this.store.notify(`${s.byName} accepted — your cell just got louder!`, 'squad')
+      },
+      onSquadInviteDeclined: (s) => this.store.notify(`${s.byName} declined your invite — more marching for you`, 'info'),
+      onSquadInviteError: (s) => {
+        const why =
+          s.reason === 'TARGET_NOT_FOUND' ? 'That protester has left the room'
+          : s.reason === 'SQUAD_FULL' ? 'Your cell is full (4 max)'
+          : s.reason === 'ALREADY_IN_CELL' ? 'They are already in your cell'
+          : 'That invite expired — ask for a fresh one'
+        this.store.notify(why, 'warning')
+      },
       onSquadError: (reason) => {
         if (this.squadAutoRejoin) {
           this.squadAutoRejoin = false
@@ -298,8 +315,16 @@ export class Game {
         this.net.squadJoin(clean)
       },
       squadLeave: () => this.net.squadLeave(),
+      squadInvite: (targetId) => {
+        if (this.offline) { this.store.notify('Squads need a live room — go multiplayer!', 'warning'); return }
+        if (!targetId || targetId === this.net.playerId) return
+        this.net.squadInvite(targetId)
+      },
+      squadInviteAccept: (fromId) => this.net.squadInviteAccept(fromId),
+      squadInviteDecline: (fromId) => this.net.squadInviteDecline(fromId),
       rallyToCell: () => this.rallyToCell(),
       giftNearest: () => this.giftNearest(),
+      giftTo: (targetId) => this.giftTo(targetId),
     })
 
     this.ensurePhotoKeyHandler()
@@ -343,6 +368,7 @@ export class Game {
     this.lastSquadCode = null
     this.squadAutoRejoin = false
     this.rallyReadyAt = 0
+    this.clearPendingInvite()
     useGameStore.getState().setSquad(null)
 
     const profile = store.profile
@@ -474,6 +500,7 @@ export class Game {
     this.lastSquadCode = null
     this.squadAutoRejoin = false
     this.rallyReadyAt = 0
+    this.clearPendingInvite()
     useGameStore.getState().patchHud({ hunted: false, rallyReadyAt: 0 })
     useGameStore.getState().setSquad(null)
     AudioManager.setTheme('menu')
@@ -673,23 +700,62 @@ export class Game {
       if (d <= GIFT_RADIUS && (!best || d < best.d)) best = { id, name: r.name, d, health: r.health }
     }
     if (!best) { store.notify(`No teammate within ${GIFT_RADIUS}m — get closer to share supplies`, 'info'); return }
+    this.giftItemTo(best.id, best.name, best.health)
+  }
+
+  /** Gift the most useful item to a SPECIFIC teammate (SquadPanel row button). */
+  giftTo(targetId: string) {
+    const store = useGameStore.getState()
+    if (!this.player || !this.running) return
+    if (this.offline) { store.notify('Gifting needs teammates — go multiplayer!', 'warning'); return }
+    if (this.player.isDetained || this.player.isDazed) { store.notify('Cannot gift while detained or dazed', 'warning'); return }
+    if (this.inventory.length === 0) { store.notify('Pockets are empty — nothing to gift!', 'info'); return }
+    const r = this.remotePlayers.get(targetId)
+    if (!r) { store.notify('That teammate has left the protest', 'warning'); return }
+    if (r.detained) { store.notify(`${r.name} is detained — bail them out first (hold E)`, 'warning'); return }
+    const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
+    if (d > GIFT_RADIUS) { store.notify(`${r.name} is ${Math.round(d)}m away — get within ${GIFT_RADIUS}m to hand things over`, 'info'); return }
+    this.giftItemTo(targetId, r.name, r.health)
+  }
+
+  /** Shared gifting core: smart item pick + optimistic send + feedback (caller does the guards). */
+  private giftItemTo(targetId: string, targetName: string, targetHealth: number) {
+    if (!this.player) return
     // pick the most useful item: firstaid when they are hurt, chai, other consumables, then throwables
     const has = (t: string) => this.inventory.find((i) => i.type === t)
     const pick =
-      (best.health < 55 ? has('firstaid') : undefined) ??
+      (targetHealth < 55 ? has('firstaid') : undefined) ??
       has('chai') ?? has('firstaid') ?? has('snack') ?? has('joke') ??
       this.inventory.find((i) => GIFT_TYPES.includes(i.type))
-    if (!pick) { store.notify('That item cannot be gifted', 'info'); return }
+    if (!pick) { this.store.notify('That item cannot be gifted', 'info'); return }
     const idx = this.inventory.findIndex((i) => i.uid === pick.uid)
     this.inventory.splice(idx, 1)
-    this.net.gift(best.id, pick.type)
+    this.net.gift(targetId, pick.type)
     this.player.playAnim('heal', 0.35)
-    this.fx.popup(`🎁 GIFT → ${best.name}`, '#f2c14e', this.player.pos.x, 2.2, this.player.pos.z)
+    this.fx.popup(`🎁 GIFT → ${targetName}`, '#f2c14e', this.player.pos.x, 2.2, this.player.pos.z)
     this.sayBubble('me', randomOf(GIFT_QUIPS))
     AudioManager.play('pickup')
     this.stats.gifts++
-    this.store.notify(`Gifted ${ITEM_CONFIG[pick.type as ItemType]?.name ?? pick.type} to ${best.name} — support +1`, 'squad')
+    this.store.notify(`Gifted ${ITEM_CONFIG[pick.type as ItemType]?.name ?? pick.type} to ${targetName} — support +1`, 'squad')
     this.syncHud()
+  }
+
+  // ================= squad invites (§15) =================
+
+  /** A protester invited us to their cell — show the interactive flyer toast (auto-expires). */
+  private onSquadInvite(inv: { fromId: string; fromName: string; code: string }) {
+    const store = useGameStore.getState()
+    store.setPendingInvite({ fromId: inv.fromId, fromName: inv.fromName, code: inv.code, at: Date.now() })
+    store.notify(`${inv.fromName} invites you to cell ${inv.code} — check the flyer!`, 'squad')
+    AudioManager.play('token')
+    if (this.inviteClearTimer) clearTimeout(this.inviteClearTimer)
+    this.inviteClearTimer = setTimeout(() => this.clearPendingInvite(), Game.INVITE_TTL_MS)
+  }
+
+  /** Drop the invite flyer (expiry, match end, or a newer invite replacing it). */
+  private clearPendingInvite() {
+    if (this.inviteClearTimer) { clearTimeout(this.inviteClearTimer); this.inviteClearTimer = null }
+    useGameStore.getState().setPendingInvite(null)
   }
 
   /** A teammate handed us an item (server-validated, targeted event). */

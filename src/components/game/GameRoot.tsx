@@ -19,6 +19,7 @@ import BigMap from './BigMap'
 import SquadPanel from './SquadPanel'
 import ReconnectOverlay from './ReconnectOverlay'
 import PhotoHud from './PhotoHud'
+import InviteToast from './InviteToast'
 
 // Global one-shot guards (StrictMode double-mount safe)
 let engineBooted = false
@@ -248,6 +249,8 @@ export default function GameRoot() {
 
       {/* Toasts work in every mode */}
       <NotificationStack />
+      {/* Interactive squad-invite flyer (multiplay matches + menus, dismisses itself) */}
+      <InviteToast />
     </>
   )
 }

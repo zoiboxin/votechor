@@ -132,6 +132,14 @@ export interface SquadState {
   members: CellMember[]
 }
 
+/** A live squad invite addressed to the local player (auto-expires client + server side). */
+export interface PendingInvite {
+  fromId: string
+  fromName: string
+  code: string
+  at: number
+}
+
 export interface GameState {
   uiMode: UIMode
   menuScreen: MenuScreen
@@ -155,6 +163,7 @@ export interface GameState {
   photoMode: boolean
   photoFilter: number // 0 = off, 1 = poster, 2 = vintage, 3 = noir
   squad: SquadState | null
+  pendingInvite: PendingInvite | null
 
   setUIMode: (m: UIMode) => void
   setMenuScreen: (s: MenuScreen) => void
@@ -176,6 +185,7 @@ export interface GameState {
   setRoomCode: (c: string | null) => void
   setMatchMode: (m: 'solo' | 'multiplayer' | null) => void
   setSquad: (s: SquadState | null) => void
+  setPendingInvite: (inv: PendingInvite | null) => void
   setPhotoMode: (v: boolean) => void
   setPhotoFilter: (i: number) => void
 }
@@ -232,6 +242,7 @@ export const useGameStore = create<GameState>((set) => ({
   photoMode: false,
   photoFilter: 0,
   squad: null,
+  pendingInvite: null,
 
   setUIMode: (m) => set({ uiMode: m }),
   setMenuScreen: (s) => set({ menuScreen: s }),
@@ -255,6 +266,7 @@ export const useGameStore = create<GameState>((set) => ({
   setRoomCode: (c) => set({ roomCode: c }),
   setMatchMode: (m) => set({ matchMode: m }),
   setSquad: (s) => set({ squad: s }),
+  setPendingInvite: (inv) => set({ pendingInvite: inv }),
   setPhotoMode: (v) => set({ photoMode: v }),
   setPhotoFilter: (i) => set({ photoFilter: ((i % 4) + 4) % 4 }),
 }))
@@ -278,8 +290,12 @@ export interface UIActions {
   squadCreate: () => void
   squadJoin: (code: string) => void
   squadLeave: () => void
+  squadInvite: (targetId: string) => void
+  squadInviteAccept: (fromId: string) => void
+  squadInviteDecline: (fromId: string) => void
   rallyToCell: () => void
   giftNearest: () => void
+  giftTo: (targetId: string) => void
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }

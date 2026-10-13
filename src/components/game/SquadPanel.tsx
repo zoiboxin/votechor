@@ -3,14 +3,15 @@
 import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone, Gift } from 'lucide-react'
+import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone, Gift, UserPlus } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const TIPS = [
   'Hold E next to a DETAINED teammate to bail them out. No bribe required — the paperwork is free today.',
   'Squadmates get green name tags in the world. Spot your cell instantly in a stampede.',
   'Press RALLY to teleport to the nearest free cellmate — 45s cooldown between rallies.',
-  'Press F (or the GIFT button) to hand your best item to the nearest teammate. Support points included.',
+  'Press F (or the GIFT button) to hand your best item to the nearest teammate. Row GIFT buttons target a specific cellmate.',
+  'Press INVITE on any protester\'s row to send them a cell invite — they get 20 seconds to answer the flyer.',
   'Press G for the emote wheel. Morale is a legitimate tactic.',
   'Press M for the big map — checkpoints, tokens and chasers, beautifully framed.',
   'The journalist archetype spots police on the minimap from farther away. Bring one. Or become one.',
@@ -189,7 +190,7 @@ export default function SquadPanel() {
                   </div>
                 </div>
                 <p className="mt-1 text-[9px] font-semibold text-[#1c1a17]/50">
-                  Squadmates get green name tags and squad toasts. Create one, share the 4-letter code, cause chaos together.
+                  Squadmates get green name tags and squad toasts. Create one, share the code — or press INVITE on any protester&rsquo;s row below.
                 </p>
               </>
             )}
@@ -207,6 +208,10 @@ export default function SquadPanel() {
           </p>
         ) : (
           <div className="space-y-1.5">
+            <div className="flex items-center justify-between px-0.5">
+              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-[#1c1a17]/50">Protesters in the room</span>
+              <span className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/40">Invite or gift →</span>
+            </div>
             {hud.squad.map((m) => {
               const arch = archetypeById(m.archetype || 'student')
               const inCell = squadById.has(m.id)
@@ -247,6 +252,46 @@ export default function SquadPanel() {
                       </span>
                     </div>
                   </div>
+                  {/* per-row actions: INVITE outsiders into the cell / GIFT cellmates directly (§15 + §11) */}
+                  {inCell ? (
+                    <button
+                      onClick={() => uiActions().giftTo(m.id)}
+                      disabled={hud.detained || hud.inventory.length === 0 || m.detained}
+                      title={
+                        hud.detained
+                          ? 'Cannot gift while detained'
+                          : m.detained
+                            ? `${m.name} is detained — bail them out first`
+                            : hud.inventory.length === 0
+                              ? 'Pockets are empty — nothing to gift'
+                              : `Gift your best item to ${m.name}`
+                      }
+                      aria-label={`Gift an item to ${m.name}`}
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-all ${
+                        hud.detained || hud.inventory.length === 0 || m.detained
+                          ? 'cursor-not-allowed border-[#1c1a17]/30 bg-[#e7dfc9] text-[#1c1a17]/30'
+                          : 'border-[#1c1a17]/70 bg-[#7de3a8] text-[#1c1a17] hover:-translate-y-0.5 hover:bg-[#a7efc3]'
+                      }`}>
+                      <Gift className="h-3.5 w-3.5" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => uiActions().squadInvite(m.id)}
+                      disabled={Boolean(squad && squad.members.length >= 4)}
+                      title={
+                        squad && squad.members.length >= 4
+                          ? 'Your cell is full (4 max)'
+                          : `Invite ${m.name} to cell ${squad?.code ?? ''} (20s to answer)`
+                      }
+                      aria-label={`Invite ${m.name} to your squad`}
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 shadow-[2px_2px_0_rgba(28,26,23,0.5)] transition-all ${
+                        squad && squad.members.length >= 4
+                          ? 'cursor-not-allowed border-[#1c1a17]/30 bg-[#e7dfc9] text-[#1c1a17]/30'
+                          : 'border-[#8c1f28]/70 bg-[#f5d9d4] text-[#8c1f28] hover:-translate-y-0.5 hover:bg-[#efc4bc]'
+                      }`}>
+                      <UserPlus className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               )
             })}

@@ -50,6 +50,11 @@ export type NetEvents = {
   onGate: (open: boolean) => void
   onSquad: (squad: { code: string; members: { id: string; name: string }[] } | null) => void
   onSquadError: (reason: 'SQUAD_NOT_FOUND' | 'SQUAD_FULL') => void
+  onSquadInvite: (inv: { fromId: string; fromName: string; code: string }) => void
+  onSquadInviteSent: (s: { targetId: string; targetName: string }) => void
+  onSquadInviteAccepted: (s: { byId: string; byName: string }) => void
+  onSquadInviteDeclined: (s: { byId: string; byName: string }) => void
+  onSquadInviteError: (s: { targetId: string; reason: 'TARGET_NOT_FOUND' | 'SQUAD_FULL' | 'ALREADY_IN_CELL' | 'INVITE_EXPIRED' }) => void
   onGift: (g: { fromId: string; fromName: string; type: string }) => void
   onGiftBounce: (g: { toId: string; toName: string; type: string }) => void
   onGiftRefund: (type: string) => void
@@ -115,6 +120,11 @@ export class NetClient {
         socket.on('game:gate', (open: boolean) => this.ev.onGate?.(open))
         socket.on('game:squad', (s: { code: string; members: { id: string; name: string }[] } | null) => this.ev.onSquad?.(s))
         socket.on('game:squadError', (reason: 'SQUAD_NOT_FOUND' | 'SQUAD_FULL') => this.ev.onSquadError?.(reason))
+        socket.on('game:squadInvite', (inv: { fromId: string; fromName: string; code: string }) => this.ev.onSquadInvite?.(inv))
+        socket.on('game:squadInviteSent', (s: { targetId: string; targetName: string }) => this.ev.onSquadInviteSent?.(s))
+        socket.on('game:squadInviteAccepted', (s: { byId: string; byName: string }) => this.ev.onSquadInviteAccepted?.(s))
+        socket.on('game:squadInviteDeclined', (s: { byId: string; byName: string }) => this.ev.onSquadInviteDeclined?.(s))
+        socket.on('game:squadInviteError', (s: { targetId: string; reason: 'TARGET_NOT_FOUND' | 'SQUAD_FULL' | 'ALREADY_IN_CELL' | 'INVITE_EXPIRED' }) => this.ev.onSquadInviteError?.(s))
         socket.on('game:gift', (g: { fromId: string; fromName: string; type: string }) => this.ev.onGift?.(g))
         socket.on('game:giftBounce', (g: { toId: string; toName: string; type: string }) => this.ev.onGiftBounce?.(g))
         socket.on('game:giftRefund', (r: { type: string }) => this.ev.onGiftRefund?.(r.type))
@@ -156,6 +166,9 @@ export class NetClient {
   squadCreate() { this.socket?.emit('game:squadCreate') }
   squadJoin(code: string) { this.socket?.emit('game:squadJoin', { code }) }
   squadLeave() { this.socket?.emit('game:squadLeave') }
+  squadInvite(targetId: string) { this.socket?.emit('game:squadInvite', { targetId }) }
+  squadInviteAccept(fromId: string) { this.socket?.emit('game:squadInviteAccept', { fromId }) }
+  squadInviteDecline(fromId: string) { this.socket?.emit('game:squadInviteDecline', { fromId }) }
   gift(targetId: string, type: string) { this.socket?.emit('game:gift', { targetId, type }) }
   giftBounce(targetId: string, type: string) { this.socket?.emit('game:giftBounce', { targetId, type }) }
   leave() {

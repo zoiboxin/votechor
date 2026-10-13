@@ -100,6 +100,7 @@ function leaveRoom(socketId: string) {
   const room = rooms.get(roomId)
   if (!room) return
   squadLeaveInternal(socketId) // remove from any squad, notify remaining members
+  dropAllInvitesFor(socketId) // pending invites die with either endpoint
   const player = room.removePlayer(socketId)
   if (player) {
     io.to(room.id).emit('game:playerleft', socketId, player.name)
@@ -117,6 +118,30 @@ const SQUAD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 interface Squad { code: string; members: Set<string> }
 const roomSquads = new Map<string, Map<string, Squad>>() // roomId -> code -> squad
 const socketSquad = new Map<string, { roomId: string; code: string }>() // socketId -> membership
+
+// ---------- squad invites (§15 — direct invite → accept/decline, 20s expiry) ----------
+const INVITE_TTL_MS = 20_000
+interface PendingInvite { code: string; fromName: string; expires: number }
+const pendingInvites = new Map<string, Map<string, PendingInvite>>() // targetSocketId -> inviterSocketId -> invite
+
+function dropInvite(targetId: string, fromId: string) {
+  const invs = pendingInvites.get(targetId)
+  if (!invs) return
+  invs.delete(fromId)
+  if (invs.size === 0) pendingInvites.delete(targetId)
+}
+
+/** Remove every pending invite involving a socket (as target or as inviter) — used on leave/disconnect. */
+function dropAllInvitesFor(socketId: string) {
+  const invs = pendingInvites.get(socketId)
+  if (invs) {
+    invs.clear()
+    pendingInvites.delete(socketId)
+  }
+  for (const [targetId, map] of pendingInvites) {
+    if (map.delete(socketId) && map.size === 0) pendingInvites.delete(targetId)
+  }
+}
 
 function emitSquad(room: Room, squad: Squad) {
   const members = [...squad.members].map((id) => ({ id, name: room.getPlayer(id)?.name ?? 'Protester' }))
@@ -141,6 +166,38 @@ function squadLeaveInternal(socketId: string) {
     return
   }
   emitSquad(room, squad)
+}
+
+/** Put a socket into a fresh squad in their room and broadcast the roster. */
+function squadCreateInternal(socketId: string, roomId: string, room: Room) {
+  squadLeaveInternal(socketId)
+  let squads = roomSquads.get(roomId)
+  if (!squads) { squads = new Map(); roomSquads.set(roomId, squads) }
+  let code = ''
+  do {
+    code = ''
+    for (let i = 0; i < 4; i++) code += SQUAD_ALPHABET[Math.floor(Math.random() * SQUAD_ALPHABET.length)]
+  } while (squads.has(code))
+  const squad: Squad = { code, members: new Set([socketId]) }
+  squads.set(code, squad)
+  socketSquad.set(socketId, { roomId, code })
+  emitSquad(room, squad)
+  return squad
+}
+
+type JoinResult = 'ok' | 'already' | 'SQUAD_NOT_FOUND' | 'SQUAD_FULL'
+
+/** Put a socket into the squad `code` of their room and broadcast the roster. */
+function squadJoinInternal(socketId: string, roomId: string, room: Room, code: string): JoinResult {
+  const squad = roomSquads.get(roomId)?.get(code)
+  if (!squad) return 'SQUAD_NOT_FOUND'
+  if (squad.members.has(socketId)) { emitSquad(room, squad); return 'already' }
+  if (squad.members.size >= SQUAD_CAP) return 'SQUAD_FULL'
+  squadLeaveInternal(socketId)
+  squad.members.add(socketId)
+  socketSquad.set(socketId, { roomId, code })
+  emitSquad(room, squad)
+  return 'ok'
 }
 
 // socketId -> roomId
@@ -264,18 +321,7 @@ io.on('connection', (socket) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined
     if (!roomId || !room || !room.getPlayer(socket.id)) return
-    squadLeaveInternal(socket.id) // leave any previous squad first
-    let squads = roomSquads.get(roomId)
-    if (!squads) { squads = new Map(); roomSquads.set(roomId, squads) }
-    let code = ''
-    do {
-      code = ''
-      for (let i = 0; i < 4; i++) code += SQUAD_ALPHABET[Math.floor(Math.random() * SQUAD_ALPHABET.length)]
-    } while (squads.has(code))
-    const squad: Squad = { code, members: new Set([socket.id]) }
-    squads.set(code, squad)
-    socketSquad.set(socket.id, { roomId, code })
-    emitSquad(room, squad)
+    squadCreateInternal(socket.id, roomId, room)
   })
 
   socket.on('game:squadJoin', (data: { code?: unknown } = {}) => {
@@ -283,19 +329,86 @@ io.on('connection', (socket) => {
     const room = roomId ? rooms.get(roomId) : undefined
     if (!roomId || !room || !room.getPlayer(socket.id)) return
     const code = String(data.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4)
-    const squad = roomSquads.get(roomId)?.get(code)
-    if (!squad) { socket.emit('game:squadError', 'SQUAD_NOT_FOUND'); return }
-    if (squad.members.has(socket.id)) { emitSquad(room, squad); return }
-    if (squad.members.size >= SQUAD_CAP) { socket.emit('game:squadError', 'SQUAD_FULL'); return }
-    squadLeaveInternal(socket.id)
-    squad.members.add(socket.id)
-    socketSquad.set(socket.id, { roomId, code })
-    emitSquad(room, squad)
+    const res = squadJoinInternal(socket.id, roomId, room, code)
+    if (res === 'SQUAD_NOT_FOUND') socket.emit('game:squadError', 'SQUAD_NOT_FOUND')
+    if (res === 'SQUAD_FULL') socket.emit('game:squadError', 'SQUAD_FULL')
   })
 
   socket.on('game:squadLeave', () => {
     squadLeaveInternal(socket.id)
     socket.emit('game:squad', null)
+  })
+
+  // ---------- squad invite handlers (§15) ----------
+
+  socket.on('game:squadInvite', (data: { targetId?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    const me = room?.getPlayer(socket.id)
+    if (!roomId || !room || !me) return
+    const targetId = String(data.targetId ?? '')
+    const target = room.getPlayer(targetId)
+    if (!targetId || targetId === socket.id || !socketRooms.has(targetId) || socketRooms.get(targetId) !== roomId || !target) {
+      socket.emit('game:squadInviteError', { targetId, reason: 'TARGET_NOT_FOUND' })
+      return
+    }
+    if (!room.rateLimit(me, 'inviteTimes')) return // silent: spam guard
+    // auto-create a cell on first invite so the flow needs zero preparation
+    let membership = socketSquad.get(socket.id)
+    if (!membership || membership.roomId !== roomId) {
+      const squad = squadCreateInternal(socket.id, roomId, room)
+      membership = { roomId, code: squad.code }
+    }
+    const squad = roomSquads.get(roomId)?.get(membership.code)
+    if (!squad) return
+    if (squad.members.size >= SQUAD_CAP) {
+      socket.emit('game:squadInviteError', { targetId, reason: 'SQUAD_FULL' })
+      return
+    }
+    if (squad.members.has(targetId)) {
+      socket.emit('game:squadInviteError', { targetId, reason: 'ALREADY_IN_CELL' })
+      return
+    }
+    const expires = Date.now() + INVITE_TTL_MS
+    let invs = pendingInvites.get(targetId)
+    if (!invs) { invs = new Map(); pendingInvites.set(targetId, invs) }
+    invs.set(socket.id, { code: squad.code, fromName: me.name, expires })
+    setTimeout(() => dropInvite(targetId, socket.id), INVITE_TTL_MS + 500).unref()
+    io.to(targetId).emit('game:squadInvite', { fromId: socket.id, fromName: me.name, code: squad.code })
+    socket.emit('game:squadInviteSent', { targetId, targetName: target.name })
+  })
+
+  socket.on('game:squadInviteAccept', (data: { fromId?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    if (!roomId || !room || !room.getPlayer(socket.id)) return
+    const fromId = String(data.fromId ?? '')
+    const invite = pendingInvites.get(socket.id)?.get(fromId)
+    if (!invite || invite.expires <= Date.now()) {
+      dropInvite(socket.id, fromId)
+      socket.emit('game:squadInviteError', { targetId: fromId, reason: 'INVITE_EXPIRED' })
+      return
+    }
+    dropInvite(socket.id, fromId)
+    const res = squadJoinInternal(socket.id, roomId, room, invite.code)
+    if (res === 'SQUAD_FULL') {
+      socket.emit('game:squadInviteError', { targetId: fromId, reason: 'SQUAD_FULL' })
+      return
+    }
+    if (res === 'ok') {
+      io.to(fromId).emit('game:squadInviteAccepted', { byId: socket.id, byName: room.getPlayer(socket.id)?.name ?? 'Protester' })
+    }
+  })
+
+  socket.on('game:squadInviteDecline', (data: { fromId?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    if (!roomId || !room) return
+    const fromId = String(data.fromId ?? '')
+    const invite = pendingInvites.get(socket.id)?.get(fromId)
+    if (!invite) return
+    dropInvite(socket.id, fromId)
+    io.to(fromId).emit('game:squadInviteDeclined', { byId: socket.id, byName: room.getPlayer(socket.id)?.name ?? 'Protester' })
   })
 
   socket.on('game:heal', (data: { targetId?: unknown } = {}) => {
