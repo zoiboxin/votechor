@@ -1,17 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
-import { ARCHETYPES } from '@/game/shared/constants'
-import { ArrowLeft, Check, Glasses, Gem, Save, Signpost } from 'lucide-react'
+import { ARCHETYPES, ACHIEVEMENTS } from '@/game/shared/constants'
+import { HAT_CATALOG, unlockLabel, type CosmeticItem } from '@/lib/cosmetics'
+import { ArrowLeft, Check, Glasses, Gem, Save, Signpost, Lock, Unlock } from 'lucide-react'
 import { motion } from 'framer-motion'
 import type { Archetype } from '@/game/shared/types'
 
-const HATS = [
-  { id: 'none', label: 'No Hat' },
-  { id: 'cap', label: 'Cap' },
-  { id: 'topi', label: 'Topi' },
-]
+const HATS = HAT_CATALOG
 
 function cssPreview(a: Archetype, hat: string, glasses: boolean) {
   return (
@@ -26,6 +23,17 @@ function cssPreview(a: Archetype, hat: string, glasses: boolean) {
       <div className="absolute bottom-4 h-10 w-11 rounded-t-lg border border-[#1c1a17]/40" style={{ background: a.colors.shirt }}>
         <div className="absolute left-1/2 top-1.5 h-4 w-1.5 -translate-x-1/2 rounded" style={{ background: a.colors.accent }} />
       </div>
+      {/* garland (around neck) */}
+      {hat === 'garland' && (
+        <>
+          <div className="absolute bottom-[4.1rem] left-1/2 h-4 w-12 -translate-x-1/2 rounded-full border-[3px] border-[#f2a541] bg-transparent" style={{ transform: 'translateX(-50%) rotate(8deg)' }} />
+          <div className="absolute bottom-[4.35rem] left-1/2 flex -translate-x-1/2 gap-0.5">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-1.5 w-1.5 rounded-full" style={{ background: i % 2 ? '#e8912c' : '#f2a541' }} />
+            ))}
+          </div>
+        </>
+      )}
       {/* head */}
       <div className="absolute bottom-[3.75rem] h-9 w-9 rounded-full border-2 border-[#1c1a17]/50" style={{ background: a.colors.skin }}>
         <div className="absolute inset-x-0 top-0 h-2.5 rounded-t-full" style={{ background: a.colors.hair }} />
@@ -37,6 +45,25 @@ function cssPreview(a: Archetype, hat: string, glasses: boolean) {
         )}
         {hat === 'cap' && <div className="absolute -top-1.5 left-0 h-2 w-6 rounded-t-md" style={{ background: a.colors.accent }} />}
         {hat === 'topi' && <div className="absolute -top-3 left-1/2 h-4 w-6 -translate-x-1/2 rounded-t-full" style={{ background: '#f5efdc' }} />}
+        {hat === 'cone' && (
+          <div className="absolute -top-7 left-1/2 flex -translate-x-1/2 flex-col items-center">
+            <div className="h-0 w-0 border-x-[7px] border-b-[14px] border-x-transparent border-b-[#e8641c]" />
+            <div className="absolute top-1.5 h-1 w-2.5 bg-[#f5efdc]" />
+            <div className="h-1 w-5 rounded-sm bg-[#c8500f]" />
+          </div>
+        )}
+        {hat === 'crown' && (
+          <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
+            <div className="flex items-end gap-px">
+              {[5, 7, 9, 7, 5].map((h, i) => (
+                <div key={i} className="w-1 rounded-t-sm bg-[#d4a017]" style={{ height: h }} />
+              ))}
+            </div>
+            <div className="h-1.5 w-6 rounded-b-sm bg-[#d4a017]">
+              <div className="mx-auto mt-px h-1 w-1 rounded-full bg-[#8c1f28]" />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -52,6 +79,34 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const [glasses, setGlasses] = useState(profile?.cosmetics?.glasses ?? false)
   const [signText, setSignText] = useState(profile?.cosmetics?.signText ?? '')
   const [saving, setSaving] = useState(false)
+  const [unlockedCodes, setUnlockedCodes] = useState<Set<string>>(new Set())
+  const [hoveredHat, setHoveredHat] = useState<string | null>(null)
+
+  // fetch granted achievements → cosmetic unlocks (server remains authoritative on save)
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const raw = localStorage.getItem('votechor_profile')
+        const token = raw ? (JSON.parse(raw) as { token?: string }).token : undefined
+        if (!token) return
+        const res = await fetch('/api/achievements', { headers: { 'x-vc-token': token } })
+        if (!res.ok) return
+        const data = (await res.json()) as { unlocked?: string[] }
+        if (!cancelled && Array.isArray(data.unlocked)) setUnlockedCodes(new Set(data.unlocked))
+      } catch { /* offline — defaults stay unlocked */ }
+    }
+    void load()
+    return () => { cancelled = true }
+  }, [])
+
+  const level = profile?.level ?? 1
+  const isHatUnlocked = (item: CosmeticItem) => {
+    if (item.unlock.type === 'free') return true
+    if (item.unlock.type === 'level') return level >= item.unlock.level
+    return unlockedCodes.has(item.unlock.code)
+  }
+  const achName = (code: string) => ACHIEVEMENTS.find((a) => a.id === code)?.name ?? code.replaceAll('_', ' ')
 
   const token = () => {
     try {
@@ -86,6 +141,11 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   }
 
   const chooseHat = (id: string) => {
+    const item = HAT_CATALOG.find((h) => h.id === id)
+    if (item && !isHatUnlocked(item)) {
+      notify(`Locked: ${item.label} — ${unlockLabel(item)}`, 'warning')
+      return
+    }
     setHat(id)
     uiActions().updateCosmetics({ hat: id })
     if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, hat: id } })
@@ -174,21 +234,65 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
             </div>
 
             <div className="space-y-2">
-              <div className="text-xs font-black uppercase tracking-wider text-[#1c1a17]">Hat</div>
-              <div className="flex gap-2">
-                {HATS.map((h) => (
-                  <button
-                    key={h.id}
-                    onClick={() => chooseHat(h.id)}
-                    className={`rounded-xl border-2 px-3 py-1.5 text-xs font-black uppercase tracking-tight transition-all ${
-                      hat === h.id
-                        ? 'border-[#8c1f28] bg-[#f2c14e] text-[#1c1a17] shadow-[3px_3px_0_#8c1f28]'
-                        : 'border-[#1c1a17]/60 bg-[#f5efdc] text-[#1c1a17]/70 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5'
-                    }`}
-                  >
-                    {h.label}
-                  </button>
-                ))}
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-black uppercase tracking-wider text-[#1c1a17]">Headgear Locker</div>
+                <div className="text-[10px] font-bold uppercase text-[#1c1a17]/50">
+                  {HATS.filter(isHatUnlocked).length}/{HATS.length} unlocked
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {HATS.map((h) => {
+                  const unlocked = isHatUnlocked(h)
+                  const active = hat === h.id
+                  const criteria =
+                    h.unlock.type === 'level' ? `LEVEL ${h.unlock.level}` :
+                    h.unlock.type === 'achievement' ? achName(h.unlock.code).toUpperCase() : ''
+                  return (
+                    <button
+                      key={h.id}
+                      onClick={() => chooseHat(h.id)}
+                      onMouseEnter={() => setHoveredHat(h.id)}
+                      onMouseLeave={() => setHoveredHat(null)}
+                      onFocus={() => setHoveredHat(h.id)}
+                      onBlur={() => setHoveredHat(null)}
+                      aria-label={`${h.label}${unlocked ? '' : ` (locked — ${unlockLabel(h)})`}`}
+                      className={`relative rounded-xl border-2 p-2 text-left transition-all duration-150 ${
+                        active
+                          ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
+                          : unlocked
+                            ? 'border-[#1c1a17]/60 bg-[#f5efdc] shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5 hover:shadow-[3px_3px_0_#1c1a17]/60'
+                            : 'border-dashed border-[#1c1a17]/40 bg-[#efe6c8]/60 opacity-80 hover:opacity-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-base leading-none ${unlocked ? '' : 'grayscale'}`}>{h.emoji}</span>
+                        <span className={`text-[10px] font-black uppercase leading-tight tracking-tight ${unlocked ? 'text-[#1c1a17]' : 'text-[#1c1a17]/55'}`}>
+                          {h.label}
+                        </span>
+                      </div>
+                      <div className="mt-1 min-h-[22px]">
+                        {unlocked ? (
+                          <span className="flex items-center gap-1 text-[9px] font-bold uppercase text-[#2e6e4e]">
+                            <Unlock className="h-2.5 w-2.5" /> Equippable
+                          </span>
+                        ) : hoveredHat === h.id ? (
+                          <span className="block text-[9px] font-bold uppercase leading-tight text-[#8c1f28]">
+                            {unlockLabel(h)}
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-[9px] font-bold uppercase text-[#1c1a17]/45">
+                            <Lock className="h-2.5 w-2.5" /> {criteria}
+                          </span>
+                        )}
+                      </div>
+                      {!unlocked && (
+                        <span className="absolute right-1.5 top-1.5 text-[#8c1f28]/70">
+                          <Lock className="h-3 w-3" />
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
               <button
                 onClick={toggleGlasses}

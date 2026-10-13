@@ -116,6 +116,7 @@ export interface GameState {
   joining: boolean
   joinError: string | null
   roomCode: string | null
+  matchMode: 'solo' | 'multiplayer' | null
 
   setUIMode: (m: UIMode) => void
   setMenuScreen: (s: MenuScreen) => void
@@ -134,6 +135,7 @@ export interface GameState {
   toggleSquad: (v?: boolean) => void
   setJoining: (v: boolean, err?: string | null) => void
   setRoomCode: (c: string | null) => void
+  setMatchMode: (m: 'solo' | 'multiplayer' | null) => void
 }
 
 const defaultHud: HudState = {
@@ -181,6 +183,7 @@ export const useGameStore = create<GameState>((set) => ({
   joining: false,
   joinError: null,
   roomCode: null,
+  matchMode: null,
 
   setUIMode: (m) => set({ uiMode: m }),
   setMenuScreen: (s) => set({ menuScreen: s }),
@@ -201,6 +204,7 @@ export const useGameStore = create<GameState>((set) => ({
   toggleSquad: (v) => set((st) => ({ squadOpen: v ?? !st.squadOpen })),
   setJoining: (v, err = null) => set({ joining: v, joinError: err }),
   setRoomCode: (c) => set({ roomCode: c }),
+  setMatchMode: (m) => set({ matchMode: m }),
 }))
 
 // ---- controller bridge: UI calls these, engine registers handlers ----

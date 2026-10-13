@@ -70,8 +70,11 @@ export class NetClient {
           transports: ['websocket', 'polling'],
           forceNew: true,
           reconnection: true,
-          reconnectionAttempts: 3,
-          reconnectionDelay: 1200,
+          // keep retrying for as long as the match is running — the reconnect
+          // overlay lets the player quit or fall back to offline sim instead
+          reconnectionAttempts: Infinity,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 3000,
           timeout: 6000,
         })
         this.socket = socket

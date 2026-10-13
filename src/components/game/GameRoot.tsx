@@ -17,6 +17,7 @@ import EndScreen from './EndScreen'
 import TouchControls from './TouchControls'
 import BigMap from './BigMap'
 import SquadPanel from './SquadPanel'
+import ReconnectOverlay from './ReconnectOverlay'
 
 // Global one-shot guards (StrictMode double-mount safe)
 let engineBooted = false
@@ -103,7 +104,8 @@ export default function GameRoot() {
               st.setProfileLoading(false)
             }
           }
-          if (!st.profile) {
+          // re-read FRESH store state — `st` is a stale snapshot once setProfile ran
+          if (!useGameStore.getState().profile) {
             const fallbackName = localStorage.getItem('votechor_name') || `Protester_${Math.floor(1000 + Math.random() * 9000)}`
             const res = await fetch('/api/profile', {
               method: 'POST',
@@ -121,6 +123,22 @@ export default function GameRoot() {
             } else {
               st.notify('The profile office is closed for lunch. You protest as an unregistered citizen.', 'warning')
             }
+          } else if (token) {
+            // stored profile exists — refresh it from the server (XP/unlocks may have changed on another device)
+            try {
+              const rres = await fetch('/api/profile', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-vc-token': token },
+                body: JSON.stringify({}),
+              })
+              if (rres.ok) {
+                const data = (await rres.json()) as { token: string; profile: Parameters<typeof st.setProfile>[0] }
+                if (data?.profile) {
+                  localStorage.setItem('votechor_profile', JSON.stringify({ token: data.token, profile: data.profile }))
+                  st.setProfile(data.profile)
+                }
+              }
+            } catch { /* offline — cached profile stays */ }
           }
           // ---- daily challenge fetch ----
           if (token) {
@@ -165,6 +183,9 @@ export default function GameRoot() {
         @keyframes vc-ping-ring { 0% { transform: scale(0.8); opacity: 0.8; } 100% { transform: scale(1.6); opacity: 0; } }
         @keyframes vc-grain { 0% { transform: translate(0, 0); } 25% { transform: translate(-4%, 3%); } 50% { transform: translate(3%, -4%); } 75% { transform: translate(-3%, -2%); } 100% { transform: translate(0, 0); } }
         @keyframes vc-mote { 0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; } 8% { opacity: var(--mote-o, 0.5); } 92% { opacity: var(--mote-o, 0.5); } 100% { transform: translateY(-110vh) translateX(var(--mote-x, 30px)) rotate(300deg); opacity: 0; } }
+        @keyframes vc-march { from { transform: translateX(-60px); } to { transform: translateX(100vw); } }
+        @keyframes vc-march-bob { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-3px) rotate(2deg); } }
+        @keyframes vc-shine { 0% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(240%) skewX(-18deg); } }
         .vc-scroll::-webkit-scrollbar { width: 10px; }
         .vc-scroll::-webkit-scrollbar-track { background: rgba(28,26,23,0.08); border-radius: 8px; }
         .vc-scroll::-webkit-scrollbar-thumb { background: #8c1f28; border-radius: 8px; border: 2px solid #f5efdc; }
@@ -201,6 +222,7 @@ export default function GameRoot() {
           <BigMap minimapBuffer={minimapBufferRef} />
           <EmoteWheel />
           <QuickMessages />
+          <ReconnectOverlay />
           {uiMode === 'playing' && <TouchControls />}
         </>
       )}

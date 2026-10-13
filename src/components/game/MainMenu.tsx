@@ -53,9 +53,11 @@ function MenuButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`group flex w-full items-center gap-3 rounded-2xl border-2 border-[#1c1a17]/80 px-4 py-3 text-left shadow-[4px_4px_0_#1c1a17] transition-all duration-150 hover:-translate-y-0.5 hover:translate-x-[-1px] hover:shadow-[6px_7px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:cursor-not-allowed disabled:opacity-50 ${tones[tone]}`}
+      className={`group relative flex w-full items-center gap-3 overflow-hidden rounded-2xl border-2 border-[#1c1a17]/80 px-4 py-3 text-left shadow-[4px_4px_0_#1c1a17] transition-all duration-150 hover:-translate-y-0.5 hover:translate-x-[-1px] hover:shadow-[6px_7px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:cursor-not-allowed disabled:opacity-50 ${tones[tone]}`}
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border-2 border-[#1c1a17]/60 bg-[#f2c14e] text-[#1c1a17] sm:h-9 sm:w-9">
+      {/* shine sweep on hover */}
+      <span className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -translate-x-[120%] bg-white/20 opacity-0 [skewX:-18deg] transition-opacity group-hover:opacity-100 group-hover:animate-[vc-shine_0.9s_ease-out]" />
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border-2 border-[#1c1a17]/60 bg-[#f2c14e] text-[#1c1a17] transition-transform duration-150 group-hover:rotate-[8deg] group-hover:scale-110 sm:h-9 sm:w-9">
         <Icon className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2.4} />
       </span>
       <span className="min-w-0">
@@ -170,8 +172,20 @@ function PlayerCard() {
     <div className="vc-paper w-full max-w-xs rounded-2xl border-2 border-[#1c1a17]/80 p-4 shadow-[5px_5px_0_#1c1a17]">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Protester Card</span>
-        <span className="flex items-center gap-1 rounded-full border border-[#1c1a17]/50 bg-[#f2c14e] px-2 py-0.5 text-[10px] font-black uppercase text-[#1c1a17]">
-          <Vote className="h-3 w-3" /> Lv {level}
+        <span
+          className="relative flex h-9 w-9 items-center justify-center rounded-full"
+          title={`${pct}% to level ${level + 1}`}
+          role="img"
+          aria-label={`Level ${level}, ${Math.round(pct)} percent to next level`}
+        >
+          <span
+            className="absolute inset-0 rounded-full border border-[#1c1a17]/60"
+            style={{ background: `conic-gradient(#2e6e4e ${pct}%, #e8e0c8 ${pct}%)` }}
+          />
+          <span className="absolute inset-[3px] rounded-full border border-[#1c1a17]/40 bg-[#f2c14e]" />
+          <span className="relative flex items-center gap-px text-[9px] font-black uppercase leading-none text-[#1c1a17]">
+            <Vote className="h-2.5 w-2.5" /> {level}
+          </span>
         </span>
       </div>
 
@@ -234,6 +248,62 @@ function PlayerCard() {
           <div className="truncate text-[10px] font-semibold text-[#1c1a17]/60">{arch.perk}</div>
         </div>
       </div>
+
+      {/* hat watermark — shows equipped cosmetic on the card itself */}
+      {profile?.cosmetics?.hat && profile.cosmetics.hat !== 'none' && (
+        <div className="mt-2 flex items-center gap-1 border-t border-dashed border-[#1c1a17]/25 pt-2 text-[10px] font-bold uppercase tracking-wide text-[#1c1a17]/60">
+          <span aria-hidden>{HAT_EMOJI[profile.cosmetics.hat] ?? '🎩'}</span>
+          Wearing {profile.cosmetics.hat}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const HAT_EMOJI: Record<string, string> = {
+  cap: '🧢', topi: '🎩', cone: '🦺', crown: '👑', garland: '🌼',
+}
+
+/** Silhouetted protesters endlessly marching along the bottom of the menu. */
+function MarchStrip() {
+  const walkers = [
+    { d: 26, delay: 0, s: 1, flag: true },
+    { d: 32, delay: 6, s: 0.85, flag: false },
+    { d: 22, delay: 13, s: 1.1, flag: false },
+    { d: 35, delay: 20, s: 0.8, flag: false },
+    { d: 28, delay: 27, s: 0.95, flag: true },
+  ]
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-[38px] h-16 overflow-hidden">
+      {/* ground line */}
+      <div className="absolute inset-x-0 bottom-0 border-t border-dashed border-[#1c1a17]/20" />
+      {walkers.map((w, i) => (
+        <div
+          key={i}
+          className="absolute bottom-0"
+          style={{ animation: `vc-march ${w.d}s linear ${w.delay}s infinite`, transform: `scale(${w.s})` }}
+        >
+          <div className="animate-[vc-march-bob_0.6s_ease-in-out_infinite]">
+            {/* sign-carrying arm */}
+            {w.flag ? (
+              <div className="absolute -top-9 left-1/2 h-9 w-0.5 -translate-x-1/2 bg-[#1c1a17]/75">
+                <div className="absolute -left-3 -top-2 flex h-4 w-7 -rotate-6 items-center justify-center rounded-[2px] border border-[#1c1a17]/75 bg-[#b54a32]/85 text-[6px] font-black uppercase text-[#f5efdc]">
+                  Chai!
+                </div>
+              </div>
+            ) : null}
+            {/* head */}
+            <div className="mx-auto h-3 w-3 rounded-full bg-[#1c1a17]/80" />
+            {/* torso */}
+            <div className="mx-auto h-6 w-4 rounded-t-sm bg-[#1c1a17]/80" />
+            {/* legs */}
+            <div className="flex justify-center gap-1">
+              <div className="h-4 w-1.5 -rotate-12 bg-[#1c1a17]/80" />
+              <div className="h-4 w-1.5 rotate-12 bg-[#1c1a17]/80" />
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -395,9 +465,12 @@ export default function MainMenu() {
         </div>
       </div>
 
+      {/* Endlessly marching protesters (above the footer) */}
+      <MarchStrip />
+
       {/* Footer satire disclaimer — mt-auto keeps it pinned on short viewports */}
       <footer className="relative shrink-0 border-t-2 border-[#1c1a17]/80 bg-[#1c1a17] px-4 py-2">
-        <p className="mx-auto max-w-5xl text-center text-[10px] font-bold uppercase tracking-wider text-[#f5efdc]/70 sm:text-[11px]">
+        <p className="relative mx-auto max-w-5xl text-center text-[10px] font-bold uppercase tracking-wider text-[#f5efdc]/70 sm:text-[11px]">
           VoteChor is a work of satire. All politicians, committees and samosas are fictional.
         </p>
       </footer>

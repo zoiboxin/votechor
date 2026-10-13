@@ -168,3 +168,42 @@ Stage Summary:
 - Round 2 shipped: Daily Challenges (retention loop), compass navigation, world-space juice popups, boss cinematic, film-grain/vignette dressing
 - Verified: daily API accumulation + bonus grant, compass markers w/ live distances, cinematic trigger/release, popup rendering, menu card
 - Risks/next: compass markers could include chai/firstaid when needed (kind exists); consider zone-entry vignette tinting; game-server restart needed if shared world-def patrol changes again
+
+---
+Task ID: 5
+Agent: Z.ai Code (cron webDevReview round 3)
+Task: QA assessment + cosmetic unlock system + reconnect overlay + onboarding hints + styling polish + profile-bootstrap bugfix
+
+Work Log:
+- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002, Caddy :81); menu/customize/solo boot/multiplayer connect/movement re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development over bugfixing (one major bug surfaced later, see below)
+- BUGFIX (major) — profile bootstrap created a duplicate player on EVERY page reload:
+  * GameRoot.tsx captured `const st = useGameStore.getState()` then checked `st.profile` AFTER calling `st.setProfile(...)` — stale snapshot (zustand set replaces the state object) → always truthy-falsy wrong → POST /api/profile created a fresh row named Protester_XXXX each reload, clobbering localStorage profile (all progression wiped per reload)
+  * DB evidence: 12 duplicate Protester_7244 rows; fixed by checking fresh `useGameStore.getState().profile` + added server refresh path (POST with x-vc-token + empty body) so stored profiles re-sync XP/unlocks on boot; cleaned 11 dup rows from DB
+  * Verified: profile (UnlockTest LV3) now survives reload; DB count stable at 7
+- FEATURE — Cosmetic unlock system (server-authoritative, per master prompt §16):
+  * src/lib/cosmetics.ts (new): 6-hat catalog — none/cap free, topi LV3, garland→medic, cone→traffic_cone, crown→boss_slayer; pure `unlockedHatIds`/`hatIsUnlocked` helpers shared by API + UI
+  * /api/profile: validates requested hat vs player level + granted PlayerAchievements → 403 "Locked — Reach level 3" / "Locked — Earn medal: BOSS SLAYER"; rejects unknown ids; response now includes unlockedHats[]
+  * character.ts: 3D hat renders — traffic cone (cone+white band+base), Crown of Chaos (metallic gold band + 5 spikes + red/green jewels), marigold garland (two torus rings on torsoPivot)
+  * CharacterSelect.tsx: "Headgear Locker" grid (6 cards) with lock icons, criteria labels (hover/focus reveals full unlock text), X/6 unlocked counter, dashed grayscale locked cards, locked-click warning toast; CSS pixel previews for cone/crown/garland; fetches /api/achievements for unlocked codes
+  * Verified via curl: locked crown/topi → 403; level-up to LV3 → topi equips; unlockedHats grows; in-game 3D screenshots confirm crown/cone/garland all render on the rig
+- FEATURE — Reconnect system (master prompt §15 "reconnecting screens"):
+  * ReconnectOverlay.tsx (new): full-screen poster overlay — "SIGNAL LOST" rubber stamp, WifiOff badge, "THE COMMITTEE CUT OUR LINE", spinner strip, [Keep Playing Offline] [Quit to Menu]; auto-hides when connection returns
+  * store: +matchMode field (set in startMatch, cleared on leave); game.ts: lastRoomCode + reconnectNotified tracking; multiplayer onDisconnect flags reconnect; onConnect auto-rejoins the room (name/archetype/cosmetics/roomCode)
+  * net.ts: reconnectionAttempts 3→Infinity, reconnectionDelayMax 3000 (retry for as long as the match lives)
+  * End-to-end verified: kill -9 server mid-match → overlay appears (conn=false) → server restart → socket auto-reconnects → auto-rejoin (new playerId) → overlay hides, match continues
+- FEATURE — First-match onboarding: one-time 4-tip toast sequence (compass→tokens, E/Q interact, checkpoints, boss gate) at 2.5s/9.5s/16.5s/23.5s, localStorage('votechor_onboarded') gated, timers cleared on leave; verified firing in-game
+- STYLING (mandatory polish):
+  * PlayerCard: conic-gradient XP progress RING around level badge (was flat pill) + "WEARING <hat>" emoji watermark row
+  * MenuButton: shine sweep on hover (vc-shine keyframe) + icon rotate/scale micro-interaction
+  * MarchStrip (new): 5 silhouetted protesters (2 carrying "CHAI!" signs) endlessly marching along the menu bottom above the footer (vc-march + vc-march-bob keyframes, ground line) — scaled/staggered
+  * ReconnectOverlay/locker/lock cards all use the protest-poster system (paper, hard shadows, stamps)
+- OPS FINDINGS (important for future rounds):
+  * Sandbox reaps background processes spawned plainly (setsid alone died silently twice in ~2min, no log trace). WORKING pattern: `( setsid bun --hot index.ts > /tmp/gs.log 2>&1 < /dev/null & )` from mini-services/game-server — double-fork subshell survived >10min
+  * agent-browser WebGL contexts exhaust after many game reloads in one session ("Context Lost" + blocked creation) → `agent-browser close --all` resets before 3D QA
+  * game.ts eval clicks need case-insensitive /play solo/i (CSS uppercase ≠ DOM text)
+- All checks green: tsc (game/UI/lib/api), eslint, no console errors; services running (Next :3000, game-server :3002 via double-fork, Caddy :81)
+
+Stage Summary:
+- Round 3 shipped: server-validated cosmetic unlocks (6 hats, 3 new 3D renders), reconnect overlay + auto-rejoin with infinite retry, onboarding tips, XP ring/marchers/shine styling, and a major progression-wiping bootstrap bug fixed + DB deduped
+- Verified end-to-end in browser: locks render + enforced by API, all hats render in 3D, kill→overlay→restart→auto-rejoin loop, profile persistence across reloads
+- Risks/next: CharacterSelect achievement fetch is mount-once (unlock doesn't live-refresh mid-session — reload picks it up); remote-player new-hat rendering untested with 2 clients (flows through same rig code); consider cosmetics section in HowToPlay; game-server restarts must use the double-fork pattern

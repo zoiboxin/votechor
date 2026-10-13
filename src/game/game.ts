@@ -60,6 +60,9 @@ export class Game {
 
   private mode: 'solo' | 'multiplayer' | null = null
   private offline = false
+  private lastRoomCode: string | null = null
+  private reconnectNotified = false
+  private onboardingTimers: ReturnType<typeof setTimeout>[] = []
   private serverMatchStart: number | null = null
   private running = false
   private worldTime = 0
@@ -147,12 +150,34 @@ export class Game {
       onPing: (ms) => this.store.patchHud({ ping: ms }),
       onDisconnect: () => {
         if (this.running && !this.offline) {
-          this.store.notify('Connection lost — switching to offline mode', 'warning')
+          if (this.mode === 'multiplayer') {
+            this.reconnectNotified = true
+            this.store.notify('Connection lost — attempting to reconnect…', 'warning')
+          } else {
+            this.store.notify('Connection lost — switching to offline mode', 'warning')
+          }
           this.offline = true
           this.store.patchHud({ connection: 'offline' })
         }
       },
-      onConnect: () => { if (this.running) this.store.patchHud({ connection: 'connected' }) },
+      onConnect: () => {
+        if (this.running) {
+          this.store.patchHud({ connection: 'connected' })
+          // auto-rejoin after mid-match reconnect (server dropped our session)
+          if (this.mode === 'multiplayer' && this.reconnectNotified) {
+            this.reconnectNotified = false
+            const profile = useGameStore.getState().profile
+            this.net.join({
+              name: profile?.name ?? 'Protester',
+              archetype: this.archetype,
+              roomCode: this.lastRoomCode,
+              cosmetics: profile?.cosmetics as Record<string, unknown> | undefined,
+            })
+            this.offline = false
+            this.store.notify('Reconnected to the protest!', 'squad')
+          }
+        }
+      },
     }
 
     // store subscription for settings
@@ -197,6 +222,10 @@ export class Game {
     const store = useGameStore.getState()
     store.setUIMode('loading')
     this.mode = mode
+    store.setMatchMode(mode)
+    this.lastRoomCode = roomCode
+    this.reconnectNotified = false
+    this.clearOnboarding()
     this.matchEnded = false
     this.endHandled = false
     this.tokens = 0
@@ -276,6 +305,31 @@ export class Game {
     this.input.setEnabled(true)
     this.running = true
     store.notify('The votes are missing. The protest is on. Everybody run!', 'info')
+    this.maybeOnboard()
+  }
+
+  /** One-time contextual onboarding hints for brand-new protesters. */
+  private maybeOnboard() {
+    try {
+      if (localStorage.getItem('votechor_onboarded')) return
+      const tips: [number, string, 'info' | 'squad' | 'warning' | 'boss'][] = [
+        [2500, 'Tip: follow the compass up top — gold markers are stolen vote tokens', 'info'],
+        [9500, 'Tip: press E near tokens & items to grab them · Q throws a distraction', 'squad'],
+        [16500, 'Tip: checkpoints save progress, heal you, and free detained squadmates', 'warning'],
+        [23500, 'Tip: 12 tokens unlock the boss gate in the Government District. Good luck!', 'boss'],
+      ]
+      for (const [delay, text, kind] of tips) {
+        this.onboardingTimers.push(setTimeout(() => {
+          if (this.running) useGameStore.getState().notify(text, kind)
+        }, delay))
+      }
+      localStorage.setItem('votechor_onboarded', '1')
+    } catch { /* private browsing — skip */ }
+  }
+
+  private clearOnboarding() {
+    for (const t of this.onboardingTimers) clearTimeout(t)
+    this.onboardingTimers = []
   }
 
   leaveMatch() {
@@ -283,11 +337,13 @@ export class Game {
     this.net.leave()
     this.running = false
     this.input.setEnabled(false)
+    this.clearOnboarding()
     AudioManager.setTheme('menu')
     AudioManager.setCrowdLevel(0.25)
     const st = useGameStore.getState()
     st.setUIMode('menu')
     st.setMenuScreen('main')
+    st.setMatchMode(null)
   }
 
   // ================= server ack & sync =================

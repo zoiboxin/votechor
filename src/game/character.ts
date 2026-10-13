@@ -23,6 +23,11 @@ const G = {
   beard: new THREE.SphereGeometry(0.14, 8, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
   lathi: new THREE.CylinderGeometry(0.025, 0.035, 0.95, 6),
   hat: new THREE.CylinderGeometry(0.16, 0.22, 0.12, 10),
+  cone: new THREE.CylinderGeometry(0.02, 0.15, 0.24, 10),
+  coneBand: new THREE.CylinderGeometry(0.105, 0.125, 0.045, 10),
+  crownBand: new THREE.CylinderGeometry(0.155, 0.17, 0.09, 8),
+  crownSpike: new THREE.ConeGeometry(0.045, 0.09, 4),
+  garland: new THREE.TorusGeometry(0.17, 0.04, 6, 14),
 }
 
 export interface RigOptions {
@@ -31,7 +36,7 @@ export interface RigOptions {
   scale?: number
   name?: string
   nameColor?: string
-  hat?: string // 'cap' | 'topi' | 'none'
+  hat?: string // 'cap' | 'topi' | 'cone' | 'crown' | 'garland' | 'none'
   glasses?: boolean
   signText?: string
   npcType?: 'police' | 'security' | 'guard'
@@ -106,6 +111,52 @@ export class CharacterRig {
       const hat = new THREE.Mesh(G.hat, mat('#f0e6d2'))
       hat.position.y = 0.24
       this.headPivot.add(hat)
+    } else if (opts.hat === 'cone') {
+      // Traffic Cone of Shame — earned through 10 glorious detentions
+      const cone = new THREE.Mesh(G.cone, mat('#e8641c'))
+      cone.position.y = 0.3
+      cone.castShadow = true
+      this.headPivot.add(cone)
+      const band = new THREE.Mesh(G.coneBand, mat('#f5efdc'))
+      band.position.y = 0.26
+      this.headPivot.add(band)
+      const base = new THREE.Mesh(G.coneBand, mat('#c8500f'))
+      base.position.y = 0.19
+      base.scale.set(1.15, 0.6, 1.15)
+      this.headPivot.add(base)
+    } else if (opts.hat === 'crown') {
+      // Crown of Chaos — gold with jewels, for committee dissolvers
+      const band = new THREE.Mesh(G.crownBand, mat('#d4a017', false))
+      band.material.metalness = 0.55
+      band.material.roughness = 0.35
+      band.position.y = 0.24
+      band.castShadow = true
+      this.headPivot.add(band)
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2
+        const spike = new THREE.Mesh(G.crownSpike, mat('#d4a017', false))
+        spike.material.metalness = 0.55
+        spike.material.roughness = 0.35
+        spike.position.set(Math.cos(a) * 0.13, 0.3, Math.sin(a) * 0.13)
+        this.headPivot.add(spike)
+        const jewel = new THREE.Mesh(G.hand, mat(i % 2 ? '#8c1f28' : '#2e6e4e', false))
+        jewel.scale.setScalar(0.55)
+        jewel.position.set(Math.cos(a) * 0.165, 0.24, Math.sin(a) * 0.165)
+        this.headPivot.add(jewel)
+      }
+    } else if (opts.hat === 'garland') {
+      // Marigold mala around the neck — for squad medics
+      const mala = new THREE.Mesh(G.garland, mat('#f2a541'))
+      mala.position.y = 0.52
+      mala.rotation.x = Math.PI / 2.6
+      mala.scale.set(1.25, 1, 1.1)
+      mala.castShadow = true
+      this.torsoPivot.add(mala)
+      const malaBack = new THREE.Mesh(G.garland, mat('#e8912c'))
+      malaBack.position.y = 0.44
+      malaBack.rotation.x = Math.PI / 2.2
+      malaBack.scale.set(1.2, 1, 0.9)
+      this.torsoPivot.add(malaBack)
     }
     if (opts.glasses) {
       const gl = new THREE.Mesh(G.glasses, mat('#222', false))
