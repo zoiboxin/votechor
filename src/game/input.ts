@@ -101,6 +101,13 @@ export class InputManager {
     return [dx, dy]
   }
 
+  /** Feed raw look deltas (touch drag-to-look). Applies sensitivity + invertY like mouse. */
+  addLook(dx: number, dy: number) {
+    if (!this.enabled) return
+    this.state.lookDx += dx * 0.0022 * this.sensitivity
+    this.state.lookDy += dy * 0.0022 * this.sensitivity * (this.invertY ? -1 : 1)
+  }
+
   setEnabled(v: boolean) {
     this.enabled = v
     if (!v) { this.keys.clear(); this.sync() }

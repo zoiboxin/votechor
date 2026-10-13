@@ -2,7 +2,7 @@
 // PhotoHud — minimal viewfinder UI shown while photo mode is active.
 // All real HUD is hidden; only a frame border, film info strip, and three controls remain.
 import { useGameStore, uiActions } from '@/lib/game-store'
-import { Camera, Aperture, Download, X } from 'lucide-react'
+import { Camera, Aperture, Download, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const FILTER_NAMES = ['Natural', 'Poster Punch', 'Vintage Press', 'Committee Noir']
@@ -36,6 +36,23 @@ export default function PhotoHud() {
         >
           <X className="h-3.5 w-3.5" strokeWidth={3} /> Exit
         </button>
+        <div className="flex items-center overflow-hidden rounded-xl border-2 border-[#1c1a17]/70 bg-[#f5efdc]">
+          <button
+            onClick={() => uiActions().photoZoom(-1)}
+            title="Zoom out (mouse wheel)"
+            className="flex h-8 w-8 items-center justify-center text-[#1c1a17] transition-colors hover:bg-[#f2c14e] active:bg-[#e0a63a]"
+          >
+            <ZoomOut className="h-4 w-4" strokeWidth={3} />
+          </button>
+          <span className="h-5 w-px bg-[#1c1a17]/25" />
+          <button
+            onClick={() => uiActions().photoZoom(1)}
+            title="Zoom in (mouse wheel)"
+            className="flex h-8 w-8 items-center justify-center text-[#1c1a17] transition-colors hover:bg-[#f2c14e] active:bg-[#e0a63a]"
+          >
+            <ZoomIn className="h-4 w-4" strokeWidth={3} />
+          </button>
+        </div>
         <button
           onClick={() => uiActions().photoFilter()}
           title="Cycle filter (O)"
@@ -59,7 +76,7 @@ export default function PhotoHud() {
         transition={{ delay: 0.6 }}
         className="absolute right-3 top-3 hidden rounded-xl border border-[#f5efdc]/30 bg-[#1c1a17]/65 px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-[#f5efdc]/80 backdrop-blur-sm sm:right-5 sm:top-5 sm:block"
       >
-        P exit · O filter · K snapshot
+        P exit · O filter · K snapshot · wheel zoom
       </motion.div>
     </div>
   )

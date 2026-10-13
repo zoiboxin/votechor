@@ -14,6 +14,7 @@ import { BossClient } from './boss'
 import { NetClient, type JoinAck } from './net'
 import { AudioManager } from './audio'
 import { FxSystem } from './fx'
+import { SpeechBubbleSystem } from './bubbles'
 import { buildWorldDef } from './shared/world-def'
 import { createNpcStates, tickNpc, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
 import { createBossBrain, tickBoss, grabBallot, depositBallot, registerBossHit, type BossBrain } from './shared/boss-brain'
@@ -31,6 +32,16 @@ export const QUICK_MESSAGES = [
 ]
 
 export const EMOTES = ['wave', 'salute', 'dance', 'facepalm', 'flex', 'cry']
+
+/** Shown in speech bubbles above the emoting player's head. */
+export const EMOTE_LABELS: Record<string, string> = {
+  wave: 'Hello, democracy!',
+  salute: 'Salute to the cause!',
+  dance: 'Protest dance move!',
+  facepalm: 'Not this again…',
+  flex: 'Strong together!',
+  cry: 'The votes… they are gone…',
+}
 
 interface MatchStats {
   tokens: number
@@ -55,6 +66,9 @@ export class Game {
   private items!: ItemSystem
   private bossClient = new BossClient()
   private fx = new FxSystem()
+  private playerBubbles = new SpeechBubbleSystem()
+  private lastHunted = false
+  private photoWheelHandler: ((e: WheelEvent) => void) | null = null
   private net = new NetClient()
   private world = buildWorldDef()
 
@@ -116,6 +130,7 @@ export class Game {
     this.engine.scene.add(this.worldRenderer.group)
     this.engine.scene.add(this.bossClient.group)
     this.engine.scene.add(this.fx.group)
+    this.engine.scene.add(this.playerBubbles.group)
 
     this.input = new InputManager(canvas)
     this.input.onOneShot = (a) => this.handleOneShot(a)
@@ -145,6 +160,7 @@ export class Game {
       onCheckpoint: (cp, byName, total) => this.onCheckpoint(cp, byName, total),
       onProjectile: (p) => this.items.spawnRemoteProjectile(p.id, p.type, p.x, p.y, p.z, p.vx, p.vy, p.vz),
       onEmote: (playerId, emote) => this.playRemoteEmote(playerId, emote),
+      onQuickMsg: (playerId, msgId) => this.onRemoteQuickMsg(playerId, msgId),
       onPlayerLeft: (playerId, name) => { this.removeRemote(playerId); this.store.notify(`${name} left the protest`, 'info') },
       onPlayerJoined: (_playerId, name) => this.store.notify(`${name} joined the protest!`, 'squad'),
       onHealth: (playerId, health, dazed) => this.onRemoteHealth(playerId, health, dazed),
@@ -209,20 +225,27 @@ export class Game {
       useItem: (uid) => this.useInventoryItem(uid),
       dropItem: (uid) => this.dropInventoryItem(uid),
       sendEmote: (emote) => this.playEmote(emote),
-      sendQuickMessage: (id) => { this.net.quickMsg(id); this.store.notify(QUICK_MESSAGES[id] ?? '', 'squad') },
+      sendQuickMessage: (id) => {
+        const msg = QUICK_MESSAGES[id] ?? ''
+        this.net.quickMsg(id)
+        this.sayBubble('me', msg)
+        this.store.notify(`You: ${msg}`, 'squad')
+      },
       respawnRequest: () => {},
       photoToggle: () => this.togglePhotoMode(),
       photoFilter: () => this.cyclePhotoFilter(),
       photoSnapshot: () => this.takeSnapshot(),
+      photoZoom: (dir) => this.photoZoom(dir),
     })
 
     this.ensurePhotoKeyHandler()
-    // speech bubbles hide when the speaker is occluded from the camera
+    // speech bubbles hide when the speaker is occluded from the camera (NPC + player bubbles)
     this.npcs.bubbles.occlusionCheck = (x, y, z) =>
       this.physics.raycastBlocked(
         this.engine.camera.position.x, this.engine.camera.position.y, this.engine.camera.position.z,
         x, y, z,
       )
+    this.playerBubbles.occlusionCheck = this.npcs.bubbles.occlusionCheck
     this.engine.start()
     AudioManager.resume()
     AudioManager.startCrowd()
@@ -261,7 +284,7 @@ export class Game {
     this.worldRenderer.setBossGateOpen(false)
     this.bossClient.hideAll()
     this.fx.clear()
-    this.bossCinematic = { active: false, t: 0, fired: false }
+    this.playerBubbles.clear()
     for (const it of this.items.items) { it.taken = false; it.group.visible = true; it.respawnAt = 0 }
     for (const [id] of this.remotePlayers) this.removeRemote(id)
     this.localBoss = createBossBrain(this.world.bossArena)
@@ -355,6 +378,9 @@ export class Game {
     this.input.setEnabled(false)
     this.clearOnboarding()
     this.npcs.bubbles.clear()
+    this.playerBubbles.clear()
+    this.lastHunted = false
+    useGameStore.getState().patchHud({ hunted: false })
     AudioManager.setTheme('menu')
     AudioManager.setCrowdLevel(0.25)
     const st = useGameStore.getState()
@@ -498,6 +524,7 @@ export class Game {
     if (!r) return
     const map: Record<string, AnimName> = { wave: 'celebrate', dance: 'celebrate', salute: 'idle', facepalm: 'dazed', flex: 'celebrate', cry: 'dazed' }
     r.anim = map[emote] ?? 'celebrate'
+    this.sayBubble(playerId, EMOTE_LABELS[emote] ?? emote)
   }
 
   // ================= input & actions =================
@@ -611,7 +638,28 @@ export class Game {
     if (!this.player) return
     this.player.playAnim(emote === 'cry' || emote === 'facepalm' ? 'dazed' : 'celebrate', 1.6)
     this.net.emote(emote)
+    this.sayBubble('me', EMOTE_LABELS[emote] ?? emote)
     useGameStore.getState().toggleEmoteWheel(false)
+  }
+
+  /** Speech bubble above a player (local 'me' or a remote rig). */
+  private sayBubble(key: string, text: string) {
+    if (!text) return
+    const getPos = (): THREE.Vector3 | null => {
+      if (key === 'me') return this.player ? this.player.pos.clone() : null
+      const r = this.remotePlayers.get(key)
+      return r ? r.rig.group.position.clone() : null
+    }
+    this.playerBubbles.say(key, text, getPos, key === 'me' ? 3.2 : 4)
+  }
+
+  private onRemoteQuickMsg(playerId: string, msgId: number) {
+    if (playerId === this.net.playerId) return // server relays to the whole room, incl. sender
+    const msg = QUICK_MESSAGES[msgId]
+    if (!msg) return
+    const r = this.remotePlayers.get(playerId)
+    if (r) this.sayBubble(playerId, msg)
+    this.store.notify(`${r?.name ?? 'Protester'}: ${msg}`, 'squad')
   }
 
   private handleVehicleHit(kind: string, x: number, z: number, dmg: number) {
@@ -920,8 +968,9 @@ export class Game {
   private renderUpdate(dt: number) {
     if (!this.player) return
     const store = useGameStore.getState()
-    // fx update (floating popups)
+    // fx update (floating popups) + player speech bubbles (emotes, quick messages)
     this.fx.update(dt)
+    this.playerBubbles.update(dt)
 
     // boss intro cinematic — orbit the boss once on activation
     this.updateBossCinematic(dt)
@@ -958,7 +1007,7 @@ export class Game {
     }
     if (this.photoMode) {
       this.camRig.yaw -= dt * 0.1 // slow cinematic drift when the mouse is still
-      this.camRig.targetDistance = 7.2
+      // NOTE: targetDistance is owned by photoZoom (wheel/buttons); do not reset it here
       this.camRig.update(dt, focus, 0, 0)
     } else if (!this.bossCinematic.active) {
       this.camRig.update(dt, focus, 0, 0)
@@ -982,8 +1031,12 @@ export class Game {
         if (idx === 2) AudioManager.play('whistleFar')
       }
     }
-    // adaptive music: chase when chased
+    // adaptive music: chase when chased — also drives the WANTED alert
     const chased = this.npcs.nearestChaserDistance(focus.x, focus.z) < 18
+    if (chased !== this.lastHunted) {
+      this.lastHunted = chased
+      if (!this.player.isDetained) useGameStore.getState().patchHud({ hunted: chased })
+    }
     if (this.bossActiveLocal) AudioManager.setTheme('boss')
     else if (chased) AudioManager.setTheme('chase')
     else if (this.running) AudioManager.setTheme('ambient')
@@ -1060,6 +1113,16 @@ export class Game {
         if (d < 130 && (!bestFa || d < bestFa.d)) bestFa = { d, x: it.def.x, z: it.def.z }
       }
       if (bestFa) markers.push({ kind: 'firstaid', ...rel(bestFa.x, bestFa.z) })
+    }
+    // running on fumes? point to the nearest chai stall (unless carrying chai)
+    if (p.stamina < 30 && !this.inventory.some(i => i.type === 'chai')) {
+      let bestChai: { d: number; x: number; z: number } | null = null
+      for (const it of this.items.items) {
+        if (it.taken || it.def.type !== 'chai') continue
+        const d = Math.hypot(it.def.x - p.pos.x, it.def.z - p.pos.z)
+        if (d < 120 && (!bestChai || d < bestChai.d)) bestChai = { d, x: it.def.x, z: it.def.z }
+      }
+      if (bestChai) markers.push({ kind: 'chai', ...rel(bestChai.x, bestChai.z) })
     }
     // next unactivated checkpoint
     const nextCp = this.world.checkpoints.find(cp => !this.activatedCheckpoints.has(cp.id))
@@ -1295,11 +1358,20 @@ export class Game {
       }
     }
     window.addEventListener('keydown', this.photoKeyHandler)
+    // wheel zoom while in photo mode
+    this.photoWheelHandler = (e: WheelEvent) => {
+      if (!this.photoMode || useGameStore.getState().uiMode !== 'playing') return
+      e.preventDefault()
+      this.photoZoom(e.deltaY > 0 ? -1 : 1)
+    }
+    window.addEventListener('wheel', this.photoWheelHandler, { passive: false })
   }
 
   private removePhotoKeyHandler() {
     if (this.photoKeyHandler) window.removeEventListener('keydown', this.photoKeyHandler)
     this.photoKeyHandler = null
+    if (this.photoWheelHandler) window.removeEventListener('wheel', this.photoWheelHandler)
+    this.photoWheelHandler = null
   }
 
   togglePhotoMode() {
@@ -1313,7 +1385,13 @@ export class Game {
     if (this.player.state === 'normal') this.player.state = 'frozen'
     this.camRig.targetDistance = 7.2
     AudioManager.play('uiClick')
-    store.notify('PHOTO MODE — mouse orbits · O filter · K snapshot · P exit', 'info')
+    store.notify('PHOTO MODE — mouse orbits · wheel/buttons zoom · O filter · K snapshot · P exit', 'info')
+  }
+
+  /** Zoom the photo-mode camera (buttons or wheel). */
+  photoZoom(dir: number) {
+    if (!this.photoMode) return
+    this.camRig.targetDistance = Math.max(2.2, Math.min(11, this.camRig.targetDistance - dir * 1.2))
   }
 
   private exitPhotoMode(restorePlayer: boolean) {
@@ -1372,6 +1450,11 @@ function randomOf<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.le
 export function touchBridge() {
   const g = getGame()
   return {
+    look: (dx: number, dy: number) => {
+      const input = g['input'] as InputManager | undefined
+      if (!input) return
+      input.addLook(dx, dy)
+    },
     move: (x: number, y: number) => {
       const input = g['input'] as InputManager | undefined
       if (!input) return

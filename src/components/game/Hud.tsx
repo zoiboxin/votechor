@@ -6,7 +6,7 @@ import { uiActions, ZONE_ACCENTS } from '@/lib/game-store'
 import { ITEM_CONFIG, CAPTURE_MESSAGES } from '@/game/shared/constants'
 import {
   Heart, Zap, Vote, Users, Wifi, WifiOff, Map as MapIcon, Hand, Star,
-  Clock, Package, Footprints, Gauge,
+  Clock, Package, Footprints, Gauge, Siren,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -24,18 +24,19 @@ const CONNECTION_STYLE = {
 
 function StatBar({ value, max, color, icon: Icon }: { value: number; max: number; color: string; icon: typeof Heart }) {
   const pct = Math.max(0, Math.min(100, (value / Math.max(1, max)) * 100))
+  const low = pct < 30
   return (
     <div className="flex items-center gap-1.5">
-      <span className="flex h-5 w-5 items-center justify-center rounded-md border border-[#1c1a17]/70 bg-[#1c1a17]">
+      <span className={`flex h-5 w-5 items-center justify-center rounded-md border border-[#1c1a17]/70 bg-[#1c1a17] ${low ? 'animate-pulse' : ''}`}>
         <Icon className="h-3 w-3 text-[#f5efdc]" />
       </span>
-      <div className="h-3.5 w-36 overflow-hidden rounded-full border-2 border-[#1c1a17]/80 bg-[#1c1a17]/30">
+      <div className={`h-3.5 w-36 overflow-hidden rounded-full border-2 border-[#1c1a17]/80 bg-[#1c1a17]/30 ${low ? 'animate-[vc-blink_0.8s_ease-in-out_infinite]' : ''}`}>
         <div
-          className="h-full rounded-full transition-[width] duration-200"
+          className={`h-full rounded-full transition-[width] duration-200 ${low ? 'animate-pulse' : ''}`}
           style={{ width: `${pct}%`, background: color }}
         />
       </div>
-      <span className="w-8 text-right text-[10px] font-black tabular-nums text-[#1c1a17]">{Math.round(value)}</span>
+      <span className={`w-8 text-right text-[10px] font-black tabular-nums ${low ? 'text-[#c9482e]' : 'text-[#1c1a17]'}`}>{Math.round(value)}</span>
     </div>
   )
 }
@@ -198,6 +199,30 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
       {lowHealth && !hud.detained && (
         <div className="absolute inset-0 animate-[vc-blink_1.4s_ease-in-out_infinite] shadow-[inset_0_0_90px_rgba(140,31,40,0.6)]" />
       )}
+      {/* hunted vignette (police/security chasing) */}
+      {hud.hunted && !hud.detained && !lowHealth && (
+        <div className="absolute inset-0 animate-[vc-blink_0.85s_ease-in-out_infinite] shadow-[inset_0_0_74px_rgba(201,47,47,0.42)]" />
+      )}
+
+      {/* WANTED — chase alarm stamp */}
+      <AnimatePresence>
+        {hud.hunted && !hud.detained && (
+          <motion.div
+            key="wanted"
+            initial={{ opacity: 0, scale: 1.7, rotate: -6 }}
+            animate={{ opacity: 1, scale: 1, rotate: -2 }}
+            exit={{ opacity: 0, scale: 0.7, rotate: 2, transition: { duration: 0.18 } }}
+            transition={{ type: 'spring', stiffness: 340, damping: 17 }}
+            className="absolute left-1/2 top-[30%] z-10 -translate-x-1/2"
+          >
+            <div className="vc-stamp-texture flex animate-pulse items-center gap-2 rounded-lg border-[3px] border-[#8c1f28] bg-[#8c1f28]/92 px-4 py-1.5">
+              <Siren className="h-4 w-4 text-[#f2c14e]" strokeWidth={2.6} />
+              <span className="text-sm font-black uppercase tracking-[0.3em] text-[#f5efdc]">Wanted</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-[#f2c14e]">Run!</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ---------- top-left: vitals ---------- */}
       <div className="absolute left-2 top-2 origin-top-left space-y-1.5 scale-90 sm:left-3 sm:top-3 sm:scale-100">

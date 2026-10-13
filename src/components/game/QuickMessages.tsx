@@ -13,7 +13,6 @@ const QUICK_MESSAGES = [
 
 export default function QuickMessages() {
   const [open, setOpen] = useState(false)
-  const notify = useGameStore((s) => s.notify)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -31,7 +30,6 @@ export default function QuickMessages() {
 
   const send = (i: number) => {
     uiActions().sendQuickMessage(i)
-    notify(`You: ${QUICK_MESSAGES[i]}`, 'squad')
     setOpen(false)
   }
 

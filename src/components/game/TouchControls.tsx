@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ChevronUp, Wind, ChevronsDown, Hand, Crosshair } from 'lucide-react'
+import { ChevronUp, Wind, ChevronsDown, Hand, Crosshair, Eye } from 'lucide-react'
 
 type Bridge = {
   move: (x: number, y: number) => void
   end: () => void
+  look: (dx: number, dy: number) => void
   btn: (name: 'sprint' | 'jump' | 'slide' | 'interact' | 'throw', down: boolean) => void
 }
 
@@ -34,8 +35,11 @@ export default function TouchControls() {
   const [isTouch] = useState(() => 'ontouchstart' in window || navigator.maxTouchPoints > 0)
   const [joyActive, setJoyActive] = useState(false)
   const [knob, setKnob] = useState({ x: 0, y: 0 })
+  const [lookUsed, setLookUsed] = useState(false)
   const joyRef = useRef<HTMLDivElement>(null)
   const pointerId = useRef<number | null>(null)
+  const lookId = useRef<number | null>(null)
+  const lookLast = useRef<{ x: number; y: number } | null>(null)
 
   useEffect(() => {
     if (isTouch) void loadBridge()
@@ -76,6 +80,30 @@ export default function TouchControls() {
     bridge()?.end()
   }
 
+  // ---- right-side drag-to-look (camera orbit) ----
+  const LOOK_GAIN = 2.6
+  const onLookDown = (e: React.PointerEvent) => {
+    if (lookId.current !== null) return
+    lookId.current = e.pointerId
+    lookLast.current = { x: e.clientX, y: e.clientY }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  const onLookMove = (e: React.PointerEvent) => {
+    if (lookId.current !== e.pointerId || !lookLast.current) return
+    const dx = e.clientX - lookLast.current.x
+    const dy = e.clientY - lookLast.current.y
+    lookLast.current = { x: e.clientX, y: e.clientY }
+    if (dx || dy) {
+      bridge()?.look(dx * LOOK_GAIN, dy * LOOK_GAIN)
+      if (!lookUsed) setLookUsed(true)
+    }
+  }
+  const onLookUp = (e: React.PointerEvent) => {
+    if (lookId.current !== e.pointerId) return
+    lookId.current = null
+    lookLast.current = null
+  }
+
   const holdBtn = (name: 'sprint' | 'interact') => ({
     onPointerDown: (e: React.PointerEvent) => {
       e.preventDefault()
@@ -99,6 +127,22 @@ export default function TouchControls() {
 
   return (
     <div className="pointer-events-none fixed inset-0 z-30 select-none touch-none">
+      {/* drag-to-look layer — right half, sits UNDER the action buttons */}
+      <div
+        onPointerDown={onLookDown}
+        onPointerMove={onLookMove}
+        onPointerUp={onLookUp}
+        onPointerCancel={onLookUp}
+        className="pointer-events-auto absolute inset-y-0 right-0 w-1/2 touch-none"
+        aria-label="Camera look area — drag to orbit the camera"
+      />
+      {/* look affordance hint — fades out after first use */}
+      <div
+        className={`pointer-events-none absolute right-8 top-[42%] flex items-center gap-1.5 rounded-full border border-[#f5efdc]/40 bg-[#1c1a17]/55 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-[#f5efdc]/85 backdrop-blur-sm transition-opacity duration-700 ${lookUsed ? 'opacity-0' : 'opacity-100 animate-pulse'}`}
+      >
+        <Eye className="h-3 w-3" /> drag to look
+      </div>
+
       {/* joystick */}
       <div
         ref={joyRef}

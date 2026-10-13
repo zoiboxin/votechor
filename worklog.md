@@ -248,3 +248,39 @@ Stage Summary:
 - Round 4 shipped: CRITICAL mouse-look fix (camera was permanently frozen since round 1 — biggest gameplay bug yet), world satire speech bubbles with wall-occlusion, multiplayer spectate-while-detained, full Photo Mode (orbit/filters/PNG export, pause-menu + touch access), zone accent banners + tint washes, first-aid compass guidance, live hat-unlock refresh
 - Verified end-to-end in browser incl. 2-session multiplayer spectate; snapshot download confirmed; lint/tsc clean
 - Risks/next: preserveDrawingBuffer has minor GPU cost (acceptable); bubbles max 1 concurrent per NPC (fine); consider Photo Mode zoom via wheel, achievements toast integration for hats, squad respawn/emote propagation polish; headless QA env still ~3.5fps (sim slowed) — real browsers unaffected
+
+---
+Task ID: 7
+Agent: Z.ai Code (cron webDevReview round 5)
+Task: QA assessment + social speech bubbles for players + touch camera-look + photo wheel zoom + WANTED chase alert + chai compass markers + duplicate-toast bugfix
+
+Work Log:
+- QA ASSESSMENT: all services healthy (Next :3000, game-server :3002, Caddy :81); lint + tsc clean; menu/solo boot/movement/quick-messages re-verified via agent-browser; zero console errors at round start → project STABLE → chose feature development
+- FEATURE — Player social speech bubbles (emotes + quick messages now visible in-world):
+  * game.ts: new playerBubbles SpeechBubbleSystem instance (same paper/ink style as NPC bubbles, shared occlusion check vs camera raycast), group added to scene, updated in renderUpdate, cleared on leave/startMatch
+  * playEmote → bubble with EMOTE_LABELS text ("Hello, democracy!", "Protest dance move!", …) above own head; playRemoteEmote → bubble above remote rig; new sayBubble(key, text) helper anchors to local player or remote rig
+  * BUGFIX (real gap): onQuickMsg relay existed in net.ts + server but was never bound in game.ts — remote quick messages were silently dropped. Now bound → bubble above sender's rig + toast "Name: msg"
+  * BUGFIX: server relays game:quickmsg to the WHOLE room incl. sender → sender got duplicate toast + bubble from own echo; fixed with `playerId === this.net.playerId` self-echo guard
+  * BUGFIX: QuickMessages.tsx added its own "You: …" toast on top of game.ts's notify → duplicate toasts for the sender; consolidated into game.ts (`You: ${msg}`), component notify removed (+ unused store selector removed)
+- FEATURE — Touch camera-look (mobile could not orbit the camera at all before):
+  * InputManager.addLook(dx,dy) — applies sensitivity + invertY like mouse; touchBridge().look() exposes it
+  * TouchControls: right-half-screen invisible drag-to-look layer (pointer capture, sits under action buttons), LOOK_GAIN 2.6; pulsing "drag to look" affordance hint fades out after first use (per-mount)
+- FEATURE — Photo Mode zoom (wheel + buttons):
+  * photoZoom(dir) clamps targetDistance 2.2..11; wheel listener registered in ensurePhotoKeyHandler (wheel up = zoom in, wheel down = zoom out)
+  * CRITICAL BUGFIX found during QA: renderUpdate forced camRig.targetDistance = 7.2 EVERY FRAME in photo mode → all zoom (wheel AND the new buttons) was instantly overridden. Removed; targetDistance now owned by photoZoom (set 7.2 on enter, 5.4 restore on exit unchanged)
+  * PhotoHud: −/+ zoom button pair between Exit and Filter; hint bar now "P exit · O filter · K snapshot · wheel zoom"
+- FEATURE — WANTED chase alert: renderUpdate computes chased (existing nearestChaserDistance < 18, works offline + online via server NPC states) → patchHud({hunted}) on state CHANGE only; Hud: red rubber-stamp "WANTED — RUN!" (Siren icon, vc-stamp-texture, spring stamp-in, pulse) at 30% screen height + red pulsing edge vignette when hunted (suppressed while detained or when low-health vignette already active); reset on leaveMatch
+- FEATURE — Chai compass markers: stamina < 30 and no chai in inventory → nearest untaken chai within 120m gets orange Coffee-icon marker (kind existed in store/Compass but was never emitted; icon swapped Vote → Coffee; edge-cling color added). Verified dynamic appear/disappear with stamina
+- STYLING (mandatory polish): WANTED stamp + hunted vignette (above), zoom buttons + hint text, drag-to-look hint chip, StatBar low-state treatment (bar + icon pulse, red value text when < 30%)
+- QA METHODOLOGY NOTES (important for future rounds):
+  * agent-browser console buffer ACCUMULATES across page loads — do not count duplicate log lines as multi-boot
+  * An instrumented handler that throws on its first line looks identical to "event never delivered" — verify closures reference this.x correctly; my bootStamp debug (missing this.) created a false "wheel events don't arrive" rabbit hole
+  * Fast Refresh while a Game instance is live leaves the OLD instance's closures holding dead module bindings (imported functions can throw) — ALWAYS hard-reload the page after editing game.ts before debugging runtime behavior
+  * Direct method-call checks (window.__vc.photoZoom) + instance-method wrapping (g.photoZoom = wrapped(orig)) are reliable; wrapping window.__vc properties is NOT the registered listener ref
+- All checks green: tsc (src clean; mini-services smoke-test errors pre-existing), eslint, zero console errors in final QA session
+- Verified end-to-end in browser: emote bubble render, quickmsg single-toast + bubble, chai marker dynamic toggling, WANTED stamp + vignette render, photo zoom via wheel (7.2→6.0 in / back out) with persistence after renderUpdate fix, zoomed photo screenshot
+
+Stage Summary:
+- Round 5 shipped: in-world social bubbles (emotes + quick messages, local + remote, with 3 related bugs fixed incl. a previously-dead net relay), mobile drag-to-look camera, photo-mode wheel/button zoom (plus the per-frame override bug that would have broken it), WANTED chase alarm, chai compass guidance, and stat-bar polish
+- Remote quickmsg bubble verified by code-path symmetry with the round-4-verified onEmote flow (2-session CLI limitation noted; recommend 2-session replay next round)
+- Risks/next: consider squad emote propagation polish, remote-hat render re-verify with 2 clients, zone-entry vignette tinting exists (done round 4); game-server unchanged this round (no restart needed); worklog cumulative console note above

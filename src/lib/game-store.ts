@@ -51,6 +51,7 @@ export interface HudState {
   compass: { yawDeg: number; markers: CompassMarker[] }
   cinematic: boolean
   spectating: string | null // teammate name when camera follows them while detained
+  hunted: boolean // police/security actively chasing the local player
 }
 
 export interface BossHud {
@@ -164,6 +165,7 @@ const defaultHud: HudState = {
   compass: { yawDeg: 0, markers: [] },
   cinematic: false,
   spectating: null,
+  hunted: false,
 }
 
 const defaultBoss: BossHud = {
@@ -241,6 +243,7 @@ export interface UIActions {
   photoToggle: () => void
   photoFilter: () => void
   photoSnapshot: () => void
+  photoZoom: (dir: number) => void // -1 zoom out, +1 zoom in
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }
