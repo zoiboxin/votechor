@@ -56,9 +56,10 @@ interface PaletteKey {
 }
 
 const P: PaletteKey[] = [
-  { e: -0.75, top: 0x05070f, hor: 0x121a30, fog: 0x0a0f20, sun: 0x93a7dc, hemiS: 0x232c54, hemiG: 0x0b0e16, amb: 0.5,  exp: 0.7,  star: 1.0,  glow: 0.0,  haze: 0.04, cloudLit: 0x2a3350 },
-  { e: -0.28, top: 0x0b1228, hor: 0x25244a, fog: 0x141a34, sun: 0x9aa8d8, hemiS: 0x303a68, hemiG: 0x12161f, amb: 0.6,  exp: 0.76, star: 0.8,  glow: 0.04, haze: 0.08, cloudLit: 0x3a4166 },
-  { e: -0.1,  top: 0x18224c, hor: 0x5c4577, fog: 0x2a2c52, sun: 0xc4a0c8, hemiS: 0x46508c, hemiG: 0x1d2130, amb: 0.76, exp: 0.84, star: 0.4,  glow: 0.2,  haze: 0.16, cloudLit: 0x585078 },
+  // deep night — lifted from pitch-black to a playable, moonlit blue so the city stays readable
+  { e: -0.75, top: 0x0d1630, hor: 0x223054, fog: 0x1a2340, sun: 0xa9bcf0, hemiS: 0x3a4a7e, hemiG: 0x181d2c, amb: 0.95, exp: 0.98, star: 1.0,  glow: 0.0,  haze: 0.04, cloudLit: 0x40507c },
+  { e: -0.28, top: 0x15204a, hor: 0x353a6a, fog: 0x242c52, sun: 0xb0bce8, hemiS: 0x4a588e, hemiG: 0x20263a, amb: 1.05, exp: 1.02, star: 0.8,  glow: 0.04, haze: 0.08, cloudLit: 0x4e5884 },
+  { e: -0.1,  top: 0x20305e, hor: 0x6a5488, fog: 0x363a64, sun: 0xd0b0d4, hemiS: 0x5a64a0, hemiG: 0x2a2e40, amb: 1.12, exp: 1.06, star: 0.4,  glow: 0.2,  haze: 0.16, cloudLit: 0x645c84 },
   { e: 0.02,  top: 0x2c3e74, hor: 0xf2814e, fog: 0xa86446, sun: 0xff9550, hemiS: 0x84708e, hemiG: 0x3c2f28, amb: 0.92, exp: 0.94, star: 0.08, glow: 0.6,  haze: 0.34, cloudLit: 0xf5b078 },
   { e: 0.16,  top: 0x4678b4, hor: 0xf6c586, fog: 0xc8a278, sun: 0xffc986, hemiS: 0xb0a89a, hemiG: 0x584838, amb: 1.04, exp: 1.0,  star: 0.0,  glow: 0.38, haze: 0.24, cloudLit: 0xffe0b0 },
   { e: 0.42,  top: 0x3a7ccd, hor: 0xb4d8ea, fog: 0xc4d4de, sun: 0xfff0d4, hemiS: 0xd0e2f2, hemiG: 0x8a7a64, amb: 1.14, exp: 1.05, star: 0.0,  glow: 0.16, haze: 0.1,  cloudLit: 0xffffff },
@@ -548,8 +549,9 @@ export class SkySystem {
     const useMoon = sunUp < 0.03 && moonUp2 > 0.05
     if (useMoon) {
       this.lightDir.copy(moonDir)
-      this.sun.color.setHex(0xa9bce6)
-      this.sun.intensity = 0.5 * moonUp2 * Math.max(0.2, 1 - dark * 0.9)
+      this.sun.color.setHex(0xb4c6f0)
+      // brighter moonlight so night reads as 'moonlit' not 'power cut'
+      this.sun.intensity = 1.15 * moonUp2 * Math.max(0.3, 1 - dark * 0.75)
     } else {
       this.lightDir.copy(sunDir)
       this.sun.color.copy(this.cSun)
@@ -564,15 +566,18 @@ export class SkySystem {
     this.hemi.groundColor.copy(this.cHemiG)
     this.hemi.intensity = amb * (1 - dark * 0.5) + this.flashBoost * 2.2
 
+    // at night, pull the fog wall slightly closer so distant blackness hides behind
+    // a friendlier blue haze instead of a void
     const fog = this.scene.fog as THREE.Fog | null
     if (fog) {
       fog.color.copy(this.cFog)
       const baseFar = this.quality === 'low' ? 150 : 210
-      fog.far = baseFar * this.cur.fogMul
+      fog.far = baseFar * this.cur.fogMul * (1 + this._nightF * 0.12)
       fog.near = Math.min(60 * Math.pow(this.cur.fogMul, 0.7), fog.far * 0.4)
     }
 
     this.exposureBase = exp
+    this._nightF = this.smooth(0.1, -0.24, elev) // 0 by day → 1 at deep night
 
     // ---- follow the camera ----
     this.group.position.copy(camPos)
@@ -586,6 +591,12 @@ export class SkySystem {
   get rainLevel() {
     return this.cur.rain
   }
+
+  /** 0 = full day, 1 = deep night — the world renderer drives street lights from this */
+  get nightFactor() {
+    return this._nightF
+  }
+  private _nightF = 0
 
   private sunElevation(): number {
     const dayAngle = ((this.timeOfDay - 6) / 24) * Math.PI * 2
@@ -604,6 +615,7 @@ export class SkySystem {
   }
 
   dispose() {
+    this._nightF = 0
     this.scene.remove(this.group)
     this.scene.remove(this.rain)
     this.dome.geometry.dispose()

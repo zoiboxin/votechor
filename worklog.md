@@ -724,3 +724,27 @@ Stage Summary:
 - Round 16 shipped the master prompt's core playable systems on the existing stack: double jump + buffer/coyote + sprint vault; server-authoritative police melee (wind-up telegraphs, LOS-validated hits, cooldowns, weakened-capture) with full client feel; randomized validated detention release points; a real GTA-style circular rotating radar with A* street-following routes + click-to-waypoint; multi-part realistic vehicles (bus/rickshaw/cars) that now physically block players; anti-cheat movement validation. All acceptance tests run: 33/33 new + 37/37 season + smoke + invite green, zero console errors.
 - Engine decision: STAY on Three.js/browser (full rationale in Work Log) — Unity/Unreal deferred until native distribution is a real requirement.
 - Risks/next: police-vs-player hit FX visual unverified live (above); bot flee speed == police chase speed creates eternal bot pursuits (tune flee 6.0 or stamina for bots); ENDLESS STREAMED CITY (master prompt Phase 7) deliberately deferred — current city is a bounded 5-zone world; chunk streaming is the next big build (deterministic seeded chunks along the avenue axis, shared server/client nav, minimap chunk reveal); vehicle riding/standing-on-roof deferred (dynamic colliders block, don't carry); two-client detention/disconnect stress test still pending.
+
+---
+Task ID: 16
+Agent: Z.ai Code (main)
+Task: 用户报告夜晚太黑 → 改善夜视 + 街灯系统（夜间自动点亮）
+
+Work Log:
+- sky.ts 夜色调色板全面提亮：deep night/astro/blue-hour 三档 keyframe 的 amb 0.5→0.95/0.6→1.05/0.76→1.12，exp 0.7→0.98/0.76→1.02/0.84→1.06，fog/hemi/顶空颜色全部换成偏亮的月光蓝（不再是黑洞）；月光强度 0.5→1.15 且 weather dark 衰减更温和
+- sky.ts 新增 nightFactor getter（sun elevation smooth(0.1,-0.24) → 0 白天 / 1 深夜），供世界渲染器驱动街灯；夜间雾墙 +12% 拉近缓解
+- world.ts 新增完整街灯系统：
+  * 所有 deco lamp 灯头材质注册 lampHeadMats（带 base emissive），夜间 emissiveIntensity 0.5→2.6
+  * 新增 windowEmissiveTexture()：与 diffuse 窗户网格对齐的发光窗贴图（42% 房间熄灯、暖黄/暖白/冷蓝三色、部分窗帘半拉），40+ 栋建筑 emissiveMap 夜间 intensity 0→1.15，城市夜晚灯火通明
+  * 新增 buildExtraStreetLamps()：沿主路两侧 curb 每 23m 交替布灯（跳过与 deco lamp 冲突位），InstancedMesh 实现（pole/arm/head/cone/ground-pool 各 1 draw call，~24 盏新灯），灯臂一律朝路内
+  * 每盏灯：灯头 halo sprite（additive 径向贴图）+ 向下光锥 + 地面光斑（三者共享材质，opacity 由 nightFactor 驱动，fog 生效自然没入夜雾）
+  * 新增 buildLightPool()：真实 PointLight 池（high 8 / medium 5 / low 3 盏，0xffb46a 钠灯暖光，decay 1.7，range 17m），每 0.35s 重新停泊到距玩家最近的灯位；亮度 = 30×nightF×(1+5.5% shimmer 微闪)；灯具常驻场景（intensity 0）避免黄昏/黎明切 visible 引发全材质 shader 重编译卡顿
+  * searchlight 夜间 opacity 0.16→0.31（夜空更醒目）；boss gate 灯保留 base 1.4
+- game.ts：sky.update 后调用 worldRenderer.setNight(sky.nightFactor, focus)；新增 window.__wr 调试句柄（在 WorldRenderer 创建之后赋值）
+- agent-browser 全时段验证：noon（白天零回归、无穿帮）、18:37 dusk（紫橙暮色、灯渐亮）、22:30 night（灯锥+光斑+万家灯火、街道完全可读）、00:31 midnight（最暗时刻依然可玩、氛围佳）；console 零错误；perf chip 白天/夜晚均 10 FPS @ RES 0.7（软件渲染 GPU 下零性能回归，8 盏无阴影点灯开销可忽略）
+
+Stage Summary:
+- 夜晚从"伸手不见五指"变成"月光+钠灯+万家灯火"的可享受场景：全局提亮 + 43 盏街灯（19 authored + 24 程序化）+ 建筑窗光 + 灯光池跟随玩家
+- 关键决策：点灯池常驻场景只调 intensity（避免 shader 重编译）；InstancedMesh 让 ~24 盏新灯只有 5 个 draw call；cone/pool 材质开启 fog 融入夜雾
+- 已知边界：eval 注入的 tod 修改偶发 1Hz HUD chip 显示滞后（纯显示，无逻辑影响）；多 decos 区域（zone C x=±16 deco lamps）与程序化灯最短间距 ~6m 可接受
+- 建议下一轮：雨天夜间灯下涟漪反射（简单：pool opacity × (1+rain)）、商店招牌夜间霓虹化、路灯闪烁故障效果（个别灯 random flicker）

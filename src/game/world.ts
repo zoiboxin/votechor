@@ -42,6 +42,44 @@ function windowTexture(color: string, variant: number): THREE.CanvasTexture {
   })
 }
 
+// matching emissive map: same window grid, but only the rooms that are awake at night
+// glow warm/cool. Driven by worldRenderer.setNight() — black by day, city lights at dusk.
+function windowEmissiveTexture(variant: number): THREE.CanvasTexture {
+  return canvasTex(128, 128, (ctx) => {
+    ctx.fillStyle = '#000'
+    ctx.fillRect(0, 0, 128, 128)
+    const cols = variant === 2 ? 3 : 4
+    const rows = 4
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (Math.random() < 0.42) continue // dark room — nobody home
+        const x = 10 + c * (108 / cols), y = 12 + r * 28
+        const roll = Math.random()
+        ctx.fillStyle = roll < 0.62 ? '#ffbe6e' : roll < 0.86 ? '#ffd696' : '#a8ccf0'
+        ctx.fillRect(x, y, 108 / cols - 12, 18)
+        // half-drawn curtains on a few
+        if (Math.random() < 0.18) { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(x, y, 108 / cols - 12, 8) }
+      }
+    }
+  })
+}
+
+// soft radial blob used for lamp head halos + ground light pools
+function glowTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas')
+  c.width = 128; c.height = 128
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62)
+  g.addColorStop(0, 'rgba(255,214,140,0.9)')
+  g.addColorStop(0.35, 'rgba(255,190,110,0.38)')
+  g.addColorStop(1, 'rgba(255,180,90,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, 128, 128)
+  const t = new THREE.CanvasTexture(c)
+  t.colorSpace = THREE.SRGBColorSpace
+  return t
+}
+
 function signTexture(text: string, bg = '#f5efdc', fg = '#8c1f28'): THREE.CanvasTexture {
   return canvasTex(256, 64, (ctx) => {
     ctx.fillStyle = bg
@@ -60,6 +98,7 @@ export class WorldRenderer {
   world: WorldDef
   private searchlightCones: THREE.Mesh[] = []
   private searchlightGroups: THREE.Group[] = []
+  private searchlightMats: THREE.MeshBasicMaterial[] = []
   private bossGate: THREE.Mesh | null = null
   private animated: ((t: number, dt: number) => void)[] = []
   private fountainParticles: THREE.Points | null = null
@@ -68,16 +107,31 @@ export class WorldRenderer {
   private crowdHeads: THREE.InstancedMesh | null = null
   private crowdSigns: THREE.Group[] = []
 
+  // ---- night / street-light state ----
+  private nightF = 0
+  private lampHeadMats: { m: THREE.MeshStandardMaterial; base: number }[] = []   // deco + boss-gate lamp bulbs
+  private instHeadMat = new THREE.MeshStandardMaterial({ color: '#ffe9b0', emissive: '#ffc866', emissiveIntensity: 0.5 })
+  private glowMat = new THREE.SpriteMaterial({ map: glowTexture(), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
+  private coneMat = new THREE.MeshBasicMaterial({ color: '#ffcf8a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
+  private poolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
+  private windowMats: THREE.MeshStandardMaterial[] = []      // building emissive windows
+  private lightPositions: THREE.Vector3[] = []               // every street lamp bulb in the world
+  private lightPool: THREE.PointLight[] = []                 // real lights, re-parked near the player
+  private poolTimer = 0
+  private camPos = new THREE.Vector3(0, 0, 0)
+
   constructor(world: WorldDef, quality: 'low' | 'medium' | 'high') {
     this.world = world
     this.buildGround()
     this.buildRoads()
     for (const d of world.decorations) this.buildDeco(d)
+    this.buildExtraStreetLamps()
     this.buildCrowd(world, quality)
     this.buildSearchlights()
     this.buildCheckpointGates()
     this.buildBossArena()
     this.buildDust()
+    this.buildLightPool(quality)
   }
 
   private buildGround() {
@@ -162,7 +216,14 @@ export class WorldRenderer {
         const w = d.w ?? 10, dep = d.d ?? 8, h = d.h ?? 10
         const tex = windowTexture(d.color ?? '#c96f4a', d.variant ?? 0)
         tex.repeat.set(Math.max(1, Math.round(w / 5)), Math.max(1, Math.round(h / 6)))
-        const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, dep), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 }))
+        const emi = windowEmissiveTexture(d.variant ?? 0)
+        emi.repeat.copy(tex.repeat)
+        const mat = new THREE.MeshStandardMaterial({
+          map: tex, roughness: 0.9,
+          emissive: 0xffffff, emissiveMap: emi, emissiveIntensity: 0, // lit windows at night
+        })
+        this.windowMats.push(mat)
+        const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, dep), mat)
         body.position.y = h / 2
         body.castShadow = shadow; body.receiveShadow = true
         g.add(body)
@@ -335,10 +396,27 @@ export class WorldRenderer {
         pole.position.y = 2.5
         const arm = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.06, 0.06), new THREE.MeshStandardMaterial({ color: '#3a4046' }))
         arm.position.set(0.35, 5, 0)
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), new THREE.MeshStandardMaterial({ color: '#ffe9b0', emissive: '#ffb84e', emissiveIntensity: 0.6 }))
+        const headMat = new THREE.MeshStandardMaterial({ color: '#ffe9b0', emissive: '#ffc866', emissiveIntensity: 0.5 })
+        this.lampHeadMats.push({ m: headMat, base: 0.5 })
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), headMat)
         head.position.set(0.7, 4.9, 0)
         pole.castShadow = true
         g.add(pole, arm, head)
+        // night halo + downlight cone; world position recorded for the light pool
+        const ry = d.ry ?? 0
+        const hx = d.x + Math.cos(ry) * 0.7, hz = d.z - Math.sin(ry) * 0.7
+        const halo = new THREE.Sprite(this.glowMat)
+        halo.position.set(hx, 4.9, hz)
+        halo.scale.set(2.6, 2.6, 1)
+        this.group.add(halo)
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(1.7, 4.8, 10, 1, true), this.coneMat)
+        cone.position.set(hx, 2.5, hz)
+        this.group.add(cone)
+        const poolG = new THREE.Mesh(new THREE.PlaneGeometry(5.2, 5.2), this.poolMat)
+        poolG.rotation.x = -Math.PI / 2
+        poolG.position.set(hx, 0.045, hz)
+        this.group.add(poolG)
+        this.lightPositions.push(new THREE.Vector3(hx, 4.7, hz))
         break
       }
       case 'tower': {
@@ -465,6 +543,80 @@ export class WorldRenderer {
     this.group.add(g)
   }
 
+  /**
+   * Dense instanced street lamps lining both curbs for the whole map — the deco lamps
+   * above are too sparse to carry a night scene. 3 draw calls for ~60 lamps.
+   */
+  private buildExtraStreetLamps() {
+    const spots: { x: number; z: number; ry: number }[] = []
+    // march down the road, alternating curbs, arm always pointing toward the road
+    let z = 2
+    let side = 1
+    while (z > -578) {
+      const x = side * 9.7
+      const ry = side > 0 ? Math.PI : 0
+      // skip anything too close to an authored deco lamp
+      const clash = this.lightPositions.some(p => Math.abs(p.x - x) < 5 && Math.abs(p.z - z) < 7)
+      if (!clash) spots.push({ x, z, ry })
+      z -= 23
+      side *= -1
+    }
+    if (!spots.length) return
+    const n = spots.length
+    const darkMat = new THREE.MeshStandardMaterial({ color: '#3a4046' })
+    const pole = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.07, 0.1, 5, 6), darkMat, n)
+    const arm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 0.06, 0.06), darkMat, n)
+    const head = new THREE.InstancedMesh(new THREE.SphereGeometry(0.18, 8, 6), this.instHeadMat, n)
+    const cone = new THREE.InstancedMesh(new THREE.ConeGeometry(1.7, 4.8, 10, 1, true), this.coneMat, n)
+    const poolG = new THREE.InstancedMesh(new THREE.PlaneGeometry(5.2, 5.2), this.poolMat, n)
+    const m = new THREE.Matrix4()
+    const q = new THREE.Quaternion()
+    const e = new THREE.Euler()
+    const one = new THREE.Vector3(1, 1, 1)
+    for (let i = 0; i < n; i++) {
+      const s = spots[i]
+      e.set(0, s.ry, 0); q.setFromEuler(e)
+      m.compose(new THREE.Vector3(s.x, 2.5, s.z), q, one); pole.setMatrixAt(i, m)
+      m.compose(new THREE.Vector3(s.x + Math.cos(s.ry) * 0.35, 5, s.z - Math.sin(s.ry) * 0.35), q, one); arm.setMatrixAt(i, m)
+      const hx = s.x + Math.cos(s.ry) * 0.7, hz = s.z - Math.sin(s.ry) * 0.7
+      m.compose(new THREE.Vector3(hx, 4.9, hz), q, one); head.setMatrixAt(i, m)
+      m.compose(new THREE.Vector3(hx, 2.5, hz), q, one); cone.setMatrixAt(i, m)
+      m.compose(new THREE.Vector3(hx + Math.cos(s.ry) * 0.15, 0.045, hz - Math.sin(s.ry) * 0.15), new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)), one); poolG.setMatrixAt(i, m)
+      this.lightPositions.push(new THREE.Vector3(hx, 4.7, hz))
+    }
+    pole.castShadow = true
+    this.group.add(pole, arm, head, cone, poolG)
+  }
+
+  /** A small pool of REAL point lights that silently re-park onto the nearest lamps.
+   *  Lights stay in the scene permanently (intensity 0 by day) — toggling visibility
+   *  would force a full material recompile at every dusk/dawn. */
+  private buildLightPool(quality: 'low' | 'medium' | 'high') {
+    const count = quality === 'high' ? 8 : quality === 'medium' ? 5 : 3
+    for (let i = 0; i < count; i++) {
+      const l = new THREE.PointLight(0xffb46a, 0, 17, 1.7)
+      l.castShadow = false
+      this.lightPool.push(l)
+      this.group.add(l)
+    }
+  }
+
+  /** Called every frame from game.ts with the sky's night factor + player focus. */
+  setNight(nf: number, camPos: THREE.Vector3) {
+    this.nightF = nf
+    this.camPos.copy(camPos)
+    const headE = 0.5 + 2.1 * nf
+    for (const e of this.lampHeadMats) e.m.emissiveIntensity = e.base + 2.1 * nf
+    this.instHeadMat.emissiveIntensity = headE
+    this.glowMat.opacity = 0.85 * nf
+    this.coneMat.opacity = 0.16 * nf
+    this.poolMat.opacity = 0.42 * nf
+    const winE = 1.15 * nf
+    for (const m of this.windowMats) m.emissiveIntensity = winE
+    // searchlights read better against a dark sky
+    for (const m of this.searchlightMats) m.opacity = 0.16 + 0.15 * nf
+  }
+
   private buildCrowd(world: WorldDef, quality: 'low' | 'medium' | 'high') {
     const crowd = world.decorations.filter(d => d.kind === 'crowd')
     if (!crowd.length) return
@@ -535,6 +687,7 @@ export class WorldRenderer {
       this.group.add(grp)
       this.searchlightCones.push(cone)
       this.searchlightGroups.push(grp)
+      this.searchlightMats.push(cone.material as THREE.MeshBasicMaterial)
       cone.userData.baseRotation = cone.rotation.x
     }
   }
@@ -587,6 +740,7 @@ export class WorldRenderer {
       pillar.position.set(side * 10, 4.5, a.gateZ - a.z)
       pillar.castShadow = true
       const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 6), new THREE.MeshStandardMaterial({ color: '#ffb84e', emissive: '#ff7b2e', emissiveIntensity: 1.4 }))
+      this.lampHeadMats.push({ m: lamp.material as THREE.MeshStandardMaterial, base: 1.4 })
       lamp.position.set(side * 10, 9.6, a.gateZ - a.z)
       g.add(pillar, lamp)
     }
@@ -682,5 +836,32 @@ export class WorldRenderer {
     }
     // crowd subtle sway
     if (this.crowdBodies) this.crowdBodies.rotation.y = Math.sin(t * 0.5) * 0.004
+
+    // ---- street light pool: re-park real lights onto the nearest lamps at ~3Hz ----
+    if (this.lightPool.length && this.lightPositions.length) {
+      this.poolTimer -= dt
+      if (this.poolTimer <= 0) {
+        this.poolTimer = 0.35
+        const cam = this.camPos
+        // partial selection: K nearest bulbs (N is ~80 — a simple scan is fine)
+        const k = this.lightPool.length
+        const idx = this.lightPositions
+          .map((p, i) => ({ i, d: (p.x - cam.x) * (p.x - cam.x) + (p.z - cam.z) * (p.z - cam.z) }))
+          .sort((a, b) => a.d - b.d)
+          .slice(0, k)
+        for (let j = 0; j < k; j++) {
+          const l = this.lightPool[j]
+          const src = this.lightPositions[idx[j].i]
+          l.position.set(src.x, src.y, src.z)
+          l.userData.phase = idx[j].i * 1.7
+        }
+      }
+      const base = 30 * this.nightF
+      for (let j = 0; j < this.lightPool.length; j++) {
+        const l = this.lightPool[j]
+        // faint sodium-vapor shimmer so the glow feels alive
+        l.intensity = base * (1 + 0.055 * Math.sin(t * 43 + (l.userData.phase ?? j * 7.3)))
+      }
+    }
   }
 }

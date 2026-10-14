@@ -186,8 +186,13 @@ export class Game {
     }
     this.physics.setColliders(this.world.colliders)
     // QA/debug handle — lets test scripts probe the live atmosphere state (window.__sky)
-    if (typeof window !== 'undefined') (window as unknown as { __sky?: SkySystem }).__sky = this.engine.sky
+    if (typeof window !== 'undefined') {
+      (window as unknown as { __sky?: SkySystem }).__sky = this.engine.sky
+    }
     this.worldRenderer = new WorldRenderer(this.world, 'high')
+    if (typeof window !== 'undefined') {
+      (window as unknown as { __wr?: WorldRenderer }).__wr = this.worldRenderer
+    }
     this.engine.scene.add(this.worldRenderer.group)
     this.engine.scene.add(this.bossClient.group)
     this.engine.scene.add(this.fx.group)
@@ -1759,6 +1764,7 @@ export class Game {
     sky.setWeatherMode(settings.weatherMode ?? 'auto')
     sky.update(dt, focus)
     this.engine.renderer.toneMappingExposure = sky.exposure
+    this.worldRenderer.setNight(sky.nightFactor, focus)
     AudioManager.setRain(sky.rainLevel)
     this.envTick += dt
     if (this.envTick >= 1) {
