@@ -12,6 +12,8 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['C'], action: 'Slide', note: 'Slide under searchlights. Very cinematic.' },
   { keys: ['E'], action: 'Interact / Rescue', note: 'Checkpoints, ballots, bailing out friends' },
   { keys: ['Q'], action: 'Throw Item', note: 'Bottles distract patrols. The bottle is fine.' },
+  { keys: ['V'], action: 'Shout / Whistle', note: 'Free distraction — nearby patrols walk over to investigate (2.5s cooldown). Great for pulling cops away from a checkpoint.' },
+  { keys: ['H'], action: 'Quick Heal', note: 'Eats the smartest food in your pockets: chai +10 HP, samosa +10, snack +5, first-aid +50 when badly hurt' },
   { keys: ['F'], action: 'Gift Item', note: 'Hand your best item to the nearest teammate — support points + Good Samaritan medal at 3 gifts' },
   { keys: ['G'], action: 'Emote Wheel', note: '4 unlocked by default — level up & earn medals for the rest' },
   { keys: ['T'], action: 'Quick Messages' },
@@ -111,6 +113,8 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
           <ul className="space-y-1 text-[10px] font-semibold leading-snug text-[#1c1a17]/80">
             <li>• Police look where they walk. Break line of sight behind buildings, then breathe.</li>
             <li>• Police batons hurt — when an officer raises his lathi (the wind-up), dodge sideways! A double jump works too.</li>
+            <li>• <b className="font-black text-[#2e6e4e]">Health matters:</b> baton hits (13), traffic (35) and cows (8) all chip your HP. Below 30 HP officers can grab you twice as fast — eat! Collect <b>chai (+10 HP)</b>, <b>samosas (+10)</b>, <b>snacks (+5)</b> and <b>first-aid kits (+50)</b>, then press <b>H</b> to eat the smart one. Out of combat you also slowly recover on your own.</li>
+            <li>• Press <b className="font-black text-[#2e6e4e]">V</b> to shout or whistle — every patrol nearby comes to check the noise. Perfect for luring cops away from a checkpoint, or straight into your plan.</li>
             <li>• <b className="font-black text-[#8c1f28]">If you get DETAINED, police confiscate ALL your votes &amp; items.</b> The votes are re-hidden in the city and your gear drops right where you were caught — run back (or send a cellmate) to recover it before it vanishes!</li>
             <li>• Searchlights rotate. Watch the rhythm like cricket. Or traffic.</li>
             <li>• Red dots on the minimap are chasing you. Blue dots are merely disappointed in you.</li>

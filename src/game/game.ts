@@ -23,7 +23,7 @@ import { createBossBrain, tickBoss, grabBallot, depositBallot, registerBossHit, 
 import {
   MOVE, TOKENS_NEEDED, DETENTION_SECONDS, MATCH_TIME_LIMIT, ITEM_CONFIG, INVENTORY_MAX,
   archetypeById, XP_TABLE, levelFromXp, CAPTURE_MESSAGES, RANDOM_NOTIFICATIONS, BOSS_NAME,
-  BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES,
+  BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES, SHOUT_COOLDOWN_SEC, SHOUT_LINES,
 } from './shared/constants'
 import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
@@ -144,6 +144,7 @@ export class Game {
   // ---- police melee telegraphs (Phase 5 client feel) ----
   private pendingPoliceStrike: { npcId: string; attackAt: number } | null = null
   private lastPoliceDamageAt = 0
+  private lastShoutAt = 0 // V-key shout/whistle cooldown gate
   private windupUntil = new Map<string, number>()
   private staggerUntil = new Map<string, number>()
   // engine-level damage vignette (DOM overlay owned here, Hud.tsx untouched)
@@ -224,7 +225,9 @@ export class Game {
     this.items = new ItemSystem(this.world.items, this.physics)
     this.engine.scene.add(this.items.group)
 
-    this.localNpcBrains = createNpcStates(this.world.npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol.map(p => ({ ...p })) })))
+    // patrol passed RAW — createNpcStates handles both [x,z] tuples and {x,z} objects;
+    // pre-spreading ({...p}) exploded [x,z] arrays into {0:x,1:z} and NaN-froze offline NPCs
+    this.localNpcBrains = createNpcStates(this.world.npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol })))
     for (const sl of this.world.searchlights) this.localSearchlightAngles[sl.id] = sl.ry
 
     // net events
@@ -568,8 +571,8 @@ export class Game {
     this.crowd.setVisible(true)
     this.lastCrowdSync = 0
 
-    // reset local npc brains
-    this.localNpcBrains = createNpcStates(this.world.npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol.map(p => ({ ...p })) })))
+    // reset local npc brains (patrol passed RAW — see note in boot())
+    this.localNpcBrains = createNpcStates(this.world.npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol })))
 
     // connect to authoritative server (both modes use it; fallback offline)
     this.offline = true
@@ -1230,6 +1233,8 @@ export class Game {
       case 'map': store.toggleMap(); break
       case 'squad': store.toggleSquad(); break
       case 'gift': this.giftNearest(); break
+      case 'shout': this.doShout(); break
+      case 'heal': this.quickHeal(); break
     }
   }
 
@@ -1272,16 +1277,19 @@ export class Game {
 
   private useInventoryItem(uid: string) {
     if (!this.player) return
+    if (this.player.isDetained) { this.store.notify('No snacking in a police cell.', 'warning'); return }
     const idx = this.inventory.findIndex(i => i.uid === uid)
     if (idx === -1) return
     const item = this.inventory[idx]
     const p = this.player
     switch (item.type) {
       case 'chai':
+        p.heal(10)
         p.stamina = p.maxStamina
         p.speedBoostUntil = this.worldTime + 6
         AudioManager.play('heal')
-        this.store.notify('Chai break! Stamina restored. Zindagi ek baar milta hai.', 'info')
+        this.fx.popup('+10 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
+        this.store.notify('Chai break! +10 HP, stamina restored. Zindagi ek baar milta hai.', 'info')
         break
       case 'firstaid':
         p.heal(50)
@@ -1290,14 +1298,17 @@ export class Game {
         this.store.notify('Patched up with one (1) band-aid.', 'info')
         break
       case 'snack':
+        p.heal(5)
         p.speedBoostUntil = this.worldTime + 8
         AudioManager.play('pickup')
-        this.store.notify('Sugar rush! Speed boost for 8s.', 'info')
+        this.fx.popup('+5 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
+        this.store.notify('Sugar rush! +5 HP and speed boost for 8s.', 'info')
         break
       case 'joke': {
         const jokes = ['Delicious. Illegal. Worth it.', 'The samosa was filled with classified documents.', 'You feel oddly empowered.', '+10 confidence. -2 health code compliance.']
         p.heal(10)
         AudioManager.play('cash')
+        this.fx.popup('+10 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
         this.store.notify(randomOf(jokes), 'info')
         break
       }
@@ -1307,6 +1318,44 @@ export class Game {
     }
     this.inventory.splice(idx, 1)
     this.syncHud()
+  }
+
+  /** H — eat the most useful food/medkit in the pockets. Big wounds take the first-aid kit,
+   *  small ones get chai/samosa/snack so nothing is wasted on overkill. */
+  private quickHeal() {
+    if (!this.player || this.player.isDetained || this.player.isDazed) return
+    if (this.player.health >= this.player.maxHealth) {
+      this.store.notify('Health already full — save the food for later.', 'info')
+      return
+    }
+    const missing = this.player.maxHealth - this.player.health
+    const has = (t: ItemType) => this.inventory.find((i) => i.type === t)
+    const pick = (missing >= 45 ? has('firstaid') : undefined) ?? has('chai') ?? has('joke') ?? has('snack') ?? has('firstaid')
+    if (!pick) {
+      this.store.notify('Pockets empty — no chai, samosa or first-aid. Collect food to heal!', 'warning')
+      return
+    }
+    this.useInventoryItem(pick.uid)
+  }
+
+  /** V — shout / whistle: a free noise distraction that pulls nearby police to investigate. */
+  private doShout() {
+    if (!this.player || this.player.isDetained || this.player.isDazed) return
+    const now = performance.now()
+    if (now - this.lastShoutAt < SHOUT_COOLDOWN_SEC * 1000) return
+    this.lastShoutAt = now
+    const line = randomOf(SHOUT_LINES)
+    const whistle = line.startsWith('*')
+    const p = this.player
+    p.playAnim(whistle ? 'throw' : 'celebrate', 0.9) // hand-to-mouth whistle pose vs arms-up yell
+    this.sayBubble('me', line)
+    this.fx.burst(p.pos.x, p.pos.y + 0.3, p.pos.z, '#f2c14e', 12, 4.6, 0.65) // expanding noise ring
+    AudioManager.play(whistle ? 'whistle' : 'shout')
+    if (this.offline) {
+      this.npcs.distraction(p.pos.x, p.pos.z, 6)
+    } else {
+      this.net.noiseEvent(p.pos.x, p.pos.z)
+    }
   }
 
   private dropInventoryItem(uid: string) {
@@ -1529,6 +1578,7 @@ export class Game {
     this.pendingOneShot = null
     const boosted = this.worldTime < this.player.speedBoostUntil
     this.player.applyInput(dt, this.input.state, this.camRig.yaw, this.archetype, oneShot, boosted)
+    this.player.tickRegen(dt) // slow out-of-combat health trickle (food is the real healing)
 
     // world bounds safety
     const b = this.world.bounds
@@ -2022,7 +2072,7 @@ export class Game {
       if (d < 90 && (!bestTok || d < bestTok.d)) bestTok = { d, x: it.def.x, z: it.def.z }
     }
     if (bestTok) markers.push({ kind: 'token', ...rel(bestTok.x, bestTok.z) })
-    // hurt? point to the nearest first-aid kit
+    // hurt? point to the nearest first-aid kit — or food (chai now heals too)
     if (p.health < 45) {
       let bestFa: { d: number; x: number; z: number } | null = null
       for (const it of this.items.items) {
@@ -2031,6 +2081,16 @@ export class Game {
         if (d < 130 && (!bestFa || d < bestFa.d)) bestFa = { d, x: it.def.x, z: it.def.z }
       }
       if (bestFa) markers.push({ kind: 'firstaid', ...rel(bestFa.x, bestFa.z) })
+      else if (!this.inventory.some(i => i.type === 'chai' || i.type === 'joke' || i.type === 'snack' || i.type === 'firstaid')) {
+        // no medkit nearby and pockets are empty of food — fall back to chai stalls
+        let bestFood: { d: number; x: number; z: number } | null = null
+        for (const it of this.items.items) {
+          if (it.taken || it.def.type !== 'chai') continue
+          const d = Math.hypot(it.def.x - p.pos.x, it.def.z - p.pos.z)
+          if (d < 130 && (!bestFood || d < bestFood.d)) bestFood = { d, x: it.def.x, z: it.def.z }
+        }
+        if (bestFood) markers.push({ kind: 'chai', ...rel(bestFood.x, bestFood.z) })
+      }
     }
     // running on fumes? point to the nearest chai stall (unless carrying chai)
     if (p.stamina < 30 && !this.inventory.some(i => i.type === 'chai')) {
@@ -2548,7 +2608,7 @@ export function touchBridge() {
       input.touchMove = { x: 0, y: 0 }
       input.sync()
     },
-    btn: (name: 'sprint' | 'jump' | 'slide' | 'interact' | 'throw', down: boolean) => {
+    btn: (name: 'sprint' | 'jump' | 'slide' | 'interact' | 'throw' | 'shout' | 'heal', down: boolean) => {
       const input = g['input'] as InputManager | undefined
       if (!input) return
       input.touchButtons[name] = down
@@ -2556,6 +2616,8 @@ export function touchBridge() {
       if (down && name === 'jump') input.onOneShot?.('jump')
       if (down && name === 'throw') input.onOneShot?.('throw')
       if (down && name === 'slide') input.onOneShot?.('slide')
+      if (down && name === 'shout') input.onOneShot?.('shout')
+      if (down && name === 'heal') input.onOneShot?.('heal')
     },
     setMinimap: (c: HTMLCanvasElement | null) => g.setMinimapCanvas(c),
   }

@@ -10,12 +10,12 @@ export interface InputState {
   lookDy: number
 }
 
-type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem' | 'gift'
+type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem' | 'gift' | 'shout' | 'heal'
 
 export class InputManager {
   state: InputState = { forward: 0, strafe: 0, jump: false, sprint: false, slide: false, interact: false, lookDx: 0, lookDy: 0 }
   keys = new Set<string>()
-  keybinds: Record<string, string> = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' }
+  keybinds: Record<string, string> = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF', heal: 'KeyH', shout: 'KeyV' }
   enabled = false
   /** While true (map/big overlay open) movement output is zeroed but keys + one-shots keep working. */
   suppressed = false
@@ -78,6 +78,8 @@ export class InputManager {
       if (bind('squad')) this.onOneShot?.('squad')
       if (bind('pause')) this.onOneShot?.('pause')
       if (bind('gift')) this.onOneShot?.('gift')
+      if (bind('shout')) this.onOneShot?.('shout')
+      if (bind('heal')) this.onOneShot?.('heal')
     }
     this.sync()
   }

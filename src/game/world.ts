@@ -116,6 +116,13 @@ export class WorldRenderer {
   private coneMat = new THREE.MeshBasicMaterial({ color: '#ffcf8a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
   private poolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
   private windowMats: THREE.MeshStandardMaterial[] = []      // building emissive windows
+  // ---- road-hazard visibility: obstacles must read clearly day AND night ----
+  // retroreflective hazard tape on barricades (glows under street lights at night)
+  private hazardStripeMat = new THREE.MeshStandardMaterial({ color: '#fffbe8', emissive: '#ffd9a0', emissiveIntensity: 0.18, roughness: 0.55 })
+  private hazardFrameMat = new THREE.MeshStandardMaterial({ color: '#d94f30', emissive: '#c9482e', emissiveIntensity: 0.05, roughness: 0.85 })
+  // market-stall / food-cart lanterns — night bazaar glow so road-edge props read after dark
+  private lanternMat = new THREE.MeshStandardMaterial({ color: '#f7c66a', emissive: '#ffab3d', emissiveIntensity: 0.45 })
+  private lanternHaloMat = new THREE.SpriteMaterial({ map: glowTexture(), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
   private lightPositions: THREE.Vector3[] = []               // every street lamp bulb in the world
   private lightPool: THREE.PointLight[] = []                 // real lights, re-parked near the player
   private poolTimer = 0
@@ -308,6 +315,15 @@ export class WorldRenderer {
           s.position.set(0, 2.65, 1.1)
           g.add(s)
         }
+        // hanging lantern — night-bazaar beacon so stalls read as road-edge obstacles after dark
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.11, 6, 5), this.lanternMat)
+        lantern.position.set(-1.2, 1.95, 0.6)
+        const lanternHalo = new THREE.Sprite(this.lanternHaloMat)
+        lanternHalo.scale.set(1.5, 1.5, 1)
+        lanternHalo.position.copy(lantern.position)
+        const lantern2 = lantern.clone(); lantern2.position.x = 1.2
+        const lanternHalo2 = lanternHalo.clone(); lanternHalo2.position.x = 1.2
+        g.add(lantern, lantern2, lanternHalo, lanternHalo2)
         g.add(counter, top, awn, pole1, pole2, goods, goods2)
         g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
         break
@@ -320,7 +336,15 @@ export class WorldRenderer {
         const wheel2 = wheel1.clone(); wheel2.position.z = -0.75
         const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.2, 6), new THREE.MeshStandardMaterial({ color: '#5c4630' }))
         handle.rotation.z = 1.2; handle.position.set(1.5, 1.0, 0.4)
-        g.add(body, wheel1, wheel2, handle)
+        // lantern on a stub pole — carts sit IN the lanes, they must stay visible
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.9, 5), new THREE.MeshStandardMaterial({ color: '#5c4630' }))
+        pole.position.set(-0.9, 1.25, -0.4)
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 5), this.lanternMat)
+        lantern.position.set(-0.9, 1.74, -0.4)
+        const lanternHalo = new THREE.Sprite(this.lanternHaloMat)
+        lanternHalo.scale.set(1.4, 1.4, 1)
+        lanternHalo.position.copy(lantern.position)
+        g.add(body, wheel1, wheel2, handle, pole, lantern, lanternHalo)
         g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
         break
       }
@@ -333,8 +357,17 @@ export class WorldRenderer {
         spout.rotation.z = 1; spout.position.set(0.3, 1.4, 0)
         const stove = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.3, 8), new THREE.MeshStandardMaterial({ color: '#3a3a3a' }))
         stove.position.set(-0.4, 1.15, 0)
+        // stove ember + hanging lantern — the chai stall glows at night
+        const emberMat = new THREE.MeshStandardMaterial({ color: '#c9482e', emissive: '#ff6a2a', emissiveIntensity: 0.7 })
+        const ember = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.06, 8), emberMat)
+        ember.position.set(-0.4, 1.33, 0)
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), this.lanternMat)
+        lantern.position.set(0.55, 1.55, 0.3)
+        const lanternHalo = new THREE.Sprite(this.lanternHaloMat)
+        lanternHalo.scale.set(1.3, 1.3, 1)
+        lanternHalo.position.copy(lantern.position)
         // steam
-        g.add(cart, kettle, spout, stove)
+        g.add(cart, kettle, spout, stove, ember, lantern, lanternHalo)
         g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
         break
       }
@@ -505,14 +538,17 @@ export class WorldRenderer {
         const spacing = w > 24 ? 4 : 2
         const frames = Math.max(1, Math.round(w / spacing))
         for (let i = 0; i < frames; i++) {
-          const frame = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.1, 0.08), new THREE.MeshStandardMaterial({ color: '#c9482e', flatShading: true }))
+          const frame = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.1, 0.12), this.hazardFrameMat)
           frame.position.set(-w / 2 + (i + 0.5) * (w / frames), 0.6, 0)
-          const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.22, 0.1), new THREE.MeshStandardMaterial({ color: '#f2ead2' }))
-          stripe.position.copy(frame.position); stripe.position.y += 0.18
-          const legA = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.15, 0.06), new THREE.MeshStandardMaterial({ color: '#7a7a76' }))
+          // two reflective tape bands (top + bottom) — readable edge-on and at night
+          const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.2, 0.14), this.hazardStripeMat)
+          stripe.position.copy(frame.position); stripe.position.y += 0.2
+          const stripe2 = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.14, 0.14), this.hazardStripeMat)
+          stripe2.position.copy(frame.position); stripe2.position.y -= 0.3
+          const legA = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.15, 0.07), new THREE.MeshStandardMaterial({ color: '#5f5f5b' }))
           legA.position.set(frame.position.x - 0.8, 0.55, 0.35)
           const legB = legA.clone(); legB.position.z = -0.35
-          g.add(frame, stripe, legA, legB)
+          g.add(frame, stripe, stripe2, legA, legB)
         }
         break
       }
@@ -895,6 +931,11 @@ export class WorldRenderer {
     this.poolMat.opacity = 0.42 * nf
     const winE = 1.15 * nf
     for (const m of this.windowMats) m.emissiveIntensity = winE
+    // road hazards read at night: retroreflective tape + lantern glows
+    this.hazardStripeMat.emissiveIntensity = 0.18 + 1.7 * nf
+    this.hazardFrameMat.emissiveIntensity = 0.05 + 0.5 * nf
+    this.lanternMat.emissiveIntensity = 0.45 + 2.3 * nf
+    this.lanternHaloMat.opacity = 0.55 * nf
     // searchlights read better against a dark sky
     for (const m of this.searchlightMats) m.opacity = 0.16 + 0.15 * nf
   }

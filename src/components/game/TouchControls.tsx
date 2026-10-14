@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ChevronUp, Wind, ChevronsDown, Hand, Crosshair, Eye } from 'lucide-react'
+import { ChevronUp, Wind, ChevronsDown, Hand, Crosshair, Eye, Megaphone, HeartPulse } from 'lucide-react'
 
 type Bridge = {
   move: (x: number, y: number) => void
   end: () => void
   look: (dx: number, dy: number) => void
-  btn: (name: 'sprint' | 'jump' | 'slide' | 'interact' | 'throw', down: boolean) => void
+  btn: (name: 'sprint' | 'jump' | 'slide' | 'interact' | 'throw' | 'shout' | 'heal', down: boolean) => void
 }
 
 // Loaded lazily — never statically import '@/game/game' (it drags three.js into SSR)
@@ -114,7 +114,7 @@ export default function TouchControls() {
     onPointerLeave: () => bridge()?.btn(name, false),
   })
 
-  const tapBtn = (name: 'jump' | 'slide' | 'throw') => ({
+  const tapBtn = (name: 'jump' | 'slide' | 'throw' | 'shout' | 'heal') => ({
     onPointerDown: (e: React.PointerEvent) => {
       e.preventDefault()
       bridge()?.btn(name, true)
@@ -190,6 +190,18 @@ export default function TouchControls() {
           <span className="flex flex-col items-center leading-none">
             <ChevronsDown className="h-5 w-5" />
             <span className="mt-0.5 text-[8px] font-black">SLIDE</span>
+          </span>
+        </button>
+        <button className={`${btnBase} bg-[#f2c14e]/90`} title="Shout / Whistle — attracts police (V)" {...tapBtn('shout')}>
+          <span className="flex flex-col items-center leading-none">
+            <Megaphone className="h-5 w-5" />
+            <span className="mt-0.5 text-[8px] font-black">SHOUT</span>
+          </span>
+        </button>
+        <button className={`${btnBase} bg-[#ff8fa3]/90`} title="Quick Heal — eat best food (H)" {...tapBtn('heal')}>
+          <span className="flex flex-col items-center leading-none">
+            <HeartPulse className="h-5 w-5" />
+            <span className="mt-0.5 text-[8px] font-black">HEAL</span>
           </span>
         </button>
       </div>

@@ -68,17 +68,17 @@ export const POLICE_ATTACK = {
 export const ITEM_CONFIG: Record<ItemType, { name: string; icon: string; stack: number; desc: string }> = {
   bottle: { name: 'Plastic Bottle', icon: '🍾', stack: 5, desc: 'Throw to distract police (Q)' },
   sign:   { name: 'Cardboard Sign', icon: '🪧', stack: 3, desc: 'Protest in style. Throwable.' },
-  chai:   { name: 'Chai Cup', icon: '☕', stack: 3, desc: 'Use: full stamina + brief speed' },
+  chai:   { name: 'Chai Cup', icon: '☕', stack: 3, desc: 'Use: +10 HP, full stamina & speed' },
   firstaid: { name: 'First-Aid Kit', icon: '🩹', stack: 2, desc: 'Use: heal 50 HP' },
-  snack:  { name: 'Energy Snack', icon: '🍬', stack: 3, desc: 'Use: speed boost 8s' },
+  snack:  { name: 'Energy Snack', icon: '🍬', stack: 3, desc: 'Use: +5 HP, speed boost 8s' },
   token:  { name: 'Stolen Vote Token', icon: '🗳️', stack: 99, desc: 'Recover the stolen votes!' },
   foam:   { name: 'Foam Finger', icon: '🖐️', stack: 2, desc: 'Throwable. Very dramatic.' },
-  joke:   { name: 'Mystery Samosa', icon: '🥟', stack: 1, desc: 'Eat at your own risk.' },
+  joke:   { name: 'Mystery Samosa', icon: '🥟', stack: 1, desc: 'Eat: +10 HP. At your own risk.' },
 }
 
 export const INVENTORY_MAX = 8
 
-// ---------- Damage ----------
+// ---------- Damage & recovery ----------
 export const DAMAGE = {
   policeHit: 13, // legacy reference value (POLICE_ATTACK.dmgByType is authoritative)
   vehicleHit: 35,
@@ -87,7 +87,22 @@ export const DAMAGE = {
   fallDamageMin: 9,
   dazedDuration: 4,
   dazedRecoverHealth: 50,
+  regenDelaySec: 9,   // out-of-combat time before health starts ticking back up
+  regenPerSec: 3,     // slow trickle — food items are the real healing
 }
+
+// ---------- Shout / whistle (V) — free police distraction ----------
+export const SHOUT_COOLDOWN_SEC = 2.5
+export const SHOUT_LINES = [
+  'AAZADI!',
+  'YEH DEKHO! OVER HERE!',
+  '*shrill whistle*',
+  'KOI HAI?!',
+  'CONSTABLE SAHAB, EK MINUTE!',
+  '*loud finger whistle*',
+  'SORRY JI, EMERGENCY!',
+  'EH! COMMITTEE WALON!',
+]
 
 // ---------- Character archetypes ----------
 export const ARCHETYPES: Archetype[] = [

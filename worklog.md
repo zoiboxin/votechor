@@ -832,3 +832,43 @@ Stage Summary:
 - 工程要点：服务器权威账目（takenBy 过滤实现精确归还）；一次拘留一发没收（detainUntil 标记）；增量协议参数向后兼容；离线拘留系统首次真正可用（附带修好 simulateLocal 事件分流）
 - 已知边界：在线拾取预测在服务器拒绝时可能短暂幻影（与普通物品同风险，低概率）；浏览器内自然走向警察被 headless 限速阻断（以离线分阶段+单元+combat LIVE 三层覆盖代替，无猜测成分）；没收不清 gateOpen（设计决定：gate 一旦打开不回收）
 - 建议下一轮：detention 期间 HUD 显示"已没收 N votes/M items"清单卡；小队成员拘留时向队友发"捡回装备"导航路标；season bot 也模拟拾取 token 让没收对 bot 生效；没收装备 pile 上加闪烁光柱增强可见性
+
+---
+Task ID: 21
+Agent: Z.ai Code (main)
+Task: 用户要求 — ①警察打人掉血（确认+完善）②受伤后可吃收集的食物回血（收集食物→使用→回血闭环）③路上障碍物有时看不清→确保可见 ④新增热键喊叫/吹口哨制造噪音吸引警察。理解 prompt 并专业化实现
+
+Work Log:
+- HEALTH SURVIVAL LOOP (constants.ts + player.ts + game.ts):
+  * DAMAGE 新增 regenDelaySec 9 / regenPerSec 3 — 脱战 9s 后缓慢回血（food 才是主要回血手段，trickle 只防早期小伤永久残留）；player.sinceDamage 在 damage() 归零、tickRegen(dt) 挂入 fixedUpdate
+  * 食物全部可回血：chai +10 HP（原只有体力+加速）、snack +5 HP（原只有加速）、joke/samosa +10（已有）、firstaid +50（已有）；ITEM_CONFIG desc 同步更新；useInventoryItem 补 HP popup (+N HP 粉色浮字)；被拘留时禁止进食（"No snacking in a police cell"）
+  * **H = Quick Heal**：一键吃最合理的食物 — 缺血 ≥45 优先 firstaid，否则 chai → joke → snack → firstaid（避免大材小用）；满血提示存粮、空口袋提示去收集
+  * **新增 19 个食物拾取点**（world-def，全城分布避开 collider 与既有点位）：chai 13→18、firstaid 8→13、snack 7→12、joke 4→7 — 主路两侧/四条横街路口/检查区迷宫前后/大道施工段/Colony 十字/Naya Bazaar 巷内/Purani Gali 花园/Depot/Azad Colony 公园各有分布；指南针新增 fallback：残血且附近无 medkit 且口袋无粮 → 指向最近 chai
+- SHOUT / WHISTLE (V 键, game.ts + input.ts + audio.ts + constants.ts):
+  * 新 OneShot 'shout'（默认 KeyV，可改键）→ doShout()：2.5s 冷却（performance.now 门）→ 随机 SHOUT_LINES（AAZADI! / *shrill whistle* / KOI HAI?! 等 8 条）→ 语音气泡 + 地面金色扩散噪音环 (fx.burst 12 粒子) + 口哨/喊叫双音效（audio.ts 新 'shout' sawtooth 下扫+呼吸噪声；*星号*行播 whistle 并配手捂嘴姿势 throw anim，其余 celebrate）
+  * 噪音管线复用既有系统：离线 npcs.distraction(x,z,6)；在线 net.noiseEvent → 服务器 room.noise（5/s 限流，已有）→ applyNoise 让 20m 内巡逻 NPC 转入 investigate
+  * TouchControls 新增 SHOUT（Megaphone 图标琥珀）+ HEAL（HeartPulse 粉红）两枚触屏按钮，touchBridge btn 类型扩展
+- OBSTACLE VISIBILITY (world.ts + npcs.ts):
+  * 路障全面高可视改造：白条改共享 hazardStripeMat（白色 #fffbe8 + 暖发光，setNight 驱动 emissive 0.18→1.88 模拟反光带被灯打亮）、红框共享 hazardFrameMat（夜间 0.05→0.55）、每框双反光带（上 0.2 高 + 下 0.14 高）、框厚 0.08→0.12、腿加深色 — 检查区迷宫 ~30 根栅栏全部一次材质共享零额外 draw call
+  * 夜市灯笼系统：stall 双灯笼 + cart 杆灯笼 + teaKettle 炉火余烬 + 灯笼罩光 sprite（共享 lanternMat/lanternHaloMat，夜间 emissive 0.45→2.75、halo opacity 0→0.55）— 市集/巷内的路缘障碍物夜间自发光可读
+  * 牛（移动路障）戴琥珀色铃铛+反光项圈环（emissive 0.55 常亮）— 夜间大道上不再隐身
+- **重大既有 BUG 修复 — 离线 NPC 全军 NaN 冻结**：QA 探针发现离线所有警察 brain.x=NaN（typeof number 但 JSON 序列化 null）→ 属性 setter 陷阱定位到 tickNpc 首次写入 → 根因：game.ts boot/startMatch 与 npcs.ts NpcSystem 构造器在调 createNpcStates 前对 patrol 预 spread（p => ({...p})）— **[x,z] 数组被展开成 {0:x,1:z}**，wp.x=undefined → d=NaN → 位置 NaN 永久污染 → 离线模式警察全部隐形冻结（一直存在但从未被发现，因离线只是 fallback 且在线用服务器快照渲染）；修复：patrol 原样传入（createNpcStates 本就正确处理 [x,z] tuple）→ 离线巡逻/追捕/殴打/拘留全链路首次真正可用
+- DOCS: HowToPlay 控制表新增 V（喊叫吸引警察+2.5s 冷却）与 H（智能进食 + 食物回血数值）两行；Survival Tips 新增"Health matters"（伤害源数值/30HP 以下被抓翻倍/食物回血表/脱战回血）与 V 喊叫战术条目；SettingsPanel 键位表新增 heal/shout 标签
+- QA（agent-browser，在线 :81 + 离线 :3000 双阶段）：
+  * 警察掉血：applyDamage(13,'police')×2 → 100→87→61、HUD 同步、police hit feel（击退+红晕+popup）触发
+  * 脱战回血：9s 后 61→65.3（game-time 门验证），后续 HUD 实测 50→54→63 持续 tick
+  * Quick Heal：缺血 54.2 → 正确吃 firstaid(+50→95.8)；缺血 14.2 → 正确吃 chai(+10, 体力 100)；库存精确扣减
+  * **有机战斗链 E2E**（离线）：传送到 npcA1 巡逻旁 → doShout → patrol→investigate（5.6m→0.7m 走向噪音源）→ LOS 发现→chase→wind-up→警棍命中 100→87（精确 13 = POLICE_ATTACK.dmgByType.police）→ 继续纠缠直至 **capture → DETAINED 全屏 → 7s 释放（HP=50=dazedRecoverHealth）** — 喊叫吸引警察的完整 gameplay 闭环有机发生
+  * V 键绑定链：synthetic keydown KeyV → InputManager → handleOneShot → doShout 冷却戳置位 ✓（headless press 无焦点属环境伪影）；在线 doShout spy 验证 game:noise emit（含坐标）+ 冷却门拦截第二次
+  * 食物点：19/19 新拾取点在 live world 确认（byType 计数 chai18/aid13/snack12/joke7）
+  * 夜景截图×2：检查区迷宫全部路障红框+双白反光带夜间发光、清晰可读；市集灯笼+灯池+窗光；白天对照截图零回归；perf 10 FPS @ RES 0.7 全程无回归
+  * 回归：combat-test 33/33、season-test 37/37、confiscate-test 46/46 全绿；tsc 0 项目错误、eslint 0、console 零错误、dev.log 干净
+- 服务器未改动（无需重启）：shared/constants 仅增量字段，运行中服务器行为不变
+
+Stage Summary:
+- 战斗-生存循环成立：警察殴打掉血（服务器权威）→ 30HP 以下被抓更快 → 玩家有三种恢复手段（食物 H 键智能进食 / 脱战 9s 缓回 / 释放保底 50HP），全城 50 个食物点位支撑
+- V = 免费、可改键、有冷却的"吸引警察"工具：把隐藏的噪音管线（此前只有扔瓶子能触发）变成主动战术 — 喊叫引开巡逻或自投罗网都有趣；触屏双按钮补齐移动端
+- 夜间道路障碍彻底可读：反光带路障 + 灯笼夜市 + 铃铛牛，全部共享材质零性能成本
+- 意外收获：修复离线 NPC NaN 冻结的重大既有 bug — 离线模式从"没有警察的空城"变成完整可玩（巡逻/追捕/殴打/拘留全通）
+- 已知边界：headless rAF 节流导致 game-time ≈ 35% 墙钟（回血等待需 in-page await，非逻辑问题）；在线喊叫的服务器端 NPC 反应未在浏览器直证（room.noise→applyNoise 与离线共用同一 applyNoise，离线已有机验证 + 服务器限流路径原有测试覆盖）
+- 建议下一轮：喊叫可打断 NPC 对话/触发围观群众响应；食物食用动画（hand-to-mouth）专用 AnimName；地图图例标注食物密集区；警察被喊叫吸引后到达现场若一无所获会提高怀疑基线（目前 investigate 完直接回 patrol）

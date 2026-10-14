@@ -155,6 +155,8 @@ export function buildWorldDef(): WorldDef {
     { id: 'A_sign_1', type: 'sign', x: 12, y: 1, z: -30 },
     { id: 'A_aid_1', type: 'firstaid', x: 30, y: 1, z: -16 },
     { id: 'A_joke_1', type: 'joke', x: 16, y: 1.15, z: -62 },
+    { id: 'A_chai_3', type: 'chai', x: -6, y: 1, z: -66 },
+    { id: 'A_snack_3', type: 'snack', x: 6, y: 1, z: -60 },
   )
 
   // Plaza NPCs (light) — patrol the SIDES of the plaza; the center road stays a fair tutorial run
@@ -216,6 +218,10 @@ export function buildWorldDef(): WorldDef {
     { id: 'B_snack_2', type: 'snack', x: -15, y: 1, z: -178 },
     { id: 'B_aid_1', type: 'firstaid', x: -13, y: 1, z: -146 },
     { id: 'B_joke_1', type: 'joke', x: 15, y: 1, z: -192 },
+    { id: 'B_snack_3', type: 'snack', x: 2, y: 1, z: -116 },
+    { id: 'B_aid_2', type: 'firstaid', x: -2, y: 1, z: -148 },
+    { id: 'B_chai_3', type: 'chai', x: 3, y: 1, z: -180 },
+    { id: 'B_joke_2', type: 'joke', x: -2, y: 1, z: -104 },
   )
 
   npcs.push(
@@ -296,6 +302,7 @@ export function buildWorldDef(): WorldDef {
       { id: 'S1_chai', type: 'chai', x: -76, y: 1, z: -176 },
       { id: 'S1_bot', type: 'bottle', x: -88.9, y: 1, z: -93 },
       { id: 'S1_aid', type: 'firstaid', x: -92.4, y: 1, z: -146.4 },
+      { id: 'S1_joke', type: 'joke', x: -48, y: 1, z: -170 },
     )
     npcs.push({ id: 'npcS1', type: 'police', x: -66, z: -92, patrol: [[-66, -92], [-92, -94], [-94, -120], [-66, -118]], zone: 1 })
   }
@@ -349,6 +356,7 @@ export function buildWorldDef(): WorldDef {
       { id: 'S2_tok', type: 'token', x: 58, y: 1, z: -121 },      // behind the bazaar shops
       { id: 'S2_snack', type: 'snack', x: 84, y: 1, z: -164 },
       { id: 'S2_bot', type: 'bottle', x: 70, y: 1, z: -182.6 },
+      { id: 'S2_chai', type: 'chai', x: 76, y: 1, z: -137 },
     )
     npcs.push({ id: 'npcS2', type: 'police', x: 52, z: -100, patrol: [[52, -100], [104, -102], [104, -118], [52, -116]], zone: 1 })
   }
@@ -399,6 +407,9 @@ export function buildWorldDef(): WorldDef {
     { id: 'C_bot_2', type: 'bottle', x: -22, y: 1, z: -244 },
     { id: 'C_aid_1', type: 'firstaid', x: -36, y: 1, z: -252 },
     { id: 'C_snack_1', type: 'snack', x: 8, y: 1, z: -240 },
+    { id: 'C_aid_2', type: 'firstaid', x: -6, y: 1, z: -212 },
+    { id: 'C_snack_2', type: 'snack', x: -6, y: 1, z: -246 },
+    { id: 'C_aid_3', type: 'firstaid', x: -20, y: 1, z: -270 },
     { id: 'C_foam_1', type: 'foam', x: -10, y: 1, z: -264 },
     { id: 'S6_foam', type: 'foam', x: -80, y: 1, z: -246 },
     { id: 'S6_bot', type: 'bottle', x: 80, y: 1, z: -256 },
@@ -485,6 +496,9 @@ export function buildWorldDef(): WorldDef {
     { id: 'D_aid_1', type: 'firstaid', x: -33, y: 1, z: -384 },
     { id: 'D_foam_1', type: 'foam', x: 30, y: 1, z: -330 },
     { id: 'D_joke_1', type: 'joke', x: -12, y: 1, z: -404 },
+    { id: 'D_aid_2', type: 'firstaid', x: 8, y: 1, z: -312 },
+    { id: 'D_snack_2', type: 'snack', x: -10, y: 1, z: -356 },
+    { id: 'D_chai_3', type: 'chai', x: 14, y: 1, z: -396 },
   )
 
   npcs.push(
@@ -553,6 +567,7 @@ export function buildWorldDef(): WorldDef {
       { id: 'S4_chai', type: 'chai', x: 60, y: 1, z: -310 },
       { id: 'S4_snack', type: 'snack', x: 94, y: 1, z: -344 },
       { id: 'S4_bot', type: 'bottle', x: 76, y: 1, z: -332 },
+      { id: 'S4_aid', type: 'firstaid', x: 66, y: 1, z: -330 },
     )
     npcs.push({ id: 'npcS5', type: 'police', x: 60, z: -312, patrol: [[60, -312], [104, -312], [104, -356], [60, -356]], zone: 3 })
   }
@@ -588,6 +603,9 @@ export function buildWorldDef(): WorldDef {
     { id: 'E_aid_1', type: 'firstaid', x: -24, y: 1, z: -470 },
     { id: 'E_snack_1', type: 'snack', x: 24, y: 1, z: -426 },
     { id: 'E_foam_1', type: 'foam', x: 18, y: 1, z: -470 },
+    { id: 'E_aid_2', type: 'firstaid', x: 12, y: 1, z: -446 },
+    { id: 'E_snack_2', type: 'snack', x: -8, y: 1, z: -420 },
+    { id: 'E_joke_2', type: 'joke', x: 18, y: 1, z: -440 },
   )
 
   npcs.push(
@@ -638,6 +656,7 @@ export function buildWorldDef(): WorldDef {
     items.push(
       { id: 'S5_tok', type: 'token', x: 54, y: 1, z: -539 },     // behind the colony homes
       { id: 'S5_aid', type: 'firstaid', x: 90, y: 1, z: -474 },
+      { id: 'S5_chai', type: 'chai', x: 86, y: 1, z: -480 },
     )
     npcs.push({ id: 'npcS6', type: 'police', x: 56, z: -464, patrol: [[56, -464], [104, -464], [104, -506], [56, -506]], zone: 4 })
   }

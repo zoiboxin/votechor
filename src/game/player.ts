@@ -18,6 +18,7 @@ export class PlayerController {
   maxStamina = MOVE.staminaMax
   health = 100
   maxHealth = 100
+  sinceDamage = 999 // seconds since last hit (drives out-of-combat regen)
   speedBoostUntil = 0
   slideTimer = 0
   dazedTimer = 0
@@ -230,6 +231,7 @@ export class PlayerController {
   damage(amount: number, _kind: string): boolean {
     if (this.state === 'dazed' || this.state === 'detained') return false
     this.health -= amount
+    this.sinceDamage = 0
     if (this.health <= 0) {
       this.health = 0
       this.state = 'dazed'
@@ -240,7 +242,18 @@ export class PlayerController {
     return false
   }
 
-  heal(amount: number) { this.health = Math.min(this.maxHealth, this.health + amount) }
+  heal(amount: number) {
+    if (amount > 0) this.health = Math.min(this.maxHealth, this.health + amount)
+  }
+
+  /** Slow out-of-combat regen — after DAMAGE.regenDelaySec without a hit, a gentle trickle.
+   *  Food items are the real healing; this just stops early scrapes from lingering forever. */
+  tickRegen(dt: number) {
+    this.sinceDamage += dt
+    if (this.state === 'normal' && this.health > 0 && this.health < this.maxHealth && this.sinceDamage >= DAMAGE.regenDelaySec) {
+      this.health = Math.min(this.maxHealth, this.health + DAMAGE.regenPerSec * dt)
+    }
+  }
 
   detain() {
     this.state = 'detained'

@@ -39,7 +39,9 @@ export class NpcSystem {
     quality: 'low' | 'medium' | 'high',
   ) {
     const npcs = quality === 'low' ? world.npcs : world.npcs
-    const brains = createNpcStates(npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol.map(p => ({ ...p })) })))
+    // patrol passed RAW — createNpcStates handles [x,z] tuples properly; pre-spreading
+    // ({...p}) exploded tuples into {0:x,1:z}, making wp.x undefined → NaN-frozen NPCs offline
+    const brains = createNpcStates(npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol })))
     for (const b of brains) {
       if (b.type === 'searchlight') continue
       const rig = new CharacterRig({ colors: NPC_COLORS[b.type] ?? NPC_COLORS.police, npcType: b.type as 'police', scale: b.type === 'security' ? 1.04 : 1 })
@@ -421,6 +423,14 @@ function buildCow(): { group: THREE.Group; wheels: VehicleWheel[] } {
   ], cowCream)
   const group = new THREE.Group()
   group.add(body, spots, merged([hornGeo, horn2], hornMat, false), legs)
+  // road-safety collar: amber bell + reflective band so free-roaming cows read at night too
+  const bellMat = new THREE.MeshStandardMaterial({ color: '#c9a02e', emissive: '#ffaa33', emissiveIntensity: 0.55, roughness: 0.4, metalness: 0.3 })
+  const bell = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), bellMat)
+  bell.position.set(0, 1.06, 0.92)
+  const band = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.035, 5, 10), bellMat)
+  band.position.set(0, 1.16, 0.88)
+  band.rotation.x = Math.PI / 2.4
+  group.add(bell, band)
   return { group, wheels: [] }
 }
 

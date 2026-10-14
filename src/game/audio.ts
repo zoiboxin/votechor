@@ -7,7 +7,7 @@ export type SfxName =
   | 'pickup' | 'token' | 'throw' | 'impact' | 'hit' | 'policehit' | 'vault' | 'capture' | 'release'
   | 'heal' | 'revive' | 'checkpoint' | 'uiClick' | 'uiHover' | 'bossHit' | 'stampSlam'
   | 'shockwave' | 'paperRustle' | 'dizzy' | 'victory' | 'defeat' | 'cash' | 'horn' | 'moo' | 'gate'
-  | 'thunder'
+  | 'shout' | 'thunder'
 
 export type MusicTheme = 'menu' | 'ambient' | 'chase' | 'boss' | 'victory'
 
@@ -129,6 +129,13 @@ class AudioManagerImpl {
       case 'whistle': {
         this.osc('sine', 2100, t, 0.14, 0.14 * v, 2400)
         this.osc('sine', 2600, t + 0.16, 0.18, 0.14 * v, 2200)
+        break
+      }
+      case 'shout': {
+        // human-ish street yell — formant-ish saw sweep + breath noise + chest thump
+        this.osc('sawtooth', 240, t, 0.24, 0.16 * v, 140)
+        this.osc('square', 480, t + 0.02, 0.16, 0.05 * v, 320)
+        this.noise(0.14, t, 0.07 * v, 950, 0.7)
         break
       }
       case 'whistleFar': this.osc('sine', 1900, t, 0.3, 0.05 * v, 2300); break
