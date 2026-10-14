@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone, Gift, UserPlus, Link2 } from 'lucide-react'
+import { KeyRound, HeartPulse, ShieldAlert, X, Route, Users, Copy, Check, LogOut, Flag, Ticket, Megaphone, Gift, UserPlus, Link2, Bot as BotIcon, Globe } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const TIPS = [
@@ -23,6 +23,8 @@ export default function SquadPanel() {
   const hud = useGameStore((s) => s.hud)
   const squad = useGameStore((s) => s.squad)
   const matchMode = useGameStore((s) => s.matchMode)
+  const season = useGameStore((s) => s.season)
+  const roomRoster = useGameStore((s) => s.roomRoster)
   const [joinCode, setJoinCode] = useState('')
   const [copied, setCopied] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
@@ -93,8 +95,8 @@ export default function SquadPanel() {
           </button>
         </div>
 
-        {/* ---------- squad cell management (multiplayer only) ---------- */}
-        {matchMode === 'multiplayer' && (
+        {/* ---------- squad cell management (multiplayer rooms + seasons) ---------- */}
+        {(matchMode === 'multiplayer' || season) && (
           <div className="mb-3 rounded-xl border-2 border-[#1c1a17]/70 bg-[#efe6cd] p-2.5">
             {squad ? (
               <>
@@ -230,15 +232,75 @@ export default function SquadPanel() {
             )}
           </div>
         )}
-        {matchMode !== 'multiplayer' && (
+        {matchMode !== 'multiplayer' && !season && (
           <p className="mb-3 rounded-xl border-2 border-dashed border-[#1c1a17]/40 bg-[#efe6cd]/60 px-3 py-2 text-center text-[10px] font-bold uppercase tracking-widest text-[#1c1a17]/55">
             Squads are a multiplayer feature — rally in a room first
           </p>
         )}
 
+        {/* ---------- season roster (solo queue: the 100-protester persistent world) ---------- */}
+        {season && (() => {
+          const humans = roomRoster.filter((p) => !p.bot)
+          const bots = roomRoster.filter((p) => p.bot)
+          const ordered = [...humans, ...bots]
+          return (
+            <div className="mb-3 rounded-xl border-2 border-[#8c1f28]/70 bg-[#efe6cd] p-2.5">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-lg border-2 border-[#1c1a17]/70 bg-[#8c1f28]">
+                    <Globe className="h-3.5 w-3.5 text-[#f5efdc]" />
+                  </span>
+                  <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1c1a17]/70">{season.name}</span>
+                </div>
+                <span className="text-[9px] font-black tabular-nums text-[#8c1f28]">
+                  {season.humans + season.bots}/{season.cap} · {season.humans} human{season.humans === 1 ? '' : 's'}
+                </span>
+              </div>
+              {/* population meter — gold humans over maroon bots */}
+              <div className="mb-2 flex h-2 overflow-hidden rounded-full border border-[#1c1a17]/50 bg-[#1c1a17]/20">
+                <div className="h-full bg-[#f2c14e] transition-[width] duration-500" style={{ width: `${(season.humans / Math.max(1, season.cap)) * 100}%` }} />
+                <div className="h-full bg-[#b3552e] transition-[width] duration-500" style={{ width: `${(season.bots / Math.max(1, season.cap)) * 100}%` }} />
+                <div className="h-full flex-1" />
+              </div>
+              <div className="mb-1 flex items-center justify-between px-0.5">
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#1c1a17]/50">
+                  <BotIcon className="h-3 w-3" /> Roster · bots fill empty slots
+                </span>
+                <span className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/40">{ordered.length} in season</span>
+              </div>
+              <div className="vc-scroll max-h-52 space-y-1 overflow-y-auto pr-1">
+                {ordered.map((p) => (
+                  <div
+                    key={p.id}
+                    className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${
+                      p.bot ? 'border-[#1c1a17]/40 bg-[#f5efdc]/70' : 'border-[#2e6e4e] bg-[#dcebe0]'
+                    }`}
+                  >
+                    <span
+                      className="h-4 w-4 shrink-0 rounded-full border-2 border-[#1c1a17]/50"
+                      style={{ background: archetypeById(p.archetype || 'student').colors.shirt }}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-[10px] font-black uppercase tracking-tight text-[#1c1a17]/85">{p.name}</span>
+                    {p.bot ? (
+                      <span className="rounded border border-[#1c1a17]/50 bg-[#e7dfc9] px-1 text-[8px] font-black uppercase tracking-wider text-[#1c1a17]/60">Bot</span>
+                    ) : (
+                      <span className="rounded border border-[#2e6e4e] bg-[#2e6e4e] px-1 text-[8px] font-black uppercase text-[#f5efdc]">Human</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[9px] font-semibold text-[#1c1a17]/55">
+                When a protester leaves, a bot walks in from the plaza. When a real player joins, a bot steps aside. The season never sleeps.
+              </p>
+            </div>
+          )
+        })()}
+
         {hud.squad.length === 0 ? (
           <p className="rounded-xl border-2 border-dashed border-[#1c1a17]/40 px-3 py-4 text-center text-xs font-bold text-[#1c1a17]/60">
-            You are protest-soloing right now. Join a multiplayer room to get squadmates — and witnesses.
+            {season
+              ? 'No protesters close enough to show status — walk toward the crowd!'
+              : 'You are protest-soloing right now. Join a multiplayer room to get squadmates — and witnesses.'}
           </p>
         ) : (
           <div className="space-y-1.5">
@@ -286,8 +348,12 @@ export default function SquadPanel() {
                       </span>
                     </div>
                   </div>
-                  {/* per-row actions: INVITE outsiders into the cell / GIFT cellmates directly (§15 + §11) */}
-                  {inCell ? (
+                  {/* per-row actions: INVITE outsiders into the cell / GIFT cellmates directly (§15 + §11) — bots are not invitable */}
+                  {m.bot ? (
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 border-[#1c1a17]/20 bg-[#e7dfc9]/60 text-[#1c1a17]/35" title="Season bot — cheering from the sidelines">
+                      <BotIcon className="h-3.5 w-3.5" />
+                    </span>
+                  ) : inCell ? (
                     <button
                       onClick={() => uiActions().giftTo(m.id)}
                       disabled={hud.detained || hud.inventory.length === 0 || m.detained}

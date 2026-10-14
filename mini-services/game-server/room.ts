@@ -68,6 +68,7 @@ export interface PlayerState {
   id: string
   name: string
   archetype: string
+  bot: boolean // season bot (server-simulated protester, no socket behind it)
   x: number
   y: number
   z: number
@@ -160,17 +161,20 @@ export class Room {
 
   // ---------- players ----------
 
-  addPlayer(socketId: string, name: string, archetype: string): PlayerState {
+  addPlayer(socketId: string, name: string, archetype: string, opts?: { bot?: boolean; x?: number; z?: number }): PlayerState {
     const arch = archetypeById(archetype)
     const now = Date.now()
     const maxHealth = 100 + arch.stats.healthBonus
+    const x = opts?.x ?? WORLD.spawn.x
+    const z = opts?.z ?? WORLD.spawn.z
     const p: PlayerState = {
       id: socketId,
       name,
       archetype: arch.id,
-      x: WORLD.spawn.x,
+      bot: opts?.bot ?? false,
+      x,
       y: 0,
-      z: WORLD.spawn.z,
+      z,
       ry: 0,
       anim: 'idle',
       health: maxHealth,
@@ -183,8 +187,8 @@ export class Room {
       carrying: false,
       joinedAt: now,
       lastStateTime: now,
-      lastX: WORLD.spawn.x,
-      lastZ: WORLD.spawn.z,
+      lastX: x,
+      lastZ: z,
       noiseTimes: [],
       emoteTimes: [],
       giftTimes: [],
@@ -208,6 +212,26 @@ export class Room {
   getPlayer(socketId: string): PlayerState | undefined {
     return this.players.get(socketId)
   }
+
+  /** Real (socket-backed) players — bots excluded. */
+  humans(): PlayerState[] {
+    const out: PlayerState[] = []
+    for (const p of this.players.values()) if (!p.bot) out.push(p)
+    return out
+  }
+
+  humansCount(): number {
+    let n = 0
+    for (const p of this.players.values()) if (!p.bot) n++
+    return n
+  }
+
+  /**
+   * Optional replacement for the legacy room-wide game:players broadcast.
+   * Seasons set this to per-recipient AOI-filtered emission (99 bots make a
+   * full roster blast at 12 Hz wasteful). When unset the legacy path runs.
+   */
+  playersBroadcaster: (() => void) | null = null
 
   private emitRoom(event: string, ...args: unknown[]) {
     this.io.to(this.id).emit(event, ...args)
@@ -441,10 +465,13 @@ export class Room {
     // Eligible player views: NPCs and boss ignore detained/dazed players.
     // Fresh joiners get an 8s spawn grace so nobody is captured while loading in.
     const views: NpcPlayerView[] = []
+    const bossViews: NpcPlayerView[] = [] // humans only — bots never start the boss fight
     for (const p of this.players.values()) {
       if (!p.detained && !p.dazed) {
         const grace = now - p.joinedAt < 10000 && dist2d(p.x, p.z, WORLD.spawn.x, WORLD.spawn.z) < 16
-        views.push({ id: p.id, x: p.x, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace })
+        const view: NpcPlayerView = { id: p.id, x: p.x, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot }
+        views.push(view)
+        if (!p.bot) bossViews.push(view)
       }
     }
 
@@ -491,8 +518,8 @@ export class Room {
       }
     }
 
-    // 7. Boss brain
-    const bossEv = tickBoss(this.boss, views, dt, now)
+    // 7. Boss brain — only real protesters can wake the Vote Collector
+    const bossEv = tickBoss(this.boss, bossViews, dt, now)
     for (const d of bossEv.damage) this.damagePlayer(d.playerId, d.amount, d.kind, now)
 
     // 8. Match end (victory or 900s cap) → emit once, then reset the room
@@ -594,23 +621,7 @@ export class Room {
 
   playersArray(): PlayerNetState[] {
     const out: PlayerNetState[] = []
-    for (const p of this.players.values()) {
-      out.push({
-        id: p.id,
-        name: p.name,
-        archetype: p.archetype,
-        x: round2(p.x),
-        y: round2(p.y),
-        z: round2(p.z),
-        ry: round2(p.ry),
-        anim: p.anim,
-        health: p.health,
-        detained: p.detained,
-        dazed: p.dazed,
-        tokens: p.tokens,
-        carrying: p.carrying,
-      } as PlayerNetState)
-    }
+    for (const p of this.players.values()) out.push(playerNet(p))
     return out
   }
 
@@ -669,8 +680,28 @@ export class Room {
 
   emitPlayers() {
     if (this.disposed || this.players.size === 0) return
+    if (this.playersBroadcaster) { this.playersBroadcaster(); return }
     this.emitRoom('game:players', this.playersArray())
   }
+}
+
+/** Wire format for one player/bot — shared by the legacy and AOI broadcast paths. */
+export function playerNet(p: PlayerState): PlayerNetState {
+  return {
+    id: p.id,
+    name: p.name,
+    archetype: p.archetype,
+    x: round2(p.x),
+    y: round2(p.y),
+    z: round2(p.z),
+    ry: round2(p.ry),
+    anim: p.anim,
+    health: p.health,
+    detained: p.detained,
+    dazed: p.dazed,
+    tokens: p.tokens,
+    carrying: p.carrying,
+  } as PlayerNetState
 }
 
 // ---------- deterministic vehicles (mirrors client VehicleSystem ping-pong) ----------

@@ -61,7 +61,9 @@ export default function EndScreen() {
   const xpIntoLevel = Math.max(0, (profile?.xp ?? base) - base)
   const pct = Math.min(100, (xpIntoLevel / Math.max(1, next - base)) * 100)
 
-  const showHonors = matchMode === 'multiplayer' && roomRoster.length > 0
+  // Match Honors: kudos + MVP vote among real humans — season bots are spectators, not candidates
+  const honorRoster = roomRoster.filter((p) => !p.bot)
+  const showHonors = (matchMode === 'multiplayer' || matchMode === 'solo') && honorRoster.length > 0
   const tallyById = new Map((postMatch.tally ?? []).map((t) => [t.id, t]))
   const mvpId = postMatch.mvp?.winnerId ?? null
 
@@ -309,7 +311,7 @@ export default function EndScreen() {
             </div>
 
             <div className="space-y-1.5">
-              {roomRoster.map((p) => {
+              {honorRoster.map((p) => {
                 const arch = archetypeById(p.archetype || 'student')
                 const t = tallyById.get(p.id)
                 const votes = t?.votes ?? 0

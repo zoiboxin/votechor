@@ -8,6 +8,8 @@ import {
   WORLD,
   Room,
 } from './room'
+import { SeasonManager } from './season'
+import type { SeasonInfo } from './season'
 import { TOKENS_NEEDED, ARCHETYPES } from '../../src/game/shared/constants'
 import type { ProjectileNetState } from '../../src/game/shared/types'
 
@@ -49,11 +51,13 @@ const io = new Server(httpServer, {
 
 const rooms = new Map<string, Room>()
 const privateRooms = new Map<string, Room>() // code -> room
+const seasonManager = new SeasonManager(io, rooms)
 let pubCounter = 0
 
 function totalPlayers(): number {
+  // Only real socket-backed players count against the global cap — season bots are free.
   let n = 0
-  for (const r of rooms.values()) n += r.size
+  for (const r of rooms.values()) n += r.humansCount()
   return n
 }
 
@@ -105,6 +109,12 @@ function leaveRoom(socketId: string) {
   dropMvpVote(socketId, roomId) // retract the departed voter's MVP ballot (after removal → accurate room count)
   if (player) {
     io.to(room.id).emit('game:playerleft', socketId, player.name)
+  }
+  if (seasonManager.get(roomId)) {
+    // Season: bots keep the world alive — a backfill bot walks in, retirement
+    // happens only after the last human has been gone for the grace period.
+    seasonManager.get(roomId)!.onHumanLeft()
+    return
   }
   if (room.size === 0) {
     const mvpState = roomMvpVotes.get(room.id)
@@ -215,7 +225,7 @@ function mvpTallyPayload(room: Room, state: MvpVoteState) {
   const tally = [...counts.entries()]
     .map(([id, votes]) => ({ id, name: room.getPlayer(id)?.name ?? 'Protester', votes }))
     .sort((a, b) => b.votes - a.votes)
-  return { tally, voters: state.votes.size, roomPlayers: room.size }
+  return { tally, voters: state.votes.size, roomPlayers: room.humansCount() }
 }
 
 function finalizeMvp(roomId: string) {
@@ -247,7 +257,7 @@ function castMvpVote(room: Room, voterId: string, targetId: string) {
   }
   state.votes.set(voterId, targetId)
   io.to(room.id).emit('game:mvpTally', mvpTallyPayload(room, state))
-  if (state.votes.size >= room.size) finalizeMvp(room.id) // everyone voted → instant verdict
+  if (state.votes.size >= room.humansCount()) finalizeMvp(room.id) // every human voted → instant verdict
 }
 
 /** Remove a departing voter's ballot and refresh the tally (vote session survives). */
@@ -271,7 +281,7 @@ const socketRooms = new Map<string, string>()
 io.on('connection', (socket) => {
   console.log(`[conn] ${socket.id} connected`)
 
-  socket.on('game:join', (payload: { name?: unknown; archetype?: unknown; roomCode?: unknown } = {}) => {
+  socket.on('game:join', (payload: { name?: unknown; archetype?: unknown; roomCode?: unknown; season?: unknown } = {}) => {
     if (socketRooms.has(socket.id)) return // already joined
     if (totalPlayers() >= PLAYER_CAP) {
       socket.emit('game:joined', { ok: false, error: 'Server full' })
@@ -283,8 +293,14 @@ io.on('connection', (socket) => {
     const archetype = ARCHETYPE_IDS.has(archetypeRaw) ? archetypeRaw : 'student'
 
     let room: Room | null = null
+    let seasonInfo: SeasonInfo | undefined
     const code = sanitizeCode(payload.roomCode)
-    if (code) {
+    const wantsSeason = payload.season === true && !code
+    if (wantsSeason) {
+      // Solo queue → persistent Season: liveliest season with room, else a new one.
+      const season = seasonManager.assign()
+      room = season.room
+    } else if (code) {
       room = findPrivateRoom(code)
       if (!room) {
         socket.emit('game:joined', { ok: false, error: 'Room full' })
@@ -298,6 +314,13 @@ io.on('connection', (socket) => {
     socketRooms.set(socket.id, room.id)
     const player = room.addPlayer(socket.id, name, archetype)
 
+    if (wantsSeason) {
+      // One bot steps aside, bots top back up to SEASON_CAP — all BEFORE the ack
+      // so the joiner instantly sees the full 100-protester roster.
+      const season = seasonManager.get(room.id)! 
+      season.onHumanJoined()
+      seasonInfo = season.info()
+    }
     socket.emit('game:joined', {
       ok: true,
       playerId: socket.id,
@@ -312,6 +335,7 @@ io.on('connection', (socket) => {
       tokensCollected: room.tokens,
       boss: room.bossPayload().boss,
       matchStartedAt: room.matchStartedAt,
+      season: seasonInfo ?? null,
     })
     socket.to(room.id).emit('game:playerjoined', socket.id, player.name)
     console.log(`[join] ${player.name}(${socket.id}) → ${room.id} (${room.size}/${ROOM_CAP})`)
@@ -496,6 +520,7 @@ io.on('connection', (socket) => {
       socket.emit('game:mvpError', { reason: 'SELF_VOTE' })
       return
     }
+    if (targetId.startsWith('bot_')) return // bots are not MVP candidates
     const target = room.getPlayer(targetId)
     if (!target || socketRooms.get(targetId) !== roomId) {
       socket.emit('game:mvpError', { reason: 'TARGET_LEFT' })
@@ -513,6 +538,11 @@ io.on('connection', (socket) => {
   socket.on('game:gift', (data: { targetId?: unknown; type?: unknown } = {}) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined
+    // Bots carry nothing and own nothing — refund immediately so the client restores the item.
+    if (typeof data.targetId === 'string' && data.targetId.startsWith('bot_')) {
+      socket.emit('game:giftRefund', { type: String(data.type ?? '') })
+      return
+    }
     // rejected gifts (bad type / rate limit / too far / self) are refunded client-side
     if (!room || !room.gift(socket.id, data.targetId, data.type)) {
       socket.emit('game:giftRefund', { type: String(data.type ?? '') })
@@ -522,6 +552,7 @@ io.on('connection', (socket) => {
   socket.on('game:giftBounce', (data: { targetId?: unknown; type?: unknown } = {}) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined
+    if (typeof data.targetId === 'string' && data.targetId.startsWith('bot_')) return
     room?.giftBounce(socket.id, data.targetId, data.type)
   })
 

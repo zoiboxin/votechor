@@ -161,18 +161,19 @@ export default function PlayScreen({ onBack }: { onBack: () => void }) {
               <span className="flex h-10 w-10 items-center justify-center rounded-xl border-2 border-[#1c1a17]/70 bg-[#f2c14e]">
                 <Zap className="h-5 w-5 text-[#1c1a17]" />
               </span>
-              <h3 className="text-lg font-black uppercase tracking-tight text-[#1c1a17]">Solo Run</h3>
+              <h3 className="text-lg font-black uppercase tracking-tight text-[#1c1a17]">Solo · Season Queue</h3>
             </div>
             <p className="mt-2 flex-1 text-xs font-semibold leading-relaxed text-[#1c1a17]/70">
-              The whole city to yourself. Police, searchlights, one cow of mass destruction and the Great Vote Collector —
-              all offline, all personal. Perfect for practicing your slide (C).
+              Drop into a live SEASON — a persistent city of 100 protesters. Bots fill every empty slot (and they wander,
+              chat, flee police and march on checkpoints). When a real player joins, a bot steps aside. Leave and come back:
+              your season keeps breathing.
             </p>
             <button
               onClick={startSolo}
               disabled={joining}
               className="mt-4 rounded-2xl border-2 border-[#1c1a17]/80 bg-[#8c1f28] px-4 py-3 text-sm font-black uppercase tracking-tight text-[#f5efdc] shadow-[4px_4px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:opacity-50"
             >
-              Start Solo Protest
+              Start Solo · Join Season
             </button>
           </motion.section>
 

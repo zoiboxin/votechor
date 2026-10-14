@@ -1,7 +1,7 @@
 'use client'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { BookOpen, Keyboard, Crown, ScrollText, Megaphone, Users, Flame, Sparkles } from 'lucide-react'
+import { BookOpen, Keyboard, Crown, ScrollText, Megaphone, Users, Flame, Sparkles, Globe } from 'lucide-react'
 import { BOSS_NAME, BOSS_PHASE_NAMES } from '@/game/shared/constants'
 
 const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
@@ -132,6 +132,17 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
               </p>
               <p className="mt-1 text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
                 After the whistle: <b>Match Honors</b> on the results screen — send 🙌 <b>kudos</b> and vote an <b>MVP</b> (15s window). Kudos received and MVP titles live on your stats card forever.
+              </p>
+            </div>
+            <div className="rounded-xl border-2 border-[#b07d1e]/60 bg-[#f2c14e]/25 p-2.5">
+              <div className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-[#b07d1e]">
+                <Globe className="h-3.5 w-3.5" /> Seasons &amp; Bots
+              </div>
+              <p className="text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
+                Solo play drops you into a live <b>SEASON</b> — a persistent city of <b>100 protesters</b>. Bots fill every empty slot: they wander the streets, chat, emote, socialize, flee police, march on checkpoints and even get detained. Watch the season feed — people are always arriving.
+              </p>
+              <p className="mt-1 text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
+                When a protester leaves, a bot walks in from the plaza. When a <b>real player</b> joins, a bot steps aside. Once a season fills with humans, the next one opens. Tab shows the full roster.
               </p>
             </div>
             <div className="rounded-xl border-2 border-[#b07d1e]/60 bg-[#f2c14e]/25 p-2.5">

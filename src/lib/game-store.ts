@@ -8,7 +8,7 @@ export type MenuScreen = 'main' | 'customize' | 'play' | 'leaderboard' | 'achiev
 
 export interface Notification { id: number; text: string; kind: 'info' | 'capture' | 'achievement' | 'squad' | 'boss' | 'warning' }
 
-export interface SquadMember { id: string; name: string; health: number; detained: boolean; dazed: boolean; archetype: string; distance: number }
+export interface SquadMember { id: string; name: string; health: number; detained: boolean; dazed: boolean; archetype: string; distance: number; bot?: boolean }
 
 export interface CompassMarker { kind: 'token' | 'checkpoint' | 'boss' | 'chai' | 'firstaid' | 'squad'; deg: number; dist: number }
 
@@ -171,7 +171,19 @@ export interface PendingInvite {
   at: number
 }
 
-export interface RoomRosterEntry { id: string; name: string; archetype: string }
+export interface RoomRosterEntry { id: string; name: string; archetype: string; bot?: boolean }
+
+/** Persistent season state (solo queue) — mirrored from the server's game:season event. */
+export interface SeasonState {
+  id: string
+  name: string
+  humans: number
+  bots: number
+  cap: number
+  humansMax: number
+  lastEvent: string | null
+  lastEventAt: number
+}
 
 export interface MvpTallyRow { id: string; name: string; votes: number }
 
@@ -218,6 +230,7 @@ export interface GameState {
   pendingInvite: PendingInvite | null
   postMatch: PostMatchState
   roomRoster: RoomRosterEntry[]
+  season: SeasonState | null
 
   setUIMode: (m: UIMode) => void
   setMenuScreen: (s: MenuScreen) => void
@@ -247,6 +260,8 @@ export interface GameState {
   setMvpTally: (t: { tally: MvpTallyRow[]; voters: number; roomPlayers: number } | null) => void
   setMvpWinner: (m: { winnerId: string; winnerName: string } | null) => void
   setRoomRoster: (r: RoomRosterEntry[]) => void
+  setSeason: (s: { id: string; name: string; humans: number; bots: number; cap: number; humansMax: number } | null) => void
+  patchSeason: (p: Partial<SeasonState>) => void
 }
 
 const defaultHud: HudState = {
@@ -306,6 +321,7 @@ export const useGameStore = create<GameState>((set) => ({
   pendingInvite: null,
   postMatch: defaultPostMatch,
   roomRoster: [],
+  season: null,
 
   setUIMode: (m) => set({ uiMode: m }),
   setMenuScreen: (s) => set({ menuScreen: s }),
@@ -337,6 +353,8 @@ export const useGameStore = create<GameState>((set) => ({
   setMvpTally: (t) => set((st) => ({ postMatch: { ...st.postMatch, tally: t?.tally ?? null, voters: t?.voters ?? 0, roomPlayers: t?.roomPlayers ?? 0 } })),
   setMvpWinner: (m) => set((st) => ({ postMatch: { ...st.postMatch, mvp: m } })),
   setRoomRoster: (r) => set({ roomRoster: r }),
+  setSeason: (s) => set({ season: s ? { ...s, lastEvent: null, lastEventAt: 0 } : null }),
+  patchSeason: (p) => set((st) => ({ season: st.season ? { ...st.season, ...p } : null })),
 }))
 
 // ---- controller bridge: UI calls these, engine registers handlers ----

@@ -10,6 +10,17 @@ export interface JoinPayload {
   archetype: string
   roomCode: string | null
   cosmetics?: Record<string, unknown>
+  season?: boolean // solo queue → persistent Season (99 backfill bots)
+}
+
+/** Season metadata from the server (join ack + game:season updates). */
+export interface SeasonNetInfo {
+  id: string
+  name: string
+  humans: number
+  bots: number
+  cap: number
+  humansMax: number
 }
 
 export interface JoinAck {
@@ -27,6 +38,7 @@ export interface JoinAck {
   tokensCollected: number
   boss: BossNetState | null
   matchStartedAt: number
+  season?: SeasonNetInfo | null
 }
 
 export type NetEvents = {
@@ -63,6 +75,7 @@ export type NetEvents = {
   onMvpTally: (t: { tally: { id: string; name: string; votes: number }[]; voters: number; roomPlayers: number }) => void
   onMvpFinal: (f: { winnerId: string | null; winnerName: string | null; tally: { id: string; name: string; votes: number }[]; voters: number }) => void
   onMvpError: (e: { reason: 'SELF_VOTE' | 'TARGET_LEFT' }) => void
+  onSeason: (s: SeasonNetInfo) => void
   onDisconnect: () => void
   onConnect: () => void
   onPing: (ms: number) => void
@@ -138,6 +151,7 @@ export class NetClient {
         socket.on('game:mvpTally', (t: { tally: { id: string; name: string; votes: number }[]; voters: number; roomPlayers: number }) => this.ev.onMvpTally?.(t))
         socket.on('game:mvpFinal', (f: { winnerId: string | null; winnerName: string | null; tally: { id: string; name: string; votes: number }[]; voters: number }) => this.ev.onMvpFinal?.(f))
         socket.on('game:mvpError', (e: { reason: 'SELF_VOTE' | 'TARGET_LEFT' }) => this.ev.onMvpError?.(e))
+        socket.on('game:season', (s: SeasonNetInfo) => this.ev.onSeason?.(s))
         socket.on('game:pong', (sentAt: number) => {
           this.ping = Math.round(performance.now() - sentAt)
           this.ev.onPing?.(this.ping)

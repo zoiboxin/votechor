@@ -30,6 +30,7 @@ export interface NpcPlayerView {
   detained: boolean
   dazed: boolean
   hidden?: boolean // inside a hide spot
+  bot?: boolean // season bots — police deprioritize them so humans stay the main quarry
 }
 
 export interface NpcEvent {
@@ -119,7 +120,9 @@ export function tickNpc(
     }
     if (segmentBlocked(n.x, n.z, p.x, p.z, colliders)) continue
     if (p.hidden && d > 3) continue
-    const score = 1 / Math.max(1, d)
+    // Bots are scored as if ~2.2× farther away: police prefer real protesters,
+    // but a lone bot right under their nose still gets chased (season worlds stay alive).
+    const score = 1 / Math.max(1, d * (p.bot ? 2.2 : 1))
     if (score > bestScore) { bestScore = score; best = p }
   }
 

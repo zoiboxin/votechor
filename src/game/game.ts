@@ -126,7 +126,9 @@ export class Game {
   private detainUntil = 0
   private carryingBallot = false
   private carryingBallotId: string | null = null
-  private remotePlayers = new Map<string, { rig: import('./character').CharacterRig; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; health: number; detained: boolean; archetype: string }>()
+  private remotePlayers = new Map<string, { rig: import('./character').CharacterRig | null; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; health: number; detained: boolean; archetype: string; lastSeen: number }>()
+  private static MAX_RIGS = 24 // rig budget: nearby protesters get full characters, the rest stay as data dots
+  private rigsRebuiltAt = 0
   private serverNpcRys: Record<string, number> = {}
   private lastTokenPos = { x: 0, z: 0 }
   private humorTimer = 30
@@ -196,8 +198,23 @@ export class Game {
       onProjectile: (p) => this.items.spawnRemoteProjectile(p.id, p.type, p.x, p.y, p.z, p.vx, p.vy, p.vz),
       onEmote: (playerId, emote) => this.playRemoteEmote(playerId, emote),
       onQuickMsg: (playerId, msgId) => this.onRemoteQuickMsg(playerId, msgId),
-      onPlayerLeft: (playerId, name) => { this.removeRemote(playerId); this.syncRoomRoster(); this.store.notify(`${name} left the protest`, 'info') },
-      onPlayerJoined: (playerId, name) => { this.deferredRosterAdd(playerId, name); this.store.notify(`${name} joined the protest!`, 'squad') },
+      onPlayerLeft: (playerId, name) => {
+        this.removeRemote(playerId)
+        this.syncRoomRoster()
+        if (playerId.startsWith('bot_')) {
+          useGameStore.getState().patchSeason({ lastEvent: `${name} left the season`, lastEventAt: Date.now() })
+        } else {
+          this.store.notify(`${name} left the protest`, 'info')
+        }
+      },
+      onPlayerJoined: (playerId, name) => {
+        this.deferredRosterAdd(playerId, name)
+        if (playerId.startsWith('bot_')) {
+          useGameStore.getState().patchSeason({ lastEvent: `${name} joined the season`, lastEventAt: Date.now() })
+        } else {
+          this.store.notify(`${name} joined the protest!`, 'squad')
+        }
+      },
       onHealth: (playerId, health, dazed) => this.onRemoteHealth(playerId, health, dazed),
       onDamage: (playerId, amount, kind) => { if (playerId === this.net.playerId) this.applyDamage(amount, kind) },
       onMatchEnd: (payload) => this.handleMatchEnd(payload),
@@ -219,6 +236,9 @@ export class Game {
           ? 'No voting for yourself — the committee frowns on ballot fraud'
           : 'That protester left before the vote landed'
         this.store.notify(why, 'warning')
+      },
+      onSeason: (s) => {
+        useGameStore.getState().patchSeason({ id: s.id, name: s.name, humans: s.humans, bots: s.bots, cap: s.cap, humansMax: s.humansMax })
       },
       onSquadInvite: (inv) => this.onSquadInvite(inv),
       onSquadInviteSent: (s) => this.store.notify(`Invite sent to ${s.targetName} — the cell awaits`, 'squad'),
@@ -411,6 +431,7 @@ export class Game {
     this.kudosSentTo.clear()
     useGameStore.getState().resetPostMatch()
     useGameStore.getState().setRoomRoster([])
+    useGameStore.getState().setSeason(null)
     this.gateOpen = false
     this.activatedCheckpoints.clear()
     this.inventory = []
@@ -472,6 +493,7 @@ export class Game {
         archetype: this.archetype,
         roomCode: mode === 'multiplayer' ? roomCode : null,
         cosmetics,
+        season: mode === 'solo', // solo queue joins a persistent 100-protester Season
       })
       // wait briefly for join ack; ack sets offline=false
       await new Promise<void>((resolve) => {
@@ -583,6 +605,13 @@ export class Game {
     this.serverMatchStart = ack.matchStartedAt
     useGameStore.getState().setRoomCode(ack.roomCode)
     useGameStore.getState().patchHud({ playersOnline: ack.players.length })
+    // season metadata (solo queue) — the HUD chip + SquadPanel season roster feed off this
+    if (ack.season) {
+      useGameStore.getState().setSeason(ack.season)
+      useGameStore.getState().notify(`Joined ${ack.season.name} — ${ack.season.humans + ack.season.bots} protesters inside (${ack.season.humans} human${ack.season.humans === 1 ? '' : 's'})`, 'squad')
+    } else {
+      useGameStore.getState().notify(`Joined room ${ack.roomCode}`, 'squad')
+    }
     this.tokens = ack.tokensCollected
     this.tokensNeeded = ack.tokensNeeded
     for (const p of ack.players) {
@@ -592,7 +621,6 @@ export class Game {
     if (ack.checkpoints) ack.checkpoints.forEach(cp => this.activatedCheckpoints.add(cp))
     if (ack.boss && ack.boss.active) this.bossActiveLocal = true
     this.syncRoomRoster()
-    useGameStore.getState().notify(`Joined room ${ack.roomCode}`, 'squad')
     // invite deep-link (§15): ?squad=CODE auto-joins the cell right after the room
     if (this.mode === 'multiplayer') {
       try {
@@ -610,9 +638,8 @@ export class Game {
   private onServerPlayers(players: import('./shared/types').PlayerNetState[]) {
     if (!this.player) return
     const seen = new Set<string>()
-    let online = 0
+    const now = Date.now()
     for (const p of players) {
-      online++
       seen.add(p.id)
       if (p.id === this.net.playerId) continue
       let r = this.remotePlayers.get(p.id)
@@ -621,27 +648,80 @@ export class Game {
       r.anim = p.anim
       r.health = p.health
       r.detained = p.detained
-      r.rig.group.visible = true
+      r.lastSeen = now
+      if (r.rig) r.rig.group.visible = true
     }
     for (const [id, r] of this.remotePlayers) {
-      if (!seen.has(id)) { this.removeRemote(id) }
+      // AOI snapshots omit far bots — only prune entries we haven't heard from in 6s
+      if (!seen.has(id) && now - r.lastSeen > 6000) { this.removeRemote(id) }
     }
-    useGameStore.getState().patchHud({ playersOnline: online })
+    const season = useGameStore.getState().season
+    useGameStore.getState().patchHud({
+      playersOnline: season ? season.humans + season.bots : Math.max(1, seen.size),
+    })
+    this.ensureRemoteRigs(now)
     this.syncRoomRoster()
   }
 
-  private addRemote(p: import('./shared/types').PlayerNetState) {
-    const rig = new CharacterRig({ archetype: p.archetype, name: p.name })
-    rig.group.position.set(p.x, p.y, p.z)
+  /**
+   * Rig budgeting: season worlds hold 100 protesters, but full character rigs are
+   * expensive. Humans always get rigs; bots get them by distance rank until the
+   * budget is spent (data-only bots remain as minimap/roster dots). A few rigs
+   * are created per pass to avoid a single-frame spike on arrival.
+   */
+  private ensureRemoteRigs(now: number) {
+    if (now - this.rigsRebuiltAt < 700) return
+    this.rigsRebuiltAt = now
+    const px = this.player!.pos.x
+    const pz = this.player!.pos.z
+    const entries = [...this.remotePlayers.entries()]
+    const humans = entries.filter(([id]) => !id.startsWith('bot_'))
+    const bots = entries
+      .filter(([id]) => id.startsWith('bot_'))
+      .sort((a, b) =>
+        ((a[1].target.x - px) ** 2 + (a[1].target.z - pz) ** 2) -
+        ((b[1].target.x - px) ** 2 + (b[1].target.z - pz) ** 2))
+    const botBudget = Math.max(4, Game.MAX_RIGS - humans.length)
+    let created = 0
+    // humans first — always rigged
+    for (const [id, r] of humans) if (!r.rig && created < 4) { this.attachRig(id, r); created++ }
+    for (const [id, r] of humans) if (!r.rig) this.attachRig(id, r)
+    // bots by distance rank
+    let rank = 0
+    for (const [id, r] of bots) {
+      if (rank < botBudget) {
+        if (!r.rig && created < 4) { this.attachRig(id, r); created++ }
+        else if (!r.rig) this.attachRig(id, r)
+      } else if (r.rig) {
+        this.engine.scene.remove(r.rig.group)
+        r.rig = null
+      }
+      rank++
+    }
+  }
+
+  private attachRig(id: string, r: { rig: import('./character').CharacterRig | null; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; archetype: string }) {
+    const rig = new CharacterRig({ archetype: r.archetype, name: r.name })
+    rig.group.position.set(r.target.x, r.target.y, r.target.z)
+    rig.group.rotation.y = r.target.ry
     this.engine.scene.add(rig.group)
-    const r = { rig, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype }
+    rig.setNameColor(r.name, this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
+    r.rig = rig
+  }
+
+  private addRemote(p: import('./shared/types').PlayerNetState) {
+    // data-only entry — the rig budget pass (ensureRemoteRigs) attaches real characters
+    const r = { rig: null as import('./character').CharacterRig | null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, lastSeen: Date.now() }
     this.remotePlayers.set(p.id, r)
     return r
   }
 
   private removeRemote(id: string) {
     const r = this.remotePlayers.get(id)
-    if (r) { this.engine.scene.remove(r.rig.group); this.remotePlayers.delete(id) }
+    if (r) {
+      if (r.rig) this.engine.scene.remove(r.rig.group)
+      this.remotePlayers.delete(id)
+    }
   }
 
   private onServerBoss(boss: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) {
@@ -685,7 +765,8 @@ export class Game {
     } else {
       const r = this.remotePlayers.get(playerId)
       if (r) r.detained = true
-      this.store.notify(`Teammate detained: ${r?.name ?? 'someone'}`, 'squad')
+      // season bots get detained constantly — it is world flavor, not toast-worthy
+      if (!playerId.startsWith('bot_')) this.store.notify(`Teammate detained: ${r?.name ?? 'someone'}`, 'squad')
     }
   }
 
@@ -738,8 +819,8 @@ export class Game {
     let best: { id: string; name: string; x: number; y: number; z: number; d: number } | null = null
     for (const [id, r] of this.remotePlayers) {
       if (!this.squad.memberIds.has(id) || r.detained) continue
-      const p = r.rig.group.position
-      const d = this.player.pos.distanceTo(p)
+      const p = r.target
+      const d = Math.hypot(p.x - this.player.pos.x, p.z - this.player.pos.z)
       if (!best || d < best.d) best = { id, name: r.name, x: p.x, y: p.y, z: p.z, d }
     }
     if (!best) { store.notify('No free cellmate to rally to — everyone is detained!', 'warning'); return }
@@ -766,10 +847,11 @@ export class Game {
     if (this.offline) { store.notify('Gifting needs teammates — go multiplayer!', 'warning'); return }
     if (this.player.isDetained || this.player.isDazed) { store.notify('Cannot gift while detained or dazed', 'warning'); return }
     if (this.inventory.length === 0) { store.notify('Pockets are empty — nothing to gift!', 'info'); return }
-    // nearest live player within gift range (interpolated positions ≈ server positions)
+    // nearest live HUMAN within gift range (interpolated positions ≈ server positions;
+    // season bots carry no inventory so they are never gift targets)
     let best: { id: string; name: string; d: number; health: number } | null = null
     for (const [id, r] of this.remotePlayers) {
-      if (r.detained) continue
+      if (r.detained || id.startsWith('bot_')) continue
       const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
       if (d <= GIFT_RADIUS && (!best || d < best.d)) best = { id, name: r.name, d, health: r.health }
     }
@@ -786,6 +868,7 @@ export class Game {
     if (this.inventory.length === 0) { store.notify('Pockets are empty — nothing to gift!', 'info'); return }
     const r = this.remotePlayers.get(targetId)
     if (!r) { store.notify('That teammate has left the protest', 'warning'); return }
+    if (targetId.startsWith('bot_')) { store.notify('Bots carry no supplies — gift a human teammate', 'info'); return }
     if (r.detained) { store.notify(`${r.name} is detained — bail them out first (hold E)`, 'warning'); return }
     const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
     if (d > GIFT_RADIUS) { store.notify(`${r.name} is ${Math.round(d)}m away — get within ${GIFT_RADIUS}m to hand things over`, 'info'); return }
@@ -842,7 +925,7 @@ export class Game {
     this.inventory.push({ uid: `${g.type}_gift_${Date.now().toString(36)}_${Math.floor(Math.random() * 999)}`, type: g.type as ItemType })
     AudioManager.play('token')
     const r = this.remotePlayers.get(g.fromId)
-    if (r) {
+    if (r?.rig) {
       const pos = r.rig.group.position
       this.fx.popup('🎁 GIFT!', '#7de3a8', pos.x, 2.2, pos.z)
     }
@@ -922,7 +1005,7 @@ export class Game {
     if (this.offline || !this.net.playerId) { useGameStore.getState().setRoomRoster([]); return }
     const roster = [...this.remotePlayers.entries()]
       .filter(([id]) => id !== this.net.playerId)
-      .map(([id, r]) => ({ id, name: r.name, archetype: r.archetype || 'student' }))
+      .map(([id, r]) => ({ id, name: r.name, archetype: r.archetype || 'student', bot: id.startsWith('bot_') }))
     useGameStore.getState().setRoomRoster(roster)
   }
 
@@ -954,7 +1037,7 @@ export class Game {
     }
     // squadmates wear green name tags; everyone else stays white
     for (const [id, r] of this.remotePlayers) {
-      r.rig.setNameColor(r.name, this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
+      if (r.rig) r.rig.setNameColor(r.name, this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
     }
   }
 
@@ -1096,7 +1179,7 @@ export class Game {
     const getPos = (): THREE.Vector3 | null => {
       if (key === 'me') return this.player ? this.player.pos.clone() : null
       const r = this.remotePlayers.get(key)
-      return r ? r.rig.group.position.clone() : null
+      return r?.rig ? r.rig.group.position.clone() : null
     }
     this.playerBubbles.say(key, text, getPos, key === 'me' ? 3.2 : 4)
   }
@@ -1107,7 +1190,8 @@ export class Game {
     if (!msg) return
     const r = this.remotePlayers.get(playerId)
     if (r) this.sayBubble(playerId, msg)
-    this.store.notify(`${r?.name ?? 'Protester'}: ${msg}`, 'squad')
+    // bots chat constantly — bubbles only (nearby rigs), no toast spam
+    if (!playerId.startsWith('bot_')) this.store.notify(`${r?.name ?? 'Protester'}: ${msg}`, 'squad')
   }
 
   private handleVehicleHit(kind: string, x: number, z: number, dmg: number) {
@@ -1424,9 +1508,14 @@ export class Game {
 
     // boss intro cinematic — orbit the boss once on activation
     this.updateBossCinematic(dt)
-    // remote player interpolation
+    // remote player interpolation (data-only bots have no rig — their target stays fresh)
     for (const [, r] of this.remotePlayers) {
-      r.rig.group.position.lerp(new THREE.Vector3(r.target.x, r.target.y, r.target.z), Math.min(1, dt * 10))
+      if (!r.rig) continue
+      const pos = r.rig.group.position
+      // teleports (detention release, rally, reconnect respawn) snap instead of glide
+      const jump = Math.hypot(r.target.x - pos.x, r.target.z - pos.z)
+      if (jump > 25) pos.set(r.target.x, r.target.y, r.target.z)
+      else pos.lerp(new THREE.Vector3(r.target.x, r.target.y, r.target.z), Math.min(1, dt * 10))
       let d = r.target.ry - r.rig.group.rotation.y
       while (d > Math.PI) d -= Math.PI * 2
       while (d < -Math.PI) d += Math.PI * 2
@@ -1452,7 +1541,11 @@ export class Game {
       for (const [, r] of this.remotePlayers) {
         if (r.detained) continue
         const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
-        if (d < bestDist) { bestDist = d; focus = r.rig.group.position; this.spectateName = r.name }
+        if (d < bestDist) {
+          bestDist = d
+          focus = new THREE.Vector3(r.target.x, r.target.y, r.target.z)
+          this.spectateName = r.name
+        }
       }
     }
     if (this.photoMode) {
@@ -1535,9 +1628,13 @@ export class Game {
     let objective = 'Recover the stolen vote tokens!'
     if (this.tokens >= this.tokensNeeded) objective = 'Enter the Government District — defeat the Vote Collector!'
     else if (this.activatedCheckpoints.size >= 4) objective = `Collect vote tokens (${this.tokens}/${this.tokensNeeded}) to open the boss gate`
-    const squad = [...this.remotePlayers.entries()].map(([id, r]) => ({
-      id, name: r.name, health: r.health, detained: r.detained, dazed: r.anim === 'dazed', archetype: '', distance: Math.hypot(r.target.x - p.pos.x, r.target.z - p.pos.z),
-    }))
+    const squad = [...this.remotePlayers.entries()]
+      .map(([id, r]) => ({
+        id, name: r.name, health: r.health, detained: r.detained, dazed: r.anim === 'dazed', archetype: '', distance: Math.hypot(r.target.x - p.pos.x, r.target.z - p.pos.z),
+        bot: id.startsWith('bot_'),
+      }))
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 12) // 12 nearest protesters — seasons hold 100 and the HUD stays readable
     // compass markers (relative to camera yaw so up = where you look)
     const yawDeg = ((this.camRig.yaw * 180) / Math.PI + 360) % 360
     const rel = (x: number, z: number) => {

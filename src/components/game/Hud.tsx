@@ -6,7 +6,7 @@ import { uiActions, ZONE_ACCENTS } from '@/lib/game-store'
 import { ITEM_CONFIG, CAPTURE_MESSAGES } from '@/game/shared/constants'
 import {
   Heart, Zap, Vote, Users, Wifi, WifiOff, Map as MapIcon, Hand, Star,
-  Clock, Package, Footprints, Gauge, Siren,
+  Clock, Package, Footprints, Gauge, Siren, Megaphone, Bot as BotIcon,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -160,6 +160,7 @@ export default function Hud() {
   const fps = useGameStore((s) => s.fps)
   const squadOpen = useGameStore((s) => s.squadOpen)
   const squad = useGameStore((s) => s.squad)
+  const season = useGameStore((s) => s.season)
   const toggleMap = useGameStore((s) => s.toggleMap)
   const minimapRef = useRef<HTMLCanvasElement>(null)
   const [zoneVisible, setZoneVisible] = useState(true)
@@ -276,6 +277,37 @@ export default function Hud() {
             <span className="text-[10px] font-black tabular-nums text-[#2e6e4e]">{fps} FPS</span>
           )}
         </div>
+
+        {/* season chip (solo queue — persistent 100-protester world with backfill bots) */}
+        {season && (
+          <div className="pointer-events-auto w-56 overflow-hidden rounded-xl border-2 border-[#8c1f28] bg-[#8c1f28]/95 shadow-[3px_3px_0_rgba(28,26,23,0.75)]">
+            <div className="flex items-center justify-between gap-1.5 px-2 py-1">
+              <span className="flex items-center gap-1.5">
+                <BotIcon className="h-3 w-3 text-[#f2c14e]" />
+                <span className="text-[9px] font-black uppercase tracking-[0.18em] text-[#f5efdc]">{season.name}</span>
+              </span>
+              <span className="flex items-center gap-1 text-[9px] font-black tabular-nums text-[#f2c14e]">
+                {season.humans + season.bots}/{season.cap}
+                <span className="text-[#f5efdc]/70">·</span>
+                <span className="text-[#7ee08a]">{season.humans} human{season.humans === 1 ? '' : 's'}</span>
+              </span>
+            </div>
+            <AnimatePresence>
+              {season.lastEvent && now - season.lastEventAt < 6000 && (
+                <motion.div
+                  key={season.lastEvent + String(season.lastEventAt)}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="flex items-center gap-1.5 border-t border-[#f5efdc]/15 bg-[#1c1a17]/25 px-2 py-0.5"
+                >
+                  <Megaphone className="h-2.5 w-2.5 shrink-0 text-[#f2c14e]" />
+                  <span className="truncate text-[8.5px] font-bold uppercase tracking-wide text-[#f5efdc]/90">{season.lastEvent}</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
 
         {/* protest-cell squad chip (§15) */}
         {squad && squad.members.length > 0 && (
