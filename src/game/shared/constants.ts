@@ -8,6 +8,9 @@ export const DETENTION_SECONDS = 20
 export const TOKENS_NEEDED = 12
 export const MATCH_TIME_LIMIT = 900 // 15 minutes
 
+// ---------- World extent (must match world-def walls; used by maps/minimap/BigMap) ----------
+export const WORLD_BOUNDS = { minX: -120, maxX: 120, minZ: -572, maxZ: 10 }
+
 // ---------- Movement (meters, seconds) ----------
 export const MOVE = {
   walkSpeed: 5.2,

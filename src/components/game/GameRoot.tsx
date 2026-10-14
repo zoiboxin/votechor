@@ -216,8 +216,8 @@ export default function GameRoot() {
 
       {/* 3D viewport */}
       <canvas id="game-canvas" className="fixed inset-0 z-0 block h-full w-full" />
-      {/* Minimap buffer — drawn by the engine, copied by Hud/BigMap */}
-      <canvas ref={minimapBufferRef} width={140} height={420} className="hidden" />
+      {/* Minimap buffer — drawn by the engine, copied by Hud/BigMap (240px covers the widened city) */}
+      <canvas ref={minimapBufferRef} width={240} height={420} className="hidden" />
 
       {/* Menu + its sub-screens */}
       {uiMode === 'menu' && <MainMenu />}

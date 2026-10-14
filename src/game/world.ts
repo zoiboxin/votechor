@@ -1,6 +1,7 @@
 // VoteChor world renderer — builds the 3D city from shared WorldDef data.
 // Procedural canvas textures, instanced crowd, animated props. No external assets.
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { WorldDef, Deco } from './shared/types'
 
 const ZONE_COLORS = ['#c96f4a', '#b85c3e', '#7f9a8c', '#c9a86a', '#9a7b5f']
@@ -125,6 +126,8 @@ export class WorldRenderer {
     this.buildGround()
     this.buildRoads()
     for (const d of world.decorations) this.buildDeco(d)
+    this.buildHomes(world)
+    this.buildWalls(world)
     this.buildExtraStreetLamps()
     this.buildCrowd(world, quality)
     this.buildSearchlights()
@@ -143,9 +146,9 @@ export class WorldRenderer {
         ctx.fillStyle = ['#c2a171', '#d1b285', '#bd9c6f', '#c7a87b'][i % 4]
         ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 3)
       }
-    }, 40, 60)
+    }, 86, 60)
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(120, 640),
+      new THREE.PlaneGeometry(260, 640),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1 }),
     )
     ground.rotation.x = -Math.PI / 2
@@ -204,9 +207,39 @@ export class WorldRenderer {
       sw.receiveShadow = true
       this.group.add(sw)
     }
+
+    // East-west cross streets — asphalt + sidewalks, split around the main road
+    for (const cr of this.world.crossRoads) {
+      const tex = roadTex.clone()
+      tex.repeat.set(1, 22)
+      const road = new THREE.Mesh(
+        new THREE.PlaneGeometry(cr.halfW * 2, 228),
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 }),
+      )
+      road.rotation.x = -Math.PI / 2
+      road.rotation.z = Math.PI / 2 // lay the strip's length (and its dashes) along X
+      road.position.set(0, 0.008, cr.z)
+      road.receiveShadow = true
+      this.group.add(road)
+      // sidewalk strips (x -114..-12 and 12..114, leaving the junction open)
+      for (const edge of [-1, 1]) {
+        const swt = swTex.clone()
+        swt.repeat.set(26, 1)
+        const swMat = new THREE.MeshStandardMaterial({ map: swt, roughness: 1 })
+        for (const half of [-1, 1]) {
+          const sw = new THREE.Mesh(new THREE.PlaneGeometry(102, 4), swMat)
+          sw.rotation.x = -Math.PI / 2
+          sw.position.set(half * 63, 0.02, cr.z + edge * (cr.halfW + 2))
+          sw.receiveShadow = true
+          this.group.add(sw)
+        }
+      }
+    }
   }
 
   private buildDeco(d: Deco) {
+    // homes + compound walls are rendered by dedicated instanced builders below
+    if (d.kind === 'home' || d.kind === 'wall') return
     const g = new THREE.Group()
     g.position.set(d.x, d.y ?? 0, d.z)
     if (d.ry) g.rotation.y = d.ry
@@ -442,11 +475,38 @@ export class WorldRenderer {
         g.add(crate, edge)
         break
       }
+      case 'clothesline': {
+        // laundry strung between two bamboo poles across a gali — sways in the wind
+        const len = d.w ?? 6
+        const poleMat = new THREE.MeshStandardMaterial({ color: '#6b5236', flatShading: true })
+        const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 2.3, 6), poleMat)
+        p1.position.set(-len / 2, 1.15, 0)
+        const p2 = p1.clone(); p2.position.x = len / 2
+        const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, len, 4), new THREE.MeshBasicMaterial({ color: '#3a2d1a' }))
+        rope.rotation.z = Math.PI / 2
+        rope.position.y = 2.15
+        g.add(p1, p2, rope)
+        const clothColors = ['#c95a8c', '#5a8cc9', '#e8d5a8', '#7ec97e', '#e8b13c']
+        for (let i = 0; i < 4; i++) {
+          const cloth = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.6, 0.75),
+            new THREE.MeshStandardMaterial({ color: clothColors[(i + (d.variant ?? 0)) % clothColors.length], side: THREE.DoubleSide, roughness: 1 }),
+          )
+          cloth.position.set(-len / 2 + (len / 5) * (i + 1), 1.72, 0)
+          const phase = Math.random() * 9
+          this.animated.push((t) => { cloth.rotation.x = Math.sin(t * 1.7 + phase) * 0.22 })
+          g.add(cloth)
+        }
+        break
+      }
       case 'barrier': {
         const w = d.w ?? 4, dep = d.d ?? 1.6
-        for (let i = 0; i < Math.max(1, Math.round(w / 2)); i++) {
+        // long checkpoint fence lines use wider frame spacing to stay cheap
+        const spacing = w > 24 ? 4 : 2
+        const frames = Math.max(1, Math.round(w / spacing))
+        for (let i = 0; i < frames; i++) {
           const frame = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.1, 0.08), new THREE.MeshStandardMaterial({ color: '#c9482e', flatShading: true }))
-          frame.position.set(-w / 2 + 1 + i * 2, 0.6, 0)
+          frame.position.set(-w / 2 + (i + 0.5) * (w / frames), 0.6, 0)
           const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.22, 0.1), new THREE.MeshStandardMaterial({ color: '#f2ead2' }))
           stripe.position.copy(frame.position); stripe.position.y += 0.18
           const legA = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.15, 0.06), new THREE.MeshStandardMaterial({ color: '#7a7a76' }))
@@ -544,6 +604,216 @@ export class WorldRenderer {
   }
 
   /**
+   * Round-19 mohalla homes — every small house in the side blocks is rendered with
+   * just 4 draw calls: instanced plaster bodies, instanced roofs (pitched + flat),
+   * and ONE merged geometry carrying every door/window/shutter quad with a shared
+   * atlas (night emissive drives the lit windows like the big buildings).
+   */
+  private buildHomes(world: WorldDef) {
+    const homes = world.decorations.filter(d => d.kind === 'home')
+    if (!homes.length) return
+    const n = homes.length
+
+    // shared textures ---------------------------------------------------------
+    const plaster = canvasTex(128, 128, (ctx) => {
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, 128, 128)
+      for (let i = 0; i < 260; i++) {
+        ctx.fillStyle = `rgba(${90 + Math.random() * 60},${70 + Math.random() * 50},${50 + Math.random() * 40},${0.05 + Math.random() * 0.06})`
+        ctx.fillRect(Math.random() * 128, Math.random() * 128, 2 + Math.random() * 3, 2 + Math.random() * 3)
+      }
+      // weathering streaks under the roofline
+      for (let i = 0; i < 14; i++) {
+        ctx.fillStyle = 'rgba(60,50,40,0.08)'
+        ctx.fillRect(Math.random() * 128, 0, 2 + Math.random() * 3, 20 + Math.random() * 30)
+      }
+    })
+    const atlas = canvasTex(256, 256, (ctx) => {
+      // cell 0 (top-left): wooden door
+      ctx.fillStyle = '#7a5230'; ctx.fillRect(0, 0, 128, 128)
+      ctx.fillStyle = '#8f6238'; for (let i = 0; i < 4; i++) ctx.fillRect(10 + i * 28, 8, 22, 112)
+      ctx.strokeStyle = '#4a3320'; ctx.lineWidth = 5; ctx.strokeRect(6, 4, 116, 120)
+      ctx.fillStyle = '#e8c96a'; ctx.beginPath(); ctx.arc(112, 68, 5, 0, 7); ctx.fill()
+      // cell 1 (top-right): window with panes
+      ctx.fillStyle = '#b8a488'; ctx.fillRect(128, 0, 128, 128)
+      ctx.fillStyle = '#31404f'; ctx.fillRect(140, 12, 104, 100)
+      ctx.strokeStyle = '#b8a488'; ctx.lineWidth = 8
+      ctx.beginPath(); ctx.moveTo(192, 12); ctx.lineTo(192, 112); ctx.moveTo(140, 62); ctx.lineTo(244, 62); ctx.stroke()
+      ctx.strokeRect(140, 12, 104, 100)
+      ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(140, 12, 104, 12)
+      // cell 2 (bottom-left): grilled window
+      ctx.fillStyle = '#a89478'; ctx.fillRect(0, 128, 128, 128)
+      ctx.fillStyle = '#3a4a58'; ctx.fillRect(12, 140, 104, 100)
+      ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 4
+      for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.moveTo(20 + i * 22, 140); ctx.lineTo(20 + i * 22, 240); ctx.stroke() }
+      ctx.strokeRect(12, 140, 104, 100)
+      // cell 3 (bottom-right): closed wooden shutter
+      ctx.fillStyle = '#9c8058'; ctx.fillRect(128, 128, 128, 128)
+      ctx.fillStyle = '#8a6b45'; for (let i = 0; i < 6; i++) ctx.fillRect(136, 136 + i * 18, 112, 12)
+      ctx.strokeStyle = '#5c4630'; ctx.lineWidth = 5; ctx.strokeRect(132, 132, 120, 120)
+    })
+    const night = canvasTex(256, 256, (ctx) => {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 256, 256)
+      // warm lit windows in cells 1 & 2 (a few panes stay dark), door/shutter stay dark
+      ctx.fillStyle = '#ffb45e'; ctx.fillRect(140, 12, 46, 100)
+      ctx.fillStyle = '#ffd696'; ctx.fillRect(198, 12, 46, 48)
+      ctx.fillStyle = '#c98a4e'; ctx.fillRect(198, 62, 46, 50)
+      ctx.fillStyle = '#e8a45e'; ctx.fillRect(12, 140, 104, 100)
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; for (let i = 0; i < 5; i++) if (Math.random() < 0.4) ctx.fillRect(20 + i * 22, 140, 10, 100)
+    })
+    atlas.colorSpace = THREE.SRGBColorSpace
+    night.colorSpace = THREE.SRGBColorSpace
+
+    // instanced bodies --------------------------------------------------------
+    const bodyGeo = new THREE.BoxGeometry(1, 1, 1)
+    bodyGeo.translate(0, 0.5, 0)
+    const bodyMat = new THREE.MeshStandardMaterial({ map: plaster, roughness: 1 })
+    const bodies = new THREE.InstancedMesh(bodyGeo, bodyMat, n)
+    bodies.castShadow = true
+    bodies.receiveShadow = true
+
+    const wedge = new THREE.CylinderGeometry(1, 1, 1, 3, 1)
+    wedge.rotateZ(Math.PI / 2) // prism axis along X, ridge up
+    const roofMat = new THREE.MeshStandardMaterial({ roughness: 1, flatShading: true })
+    const flatGeo = new THREE.BoxGeometry(1, 1, 1)
+    const roofPitched: { i: number; x: number; z: number; w: number; d: number; h: number; ry: number; c: THREE.Color }[] = []
+    const roofFlat: typeof roofPitched = []
+
+    // merged openings ---------------------------------------------------------
+    const openGeos: THREE.BufferGeometry[] = []
+    const m4 = new THREE.Matrix4()
+    const q = new THREE.Quaternion()
+    const eu = new THREE.Euler()
+    const pos = new THREE.Vector3()
+    const scl = new THREE.Vector3()
+    const col = new THREE.Color()
+
+    const quad = (w: number, h: number, cell: number, x: number, y: number, z: number, ry: number) => {
+      const geo = new THREE.PlaneGeometry(w, h)
+      const cu = cell % 2, cv = Math.floor(cell / 2)
+      const uv = geo.attributes.uv as THREE.BufferAttribute
+      for (let i = 0; i < uv.count; i++) {
+        uv.setXY(i, cu * 0.5 + uv.getX(i) * 0.5, (1 - (cv + 1) * 0.5) + uv.getY(i) * 0.5)
+      }
+      eu.set(0, ry, 0)
+      m4.compose(pos.set(x, y, z), q.setFromEuler(eu), scl.set(1, 1, 1))
+      geo.applyMatrix4(m4)
+      openGeos.push(geo)
+    }
+
+    for (let i = 0; i < n; i++) {
+      const d = homes[i]
+      const w = d.w ?? 6, dep = d.d ?? 6, h = d.h ?? 3.5
+      const ry = d.ry ?? 0
+      col.set(d.color ?? '#d8c49a')
+      eu.set(0, ry, 0)
+      m4.compose(pos.set(d.x, 0, d.z), q.setFromEuler(eu), scl.set(w, h, dep))
+      bodies.setMatrixAt(i, m4)
+      bodies.setColorAt(i, col)
+
+      // roof
+      if ((d.variant ?? 0) % 2 === 0) {
+        roofPitched.push({ i, x: d.x, z: d.z, w: w * 1.16, d: dep * 0.62, h, ry, c: new THREE.Color(['#b5543a', '#a34a34', '#8c5a3c', '#9c8058', '#7a5a48'][i % 5]) })
+      } else {
+        roofFlat.push({ i, x: d.x, z: d.z, w: w + 0.5, d: dep + 0.5, h, ry, c: new THREE.Color(['#b8b0a0', '#a8a094', '#96897a'][i % 3]) })
+      }
+
+      // local→world transform for opening quads (home rotation applied by hand)
+      const cos = Math.cos(ry), sin = Math.sin(ry)
+      const toWorld = (lx: number, lz: number): [number, number] => [d.x + lx * cos + lz * sin, d.z - lx * sin + lz * cos]
+      // front (+z local) and back (−z) faces
+      const doorCell = 0
+      // front door
+      {
+        const [wx, wz] = toWorld(0, dep / 2 + 0.04)
+        quad(1.1, 2.1, doorCell, wx, 1.05, wz, ry)
+      }
+      // front windows (skip if a door row home — keep, homes look better with windows)
+      const wy = Math.min(h - 1.1, 2.55)
+      for (const sx of [-1, 1]) {
+        const [wx, wz] = toWorld(sx * w * 0.28, dep / 2 + 0.04)
+        quad(0.85, 0.95, i % 3 === 1 ? 2 : 1, wx, wy, wz, ry)
+        if (h >= 5) {
+          const [ux, uz] = toWorld(sx * w * 0.28, dep / 2 + 0.04)
+          quad(0.8, 0.9, i % 4 === 3 ? 3 : 2, ux, h - 1.25, uz, ry)
+        }
+      }
+      // back face: one window (shutter on some)
+      {
+        const [wx, wz] = toWorld(0, -dep / 2 - 0.04)
+        quad(0.9, 0.95, i % 3 === 2 ? 3 : 1, wx, wy, wz, ry + Math.PI)
+      }
+      // side walls — windows into the galis
+      for (const sx of [-1, 1]) {
+        const [wx, wz] = toWorld(sx * (w / 2 + 0.04), dep * 0.08)
+        quad(0.8, 0.9, (i + 1) % 4 === 3 ? 3 : 2, wx, wy, wz, ry + sx * Math.PI / 2)
+      }
+    }
+    bodies.instanceMatrix.needsUpdate = true
+    if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true
+    this.group.add(bodies)
+
+    const setRoofs = (list: typeof roofPitched, mesh: THREE.InstancedMesh, pitched: boolean) => {
+      for (let k = 0; k < list.length; k++) {
+        const r = list[k]
+        eu.set(0, r.ry, 0)
+        if (pitched) {
+          m4.compose(pos.set(r.x, r.h + 0.5, r.z), q.setFromEuler(eu), scl.set(r.w, 0.95, r.d * 0.9))
+        } else {
+          m4.compose(pos.set(r.x, r.h + 0.16, r.z), q.setFromEuler(eu), scl.set(r.w, 0.32, r.d))
+        }
+        mesh.setMatrixAt(k, m4)
+        mesh.setColorAt(k, r.c)
+      }
+      mesh.instanceMatrix.needsUpdate = true
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+      this.group.add(mesh)
+    }
+    if (roofPitched.length) setRoofs(roofPitched, new THREE.InstancedMesh(wedge, roofMat, roofPitched.length), true)
+    if (roofFlat.length) {
+      const flatGeoT = flatGeo
+      flatGeoT.translate(0, 0.5, 0)
+      setRoofs(roofFlat, new THREE.InstancedMesh(flatGeoT, roofMat, roofFlat.length), false)
+    }
+
+    // one merged mesh for ALL doors/windows/shutters + night emissive
+    if (openGeos.length) {
+      const merged = mergeGeometries(openGeos, false)
+      if (merged) {
+        const openMat = new THREE.MeshStandardMaterial({ map: atlas, roughness: 0.9, emissive: 0xffffff, emissiveMap: night, emissiveIntensity: 0 })
+        this.windowMats.push(openMat)
+        const mesh = new THREE.Mesh(merged, openMat)
+        mesh.castShadow = false
+        this.group.add(mesh)
+      }
+      for (const g of openGeos) g.dispose()
+    }
+  }
+
+  /** Instanced compound/courtyard walls (vaultable 1.1m) — one draw call. */
+  private buildWalls(world: WorldDef) {
+    const walls = world.decorations.filter(d => d.kind === 'wall')
+    if (!walls.length) return
+    const geo = new THREE.BoxGeometry(1, 1, 1)
+    geo.translate(0, 0.5, 0)
+    const mat = new THREE.MeshStandardMaterial({ roughness: 1 })
+    const mesh = new THREE.InstancedMesh(geo, mat, walls.length)
+    const m = new THREE.Matrix4()
+    const q = new THREE.Quaternion()
+    const col = new THREE.Color()
+    const tints = ['#cfc0a0', '#c2b494', '#d8ccae', '#b8ab8d']
+    for (let i = 0; i < walls.length; i++) {
+      const w = walls[i]
+      m.compose(new THREE.Vector3(w.x, 0, w.z), q, new THREE.Vector3(w.w ?? 4, w.h ?? 1.1, w.d ?? 0.4))
+      mesh.setMatrixAt(i, m)
+      col.set(tints[i % tints.length])
+      mesh.setColorAt(i, col)
+    }
+    mesh.receiveShadow = true
+    this.group.add(mesh)
+  }
+
+  /**
    * Dense instanced street lamps lining both curbs for the whole map — the deco lamps
    * above are too sparse to carry a night scene. 3 draw calls for ~60 lamps.
    */
@@ -560,6 +830,18 @@ export class WorldRenderer {
       if (!clash) spots.push({ x, z, ry })
       z -= 23
       side *= -1
+    }
+    // cross streets: alternate curbs marching east→west, arms toward the road center
+    for (const cr of this.world.crossRoads) {
+      let x = -108
+      let cside = 1
+      while (x <= 108) {
+        if (Math.abs(x) > 13) {
+          spots.push({ x, z: cr.z + cside * (cr.halfW + 0.5), ry: cside > 0 ? Math.PI / 2 : -Math.PI / 2 })
+        }
+        x += 26
+        cside *= -1
+      }
     }
     if (!spots.length) return
     const n = spots.length
@@ -794,10 +1076,10 @@ export class WorldRenderer {
   }
 
   private buildDust() {
-    const N = 140
+    const N = 160
     const pos = new Float32Array(N * 3)
     for (let i = 0; i < N; i++) {
-      pos[i * 3] = (Math.random() - 0.5) * 90
+      pos[i * 3] = (Math.random() - 0.5) * 230
       pos[i * 3 + 1] = 0.5 + Math.random() * 8
       pos[i * 3 + 2] = Math.random() * -580
     }

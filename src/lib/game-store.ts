@@ -130,8 +130,8 @@ export interface Settings {
 export const MINIMAP_ASPECT = 140 / 420 // HUD strip aspect (w/h)
 export const MINIMAP_MIN_ZOOM = 80
 export const MINIMAP_MAX_ZOOM = 582 // full world z-span
-const WORLD_MIN_X = -48
-const WORLD_MAX_X = 48
+const WORLD_MIN_X = -120
+const WORLD_MAX_X = 120
 const WORLD_MIN_Z = -572
 const WORLD_MAX_Z = 10
 

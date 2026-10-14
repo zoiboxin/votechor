@@ -1983,6 +1983,61 @@ export class Game {
   setMinimapCanvas(c: HTMLCanvasElement | null) { this.minimapCanvas = c }
   setHudMinimapCanvas(c: HTMLCanvasElement | null) { this.hudMinimapCanvas = c }
 
+  /** Full-city underlay for the big map — ground, zone tints, roads, cross streets and
+   *  building ink, prerendered ONCE (the world is static) and blitted at 8Hz. */
+  private mapUnderlay: HTMLCanvasElement | null = null
+
+  private buildMapUnderlay(W: number, H: number): HTMLCanvasElement {
+    const cv = document.createElement('canvas')
+    cv.width = W; cv.height = H
+    const c = cv.getContext('2d')
+    if (!c) return cv
+    const b = this.world.bounds
+    const toX = (x: number) => ((x - b.minX) / (b.maxX - b.minX)) * W
+    const toY = (z: number) => ((10 - z) / 582) * H
+    // out-of-world ink + ground
+    c.fillStyle = '#171512'
+    c.fillRect(0, 0, W, H)
+    c.fillStyle = '#2a2318'
+    c.fillRect(toX(b.minX), 0, toX(b.maxX) - toX(b.minX), H)
+    // zone tints
+    const zoneColors = ['rgba(201,111,74,0.32)', 'rgba(184,92,62,0.32)', 'rgba(127,154,140,0.32)', 'rgba(201,168,106,0.32)', 'rgba(154,123,95,0.38)']
+    this.world.zones.forEach((z, i) => {
+      c.fillStyle = zoneColors[i % zoneColors.length]
+      c.fillRect(toX(b.minX), toY(z.zStart), toX(b.maxX) - toX(b.minX), toY(z.zEnd) - toY(z.zStart))
+    })
+    // roads: main spine + avenue widening + east-west cross streets
+    c.fillStyle = 'rgba(70,66,58,0.75)'
+    c.fillRect(toX(-8), 0, toX(8) - toX(-8), H)
+    c.fillRect(toX(-16), toY(-280), toX(16) - toX(-16), toY(-420) - toY(-280))
+    for (const cr of this.world.crossRoads) {
+      c.fillRect(toX(-114), toY(cr.z + cr.halfW), toX(114) - toX(-114), toY(cr.z - cr.halfW) - toY(cr.z + cr.halfW))
+    }
+    // building footprints — soft ink blocks (skip thin props by footprint area)
+    c.fillStyle = 'rgba(16,13,10,0.85)'
+    c.strokeStyle = 'rgba(245,239,220,0.05)'
+    c.lineWidth = 1
+    for (const col of this.world.colliders) {
+      const h = col.maxY - col.minY
+      if (h <= 2) continue
+      const w = col.maxX - col.minX
+      const d = col.maxZ - col.minZ
+      if (w * d < 8 || w < 1.2 || d < 1.2) continue
+      const x = toX(col.minX), y = toY(col.maxZ)
+      c.fillRect(x, y, Math.max(1, w / 240 * W), Math.max(1, d / 582 * H))
+      c.strokeRect(x + 0.5, y + 0.5, Math.max(1, w / 240 * W) - 1, Math.max(1, d / 582 * H) - 1)
+    }
+    // boss arena ring
+    c.strokeStyle = 'rgba(140,31,40,0.7)'
+    c.lineWidth = 2
+    c.setLineDash([5, 4])
+    c.beginPath()
+    c.arc(toX(this.world.bossArena.x), toY(this.world.bossArena.z), (this.world.bossArena.radius / 240) * W, 0, 7)
+    c.stroke()
+    c.setLineDash([])
+    return cv
+  }
+
   private drawMinimap() {
     const canvas = this.minimapCanvas
     if (!canvas || !this.player) return
@@ -1990,18 +2045,15 @@ export class Game {
     if (!ctx) return
     const W = canvas.width, H = canvas.height
     ctx.clearRect(0, 0, W, H)
-    // world: z from 10 to -572, x -48..48 → vertical strip
-    const toX = (x: number) => ((x + 48) / 96) * W
+    // world: z from 10 to -572, x -120..120 → full-city strip (bounds-driven)
+    const b = this.world.bounds
+    const toX = (x: number) => ((x - b.minX) / (b.maxX - b.minX)) * W
     const toY = (z: number) => ((10 - z) / 582) * H
-    // zones
-    const zoneColors = ['rgba(201,111,74,0.25)', 'rgba(184,92,62,0.25)', 'rgba(127,154,140,0.25)', 'rgba(201,168,106,0.25)', 'rgba(154,123,95,0.3)']
-    this.world.zones.forEach((z, i) => {
-      ctx.fillStyle = zoneColors[i]
-      ctx.fillRect(0, toY(z.zStart), W, toY(z.zEnd) - toY(z.zStart))
-    })
-    // road
-    ctx.fillStyle = 'rgba(80,80,80,0.5)'
-    ctx.fillRect(toX(-8), 0, toX(8) - toX(-8), H)
+    // static underlay (rebuilt only if the buffer size changes)
+    if (!this.mapUnderlay || this.mapUnderlay.width !== W || this.mapUnderlay.height !== H) {
+      this.mapUnderlay = this.buildMapUnderlay(W, H)
+    }
+    ctx.drawImage(this.mapUnderlay, 0, 0)
     // checkpoints
     for (const cp of this.world.checkpoints) {
       ctx.fillStyle = this.activatedCheckpoints.has(cp.id) ? '#4e9b6e' : '#c9482e'

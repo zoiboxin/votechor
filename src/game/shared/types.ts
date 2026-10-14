@@ -15,6 +15,7 @@ export type DecoKind =
   | 'banner' | 'lamp' | 'crowd' | 'tower' | 'crate' | 'barrier'
   | 'monument' | 'flagpole' | 'billboard' | 'cart' | 'auto' | 'teaKettle'
   | 'sign' | 'planter' | 'stage' | 'toilet' | 'hoarding'
+  | 'home' | 'wall' | 'clothesline'
 
 export interface Deco {
   kind: DecoKind
@@ -67,10 +68,16 @@ export interface VehicleDef {
   kind: 'auto' | 'bus' | 'cow'
 }
 
+export interface CrossRoadDef {
+  z: number      // center line of an east-west street
+  halfW: number  // asphalt half-width in meters
+}
+
 export interface WorldDef {
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
   spawn: Vec2
   zones: { name: string; hint: string; zStart: number; zEnd: number }[]
+  crossRoads: CrossRoadDef[]
   colliders: AABB[]
   decorations: Deco[]
   items: ItemSpawn[]

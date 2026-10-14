@@ -1,0 +1,868 @@
+     1→// VoteChor world renderer — builds the 3D city from shared WorldDef data.
+     2→// Procedural canvas textures, instanced crowd, animated props. No external assets.
+     3→import * as THREE from 'three'
+     4→import type { WorldDef, Deco } from './shared/types'
+     5→
+     6→const ZONE_COLORS = ['#c96f4a', '#b85c3e', '#7f9a8c', '#c9a86a', '#9a7b5f']
+     7→
+     8→function canvasTex(w: number, h: number, draw: (ctx: CanvasRenderingContext2D) => void, repeatX = 1, repeatY = 1): THREE.CanvasTexture {
+     9→  const c = document.createElement('canvas')
+    10→  c.width = w; c.height = h
+    11→  draw(c.getContext('2d')!)
+    12→  const t = new THREE.CanvasTexture(c)
+    13→  t.colorSpace = THREE.SRGBColorSpace
+    14→  t.wrapS = t.wrapT = THREE.RepeatWrapping
+    15→  t.repeat.set(repeatX, repeatY)
+    16→  return t
+    17→}
+    18→
+    19→function windowTexture(color: string, variant: number): THREE.CanvasTexture {
+    20→  return canvasTex(128, 128, (ctx) => {
+    21→    ctx.fillStyle = color
+    22→    ctx.fillRect(0, 0, 128, 128)
+    23→    // subtle grime
+    24→    ctx.fillStyle = 'rgba(0,0,0,0.06)'
+    25→    for (let i = 0; i < 20; i++) ctx.fillRect(Math.random() * 128, Math.random() * 128, 8, 2)
+    26→    const cols = variant === 2 ? 3 : 4
+    27→    const rows = 4
+    28→    for (let r = 0; r < rows; r++) {
+    29→      for (let c = 0; c < cols; c++) {
+    30→        const x = 10 + c * (108 / cols), y = 12 + r * 28
+    31→        ctx.fillStyle = Math.random() < 0.25 ? '#3a3630' : '#2c3947'
+    32→        ctx.fillRect(x, y, 108 / cols - 12, 18)
+    33→        ctx.strokeStyle = 'rgba(255,255,255,0.25)'
+    34→        ctx.lineWidth = 2
+    35→        ctx.strokeRect(x, y, 108 / cols - 12, 18)
+    36→        // AC units / clotheslines on some
+    37→        if (Math.random() < 0.2) { ctx.fillStyle = '#d8d3c5'; ctx.fillRect(x + 4, y + 20, 12, 6) }
+    38→      }
+    39→    }
+    40→    ctx.fillStyle = 'rgba(0,0,0,0.15)'
+    41→    ctx.fillRect(0, 120, 128, 8)
+    42→  })
+    43→}
+    44→
+    45→// matching emissive map: same window grid, but only the rooms that are awake at night
+    46→// glow warm/cool. Driven by worldRenderer.setNight() — black by day, city lights at dusk.
+    47→function windowEmissiveTexture(variant: number): THREE.CanvasTexture {
+    48→  return canvasTex(128, 128, (ctx) => {
+    49→    ctx.fillStyle = '#000'
+    50→    ctx.fillRect(0, 0, 128, 128)
+    51→    const cols = variant === 2 ? 3 : 4
+    52→    const rows = 4
+    53→    for (let r = 0; r < rows; r++) {
+    54→      for (let c = 0; c < cols; c++) {
+    55→        if (Math.random() < 0.42) continue // dark room — nobody home
+    56→        const x = 10 + c * (108 / cols), y = 12 + r * 28
+    57→        const roll = Math.random()
+    58→        ctx.fillStyle = roll < 0.62 ? '#ffbe6e' : roll < 0.86 ? '#ffd696' : '#a8ccf0'
+    59→        ctx.fillRect(x, y, 108 / cols - 12, 18)
+    60→        // half-drawn curtains on a few
+    61→        if (Math.random() < 0.18) { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(x, y, 108 / cols - 12, 8) }
+    62→      }
+    63→    }
+    64→  })
+    65→}
+    66→
+    67→// soft radial blob used for lamp head halos + ground light pools
+    68→function glowTexture(): THREE.CanvasTexture {
+    69→  const c = document.createElement('canvas')
+    70→  c.width = 128; c.height = 128
+    71→  const ctx = c.getContext('2d')!
+    72→  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62)
+    73→  g.addColorStop(0, 'rgba(255,214,140,0.9)')
+    74→  g.addColorStop(0.35, 'rgba(255,190,110,0.38)')
+    75→  g.addColorStop(1, 'rgba(255,180,90,0)')
+    76→  ctx.fillStyle = g
+    77→  ctx.fillRect(0, 0, 128, 128)
+    78→  const t = new THREE.CanvasTexture(c)
+    79→  t.colorSpace = THREE.SRGBColorSpace
+    80→  return t
+    81→}
+    82→
+    83→function signTexture(text: string, bg = '#f5efdc', fg = '#8c1f28'): THREE.CanvasTexture {
+    84→  return canvasTex(256, 64, (ctx) => {
+    85→    ctx.fillStyle = bg
+    86→    ctx.fillRect(0, 0, 256, 64)
+    87→    ctx.strokeStyle = '#5a4a2f'; ctx.lineWidth = 4
+    88→    ctx.strokeRect(2, 2, 252, 60)
+    89→    ctx.fillStyle = fg
+    90→    ctx.font = 'bold 22px Arial'
+    91→    ctx.textAlign = 'center'
+    92→    ctx.fillText(text.slice(0, 26), 128, 40)
+    93→  })
+    94→}
+    95→
+    96→export class WorldRenderer {
+    97→  group = new THREE.Group()
+    98→  world: WorldDef
+    99→  private searchlightCones: THREE.Mesh[] = []
+   100→  private searchlightGroups: THREE.Group[] = []
+   101→  private searchlightMats: THREE.MeshBasicMaterial[] = []
+   102→  private bossGate: THREE.Mesh | null = null
+   103→  private animated: ((t: number, dt: number) => void)[] = []
+   104→  private fountainParticles: THREE.Points | null = null
+   105→  private flags: THREE.Mesh[] = []
+   106→  private crowdBodies: THREE.InstancedMesh | null = null
+   107→  private crowdHeads: THREE.InstancedMesh | null = null
+   108→  private crowdSigns: THREE.Group[] = []
+   109→
+   110→  // ---- night / street-light state ----
+   111→  private nightF = 0
+   112→  private lampHeadMats: { m: THREE.MeshStandardMaterial; base: number }[] = []   // deco + boss-gate lamp bulbs
+   113→  private instHeadMat = new THREE.MeshStandardMaterial({ color: '#ffe9b0', emissive: '#ffc866', emissiveIntensity: 0.5 })
+   114→  private glowMat = new THREE.SpriteMaterial({ map: glowTexture(), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
+   115→  private coneMat = new THREE.MeshBasicMaterial({ color: '#ffcf8a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
+   116→  private poolMat = new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
+   117→  private windowMats: THREE.MeshStandardMaterial[] = []      // building emissive windows
+   118→  private lightPositions: THREE.Vector3[] = []               // every street lamp bulb in the world
+   119→  private lightPool: THREE.PointLight[] = []                 // real lights, re-parked near the player
+   120→  private poolTimer = 0
+   121→  private camPos = new THREE.Vector3(0, 0, 0)
+   122→
+   123→  constructor(world: WorldDef, quality: 'low' | 'medium' | 'high') {
+   124→    this.world = world
+   125→    this.buildGround()
+   126→    this.buildRoads()
+   127→    for (const d of world.decorations) this.buildDeco(d)
+   128→    this.buildExtraStreetLamps()
+   129→    this.buildCrowd(world, quality)
+   130→    this.buildSearchlights()
+   131→    this.buildCheckpointGates()
+   132→    this.buildBossArena()
+   133→    this.buildDust()
+   134→    this.buildLightPool(quality)
+   135→  }
+   136→
+   137→  private buildGround() {
+   138→    // Base ground — dusty warm earth
+   139→    const tex = canvasTex(256, 256, (ctx) => {
+   140→      ctx.fillStyle = '#c9a97c'
+   141→      ctx.fillRect(0, 0, 256, 256)
+   142→      for (let i = 0; i < 900; i++) {
+   143→        ctx.fillStyle = ['#c2a171', '#d1b285', '#bd9c6f', '#c7a87b'][i % 4]
+   144→        ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 3)
+   145→      }
+   146→    }, 40, 60)
+   147→    const ground = new THREE.Mesh(
+   148→      new THREE.PlaneGeometry(120, 640),
+   149→      new THREE.MeshStandardMaterial({ map: tex, roughness: 1 }),
+   150→    )
+   151→    ground.rotation.x = -Math.PI / 2
+   152→    ground.position.set(0, -0.02, -280)
+   153→    ground.receiveShadow = true
+   154→    this.group.add(ground)
+   155→  }
+   156→
+   157→  private buildRoads() {
+   158→    // Asphalt spine down the map
+   159→    const roadTex = canvasTex(128, 256, (ctx) => {
+   160→      ctx.fillStyle = '#565452'
+   161→      ctx.fillRect(0, 0, 128, 256)
+   162→      for (let i = 0; i < 300; i++) {
+   163→        ctx.fillStyle = `rgba(${60 + Math.random() * 40},${58 + Math.random() * 38},${56 + Math.random() * 36},0.5)`
+   164→        ctx.fillRect(Math.random() * 128, Math.random() * 256, 2, 2)
+   165→      }
+   166→      // dashed center line
+   167→      ctx.fillStyle = '#e8df9a'
+   168→      for (let y = 0; y < 256; y += 64) ctx.fillRect(61, y, 6, 34)
+   169→    }, 1, 60)
+   170→    const road = new THREE.Mesh(
+   171→      new THREE.PlaneGeometry(17, 620),
+   172→      new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }),
+   173→    )
+   174→    road.rotation.x = -Math.PI / 2
+   175→    road.position.set(0, 0.01, -275)
+   176→    road.receiveShadow = true
+   177→    this.group.add(road)
+   178→
+   179→    // Avenue widening (zone D)
+   180→    const road2 = new THREE.Mesh(
+   181→      new THREE.PlaneGeometry(38, 150),
+   182→      new THREE.MeshStandardMaterial({ map: roadTex.clone(), roughness: 0.95 }),
+   183→    )
+   184→    ;(road2.material as THREE.MeshStandardMaterial).map!.repeat.set(2, 16)
+   185→    road2.rotation.x = -Math.PI / 2
+   186→    road2.position.set(0, 0.012, -350)
+   187→    road2.receiveShadow = true
+   188→    this.group.add(road2)
+   189→
+   190→    // sidewalks — light concrete strips
+   191→    const swTex = canvasTex(64, 64, (ctx) => {
+   192→      ctx.fillStyle = '#b5ab96'
+   193→      ctx.fillRect(0, 0, 64, 64)
+   194→      ctx.strokeStyle = '#9c927e'
+   195→      for (let i = 0; i <= 64; i += 16) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 64); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(64, i); ctx.stroke() }
+   196→    }, 3, 160)
+   197→    for (const side of [-1, 1]) {
+   198→      const sw = new THREE.Mesh(
+   199→        new THREE.PlaneGeometry(6, 620),
+   200→        new THREE.MeshStandardMaterial({ map: swTex, roughness: 1 }),
+   201→      )
+   202→      sw.rotation.x = -Math.PI / 2
+   203→      sw.position.set(side * 11, 0.02, -275)
+   204→      sw.receiveShadow = true
+   205→      this.group.add(sw)
+   206→    }
+   207→  }
+   208→
+   209→  private buildDeco(d: Deco) {
+   210→    const g = new THREE.Group()
+   211→    g.position.set(d.x, d.y ?? 0, d.z)
+   212→    if (d.ry) g.rotation.y = d.ry
+   213→    const shadow = true
+   214→    switch (d.kind) {
+   215→      case 'building': {
+   216→        const w = d.w ?? 10, dep = d.d ?? 8, h = d.h ?? 10
+   217→        const tex = windowTexture(d.color ?? '#c96f4a', d.variant ?? 0)
+   218→        tex.repeat.set(Math.max(1, Math.round(w / 5)), Math.max(1, Math.round(h / 6)))
+   219→        const emi = windowEmissiveTexture(d.variant ?? 0)
+   220→        emi.repeat.copy(tex.repeat)
+   221→        const mat = new THREE.MeshStandardMaterial({
+   222→          map: tex, roughness: 0.9,
+   223→          emissive: 0xffffff, emissiveMap: emi, emissiveIntensity: 0, // lit windows at night
+   224→        })
+   225→        this.windowMats.push(mat)
+   226→        const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, dep), mat)
+   227→        body.position.y = h / 2
+   228→        body.castShadow = shadow; body.receiveShadow = true
+   229→        g.add(body)
+   230→        // parapet
+   231→        const par = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.5, dep + 0.4), new THREE.MeshStandardMaterial({ color: '#8a7a62' }))
+   232→        par.position.y = h + 0.2
+   233→        g.add(par)
+   234→        // roof water tank
+   235→        if ((d.variant ?? 0) % 2 === 0) {
+   236→          const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 1.4, 10), new THREE.MeshStandardMaterial({ color: '#2e3d4f', flatShading: true }))
+   237→          tank.position.set(w * 0.25, h + 1.1, -dep * 0.2)
+   238→          g.add(tank)
+   239→        }
+   240→        // shop sign facing road
+   241→        const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w - 1.5, 8), 1.4), new THREE.MeshBasicMaterial({ map: signTexture(d.sign ?? 'SHOP'), transparent: false }))
+   242→        sign.position.set(0, 2.6, d.x < 0 ? dep / 2 + 0.06 : -dep / 2 - 0.06)
+   243→        if (d.x > 0) sign.rotation.y = Math.PI
+   244→        // striped awning
+   245→        const awnTex = canvasTex(64, 32, (ctx) => {
+   246→          for (let i = 0; i < 8; i++) { ctx.fillStyle = i % 2 ? '#e8e2d0' : '#b54a32'; ctx.fillRect(i * 8, 0, 8, 32) }
+   247→        })
+   248→        awnTex.repeat.set(Math.max(2, w / 3), 1)
+   249→        const awn = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.85, 1.6), new THREE.MeshStandardMaterial({ map: awnTex, side: THREE.DoubleSide, roughness: 1 }))
+   250→        awn.position.set(0, 3.6, d.x < 0 ? dep / 2 + 0.7 : -dep / 2 - 0.7)
+   251→        awn.rotation.x = d.x < 0 ? -0.5 : 0.5
+   252→        if (d.x > 0) { awn.rotation.y = Math.PI }
+   253→        g.add(sign, awn)
+   254→        break
+   255→      }
+   256→      case 'stall': {
+   257→        const color = ['#b54a32', '#2e6e4e', '#b98a2e', '#7d3b8c'][d.variant ?? 0]
+   258→        const counter = new THREE.Mesh(new THREE.BoxGeometry(3, 1.1, 1.6), new THREE.MeshStandardMaterial({ color: '#7a5c3e', flatShading: true }))
+   259→        counter.position.y = 0.55
+   260→        const top = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.15, 1.9), new THREE.MeshStandardMaterial({ color: '#9c8058' }))
+   261→        top.position.y = 1.15
+   262→        const awnTex = canvasTex(64, 32, (ctx) => {
+   263→          for (let i = 0; i < 8; i++) { ctx.fillStyle = i % 2 ? '#f2ead2' : color; ctx.fillRect(i * 8, 0, 8, 32) }
+   264→        })
+   265→        const awn = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.08, 2.4), new THREE.MeshStandardMaterial({ map: awnTex }))
+   266→        awn.position.y = 2.3
+   267→        const pole1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.3, 6), new THREE.MeshStandardMaterial({ color: '#5c4630' }))
+   268→        pole1.position.set(1.5, 1.15, 1); const pole2 = pole1.clone(); pole2.position.x = -1.5
+   269→        const goods = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), new THREE.MeshStandardMaterial({ color: '#d9822b', flatShading: true }))
+   270→        goods.position.set(0.5, 1.45, 0.2)
+   271→        const goods2 = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), new THREE.MeshStandardMaterial({ color: '#8c1f28', flatShading: true }))
+   272→        goods2.position.set(-0.6, 1.4, -0.2)
+   273→        if (d.sign) {
+   274→          const s = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.7), new THREE.MeshBasicMaterial({ map: signTexture(d.sign, '#f2ead2', '#5a4a2f') }))
+   275→          s.position.set(0, 2.65, 1.1)
+   276→          g.add(s)
+   277→        }
+   278→        g.add(counter, top, awn, pole1, pole2, goods, goods2)
+   279→        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+   280→        break
+   281→      }
+   282→      case 'cart': {
+   283→        const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 1.4), new THREE.MeshStandardMaterial({ color: '#8a6b45', flatShading: true }))
+   284→        body.position.y = 0.85
+   285→        const wheel1 = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.12, 12), new THREE.MeshStandardMaterial({ color: '#4a3826' }))
+   286→        wheel1.rotation.x = Math.PI / 2; wheel1.position.set(0, 0.5, 0.75)
+   287→        const wheel2 = wheel1.clone(); wheel2.position.z = -0.75
+   288→        const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.2, 6), new THREE.MeshStandardMaterial({ color: '#5c4630' }))
+   289→        handle.rotation.z = 1.2; handle.position.set(1.5, 1.0, 0.4)
+   290→        g.add(body, wheel1, wheel2, handle)
+   291→        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+   292→        break
+   293→      }
+   294→      case 'teaKettle': {
+   295→        const cart = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 1), new THREE.MeshStandardMaterial({ color: '#9c8058', flatShading: true }))
+   296→        cart.position.y = 0.7
+   297→        const kettle = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6), new THREE.MeshStandardMaterial({ color: '#b54a32', metalness: 0.4, roughness: 0.4 }))
+   298→        kettle.position.y = 1.35
+   299→        const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 0.4, 6), new THREE.MeshStandardMaterial({ color: '#b54a32', metalness: 0.4 }))
+   300→        spout.rotation.z = 1; spout.position.set(0.3, 1.4, 0)
+   301→        const stove = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.3, 8), new THREE.MeshStandardMaterial({ color: '#3a3a3a' }))
+   302→        stove.position.set(-0.4, 1.15, 0)
+   303→        // steam
+   304→        g.add(cart, kettle, spout, stove)
+   305→        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+   306→        break
+   307→      }
+   308→      case 'tree': {
+   309→        const s = d.s ?? 1
+   310→        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.3 * s, 2.6 * s, 7), new THREE.MeshStandardMaterial({ color: '#6b4f35', flatShading: true }))
+   311→        trunk.position.y = 1.3 * s
+   312→        const crownColor = d.variant ? '#5c8a4e' : '#6e9a58'
+   313→        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.4 * s, 0), new THREE.MeshStandardMaterial({ color: crownColor, flatShading: true }))
+   314→        crown.position.y = 3.1 * s
+   315→        const crown2 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.0 * s, 0), new THREE.MeshStandardMaterial({ color: crownColor, flatShading: true }))
+   316→        crown2.position.set(0.6 * s, 2.6 * s, 0.3 * s)
+   317→        trunk.castShadow = crown.castShadow = shadow
+   318→        g.add(trunk, crown, crown2)
+   319→        break
+   320→      }
+   321→      case 'bench': {
+   322→        const seat = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.1, 0.55), new THREE.MeshStandardMaterial({ color: '#8a6b45' }))
+   323→        seat.position.y = 0.5
+   324→        const back = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.5, 0.08), new THREE.MeshStandardMaterial({ color: '#8a6b45' }))
+   325→        back.position.set(0, 0.8, -0.25)
+   326→        const l1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: '#4a3a28' }))
+   327→        l1.position.set(0.95, 0.25, 0); const l2 = l1.clone(); l2.position.x = -0.95
+   328→        g.add(seat, back, l1, l2)
+   329→        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+   330→        break
+   331→      }
+   332→      case 'scooter': {
+   333→        const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.35, 1.5), new THREE.MeshStandardMaterial({ color: ['#2e6e8c', '#b54a32', '#4e7d6b', '#c9a86a'][Math.floor(Math.random() * 4)], metalness: 0.3, roughness: 0.5 }))
+   334→        body.position.y = 0.55
+   335→        const seat = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.12, 0.6), new THREE.MeshStandardMaterial({ color: '#2a2a2a' }))
+   336→        seat.position.set(0, 0.78, -0.3)
+   337→        const w1 = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.1, 10), new THREE.MeshStandardMaterial({ color: '#1a1a1a' }))
+   338→        w1.rotation.z = Math.PI / 2; w1.position.set(0, 0.24, 0.7)
+   339→        const w2 = w1.clone(); w2.position.z = -0.65
+   340→        const handle = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.05), new THREE.MeshStandardMaterial({ color: '#333' }))
+   341→        handle.position.set(0, 0.85, 0.6)
+   342→        g.add(body, seat, w1, w2, handle)
+   343→        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+   344→        break
+   345→      }
+   346→      case 'fountain': {
+   347→        const base = new THREE.Mesh(new THREE.CylinderGeometry(4, 4.4, 1, 18), new THREE.MeshStandardMaterial({ color: '#c2b280', flatShading: true }))
+   348→        base.position.y = 0.5
+   349→        const water = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.5, 0.2, 18), new THREE.MeshStandardMaterial({ color: '#4e8ca8', transparent: true, opacity: 0.85, roughness: 0.2, metalness: 0.3 }))
+   350→        water.position.y = 0.95
+   351→        const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 2.2, 10), new THREE.MeshStandardMaterial({ color: '#c2b280' }))
+   352→        pillar.position.y = 1.9
+   353→        const top = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 0.5, 0.5, 12), new THREE.MeshStandardMaterial({ color: '#c2b280' }))
+   354→        top.position.y = 3.1
+   355→        base.castShadow = true
+   356→        g.add(base, water, pillar, top)
+   357→        // particle water
+   358→        const N = 60
+   359→        const pos = new Float32Array(N * 3)
+   360→        for (let i = 0; i < N; i++) { pos[i * 3] = 0; pos[i * 3 + 1] = 3.2; pos[i * 3 + 2] = 0 }
+   361→        const geo = new THREE.BufferGeometry()
+   362→        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+   363→        const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color: '#9ecfe8', size: 0.12, transparent: true, opacity: 0.8 }))
+   364→        this.group.add(g)
+   365→        g.add(pts)
+   366→        this.fountainParticles = pts
+   367→        this.animated.push((t) => {
+   368→          const arr = pts.geometry.attributes.position.array as Float32Array
+   369→          for (let i = 0; i < N; i++) {
+   370→            const seed = i * 0.61
+   371→            const f = (t * 0.7 + seed) % 1
+   372→            arr[i * 3] = Math.cos(seed * 40) * f * 1.6
+   373→            arr[i * 3 + 1] = 3.3 + (1 - f) * 2.2 - f * f * 3.2
+   374→            arr[i * 3 + 2] = Math.sin(seed * 40) * f * 1.6
+   375→          }
+   376→          pts.geometry.attributes.position.needsUpdate = true
+   377→        })
+   378→        return // skip generic add
+   379→      }
+   380→      case 'banner': {
+   381→        // banner across the street
+   382→        const h = 4.4
+   383→        const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 22, 4), new THREE.MeshBasicMaterial({ color: '#3a2d1a' }))
+   384→        rope.rotation.z = Math.PI / 2
+   385→        rope.position.y = h
+   386→        const tex = signTexture(d.sign ?? 'PROTEST', '#e8b13c', '#2c3947')
+   387→        const cloth = new THREE.Mesh(new THREE.PlaneGeometry(7, 1.5), new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, transparent: true }))
+   388→        cloth.position.y = h - 0.8
+   389→        const sway = Math.random() * 10
+   390→        this.animated.push((t) => { cloth.rotation.z = Math.sin(t * 1.4 + sway) * 0.06; cloth.position.y = h - 0.8 + Math.sin(t * 1.1 + sway) * 0.05 })
+   391→        g.add(rope, cloth)
+   392→        break
+   393→      }
+   394→      case 'lamp': {
+   395→        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 5, 6), new THREE.MeshStandardMaterial({ color: '#3a4046' }))
+   396→        pole.position.y = 2.5
+   397→        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.06, 0.06), new THREE.MeshStandardMaterial({ color: '#3a4046' }))
+   398→        arm.position.set(0.35, 5, 0)
+   399→        const headMat = new THREE.MeshStandardMaterial({ color: '#ffe9b0', emissive: '#ffc866', emissiveIntensity: 0.5 })
+   400→        this.lampHeadMats.push({ m: headMat, base: 0.5 })
+   401→        const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), headMat)
+   402→        head.position.set(0.7, 4.9, 0)
+   403→        pole.castShadow = true
+   404→        g.add(pole, arm, head)
+   405→        // night halo + downlight cone; world position recorded for the light pool
+   406→        const ry = d.ry ?? 0
+   407→        const hx = d.x + Math.cos(ry) * 0.7, hz = d.z - Math.sin(ry) * 0.7
+   408→        const halo = new THREE.Sprite(this.glowMat)
+   409→        halo.position.set(hx, 4.9, hz)
+   410→        halo.scale.set(2.6, 2.6, 1)
+   411→        this.group.add(halo)
+   412→        const cone = new THREE.Mesh(new THREE.ConeGeometry(1.7, 4.8, 10, 1, true), this.coneMat)
+   413→        cone.position.set(hx, 2.5, hz)
+   414→        this.group.add(cone)
+   415→        const poolG = new THREE.Mesh(new THREE.PlaneGeometry(5.2, 5.2), this.poolMat)
+   416→        poolG.rotation.x = -Math.PI / 2
+   417→        poolG.position.set(hx, 0.045, hz)
+   418→        this.group.add(poolG)
+   419→        this.lightPositions.push(new THREE.Vector3(hx, 4.7, hz))
+   420→        break
+   421→      }
+   422→      case 'tower': {
+   423→        // watchtower
+   424→        const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 4.6, 6), new THREE.MeshStandardMaterial({ color: '#6b4f35' }))
+   425→        legs.position.y = 2.3
+   426→        const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.8, 2.6), new THREE.MeshStandardMaterial({ color: '#7a5c3e', flatShading: true }))
+   427→        cabin.position.y = 5.4
+   428→        const roof = new THREE.Mesh(new THREE.ConeGeometry(2.2, 1.2, 4), new THREE.MeshStandardMaterial({ color: '#8c1f28', flatShading: true }))
+   429→        roof.position.y = 6.9
+   430→        roof.rotation.y = Math.PI / 4
+   431→        cabin.castShadow = true
+   432→        g.add(legs, cabin, roof)
+   433→        break
+   434→      }
+   435→      case 'crate': {
+   436→        const s = d.s ?? 1
+   437→        const crate = new THREE.Mesh(new THREE.BoxGeometry(1.6 * s, 1.6 * s, 1.6 * s), new THREE.MeshStandardMaterial({ color: '#9c8058', flatShading: true }))
+   438→        crate.position.y = 0.8 * s
+   439→        crate.castShadow = true
+   440→        const edge = new THREE.Mesh(new THREE.BoxGeometry(1.65 * s, 0.12, 1.65 * s), new THREE.MeshStandardMaterial({ color: '#6b5236' }))
+   441→        edge.position.y = 1.55 * s
+   442→        g.add(crate, edge)
+   443→        break
+   444→      }
+   445→      case 'barrier': {
+   446→        const w = d.w ?? 4, dep = d.d ?? 1.6
+   447→        for (let i = 0; i < Math.max(1, Math.round(w / 2)); i++) {
+   448→          const frame = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.1, 0.08), new THREE.MeshStandardMaterial({ color: '#c9482e', flatShading: true }))
+   449→          frame.position.set(-w / 2 + 1 + i * 2, 0.6, 0)
+   450→          const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.22, 0.1), new THREE.MeshStandardMaterial({ color: '#f2ead2' }))
+   451→          stripe.position.copy(frame.position); stripe.position.y += 0.18
+   452→          const legA = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.15, 0.06), new THREE.MeshStandardMaterial({ color: '#7a7a76' }))
+   453→          legA.position.set(frame.position.x - 0.8, 0.55, 0.35)
+   454→          const legB = legA.clone(); legB.position.z = -0.35
+   455→          g.add(frame, stripe, legA, legB)
+   456→        }
+   457→        break
+   458→      }
+   459→      case 'monument': {
+   460→        const w = d.w ?? 16, h = d.h ?? 14, dep = d.d ?? 16
+   461→        const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, dep), new THREE.MeshStandardMaterial({ color: d.color ?? '#d8cfc0', roughness: 0.8 }))
+   462→        body.position.y = h / 2
+   463→        body.castShadow = true; body.receiveShadow = true
+   464→        g.add(body)
+   465→        // dome
+   466→        if ((d.variant ?? 0) % 2 === 0 || d.sign) {
+   467→          const dome = new THREE.Mesh(new THREE.SphereGeometry(Math.min(w, dep) * 0.32, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#7fa8a0', metalness: 0.35, roughness: 0.4 }))
+   468→          dome.position.y = h + 0.2
+   469→          const spire = new THREE.Mesh(new THREE.ConeGeometry(0.4, 2, 8), new THREE.MeshStandardMaterial({ color: '#c9a86a', metalness: 0.5 }))
+   470→          spire.position.y = h + Math.min(w, dep) * 0.32 + 1.1
+   471→          g.add(dome, spire)
+   472→        }
+   473→        // columns
+   474→        for (let i = -2; i <= 2; i++) {
+   475→          const col = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.5, h * 0.85, 8), new THREE.MeshStandardMaterial({ color: '#e2d8c3' }))
+   476→          col.position.set(i * (w / 6), h * 0.42, dep / 2 + 0.5)
+   477→          g.add(col)
+   478→        }
+   479→        if (d.sign) {
+   480→          const s = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.7, 1.6), new THREE.MeshBasicMaterial({ map: signTexture(d.sign, '#e2d8c3', '#5a4a2f') }))
+   481→          s.position.set(0, h * 0.8, dep / 2 + 0.6)
+   482→          g.add(s)
+   483→        }
+   484→        break
+   485→      }
+   486→      case 'flagpole': {
+   487→        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 8, 6), new THREE.MeshStandardMaterial({ color: '#b8b4a8', metalness: 0.6 }))
+   488→        pole.position.y = 4
+   489→        const flagColors = [['#f5efdc', '#b54a32'], ['#2e6e4e', '#f2c14e'], ['#4e7d6b', '#e8b13c']][d.variant ?? 0]
+   490→        const flagTex = canvasTex(64, 40, (ctx) => {
+   491→          ctx.fillStyle = flagColors[0]; ctx.fillRect(0, 0, 64, 40)
+   492→          ctx.fillStyle = flagColors[1]; ctx.beginPath(); ctx.arc(32, 20, 9, 0, 7); ctx.fill()
+   493→        })
+   494→        const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1, 6, 1), new THREE.MeshStandardMaterial({ map: flagTex, side: THREE.DoubleSide }))
+   495→        flag.position.set(0.9, 7.2, 0)
+   496→        this.flags.push(flag)
+   497→        g.add(pole, flag)
+   498→        break
+   499→      }
+   500→      case 'billboard':
+   501→      case 'hoarding': {
+   502→        const post1 = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 4, 6), new THREE.MeshStandardMaterial({ color: '#4a4038' }))
+   503→        post1.position.set(-1.6, 2, 0)
+   504→        const post2 = post1.clone(); post2.position.x = 1.6
+   505→        const board = new THREE.Mesh(new THREE.BoxGeometry(4.6, 2.4, 0.15), new THREE.MeshStandardMaterial({ color: '#f2ead2' }))
+   506→        board.position.y = 5
+   507→        const face = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 2.2), new THREE.MeshBasicMaterial({ map: signTexture(d.sign ?? 'VOTECHOR', '#2c3947', '#f2c14e') }))
+   508→        face.position.set(0, 5, 0.09)
+   509→        board.castShadow = true
+   510→        g.add(post1, post2, board, face)
+   511→        const face2 = face.clone(); face2.rotation.y = Math.PI; face2.position.z = -0.09
+   512→        g.add(face2)
+   513→        break
+   514→      }
+   515→      case 'planter': {
+   516→        const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.6, 0.7, 8), new THREE.MeshStandardMaterial({ color: '#b3543a', flatShading: true }))
+   517→        pot.position.y = 0.35
+   518→        const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(0.75, 0), new THREE.MeshStandardMaterial({ color: '#5c8a4e', flatShading: true }))
+   519→        bush.position.y = 1.15
+   520→        g.add(pot, bush)
+   521→        break
+   522→      }
+   523→      case 'stage': {
+   524→        const deck = new THREE.Mesh(new THREE.BoxGeometry(8, 1.2, 8), new THREE.MeshStandardMaterial({ color: '#8a6b45', flatShading: true }))
+   525→        deck.position.y = 0.6
+   526→        const back = new THREE.Mesh(new THREE.BoxGeometry(8, 3.4, 0.3), new THREE.MeshStandardMaterial({ color: '#b54a32' }))
+   527→        back.position.set(0, 2.6, -3.8)
+   528→        const banner = new THREE.Mesh(new THREE.PlaneGeometry(7, 1.1), new THREE.MeshBasicMaterial({ map: signTexture('CHAUPAL — PEOPLE\'S STAGE', '#b54a32', '#f5efdc') }))
+   529→        banner.position.set(0, 3.2, -3.6)
+   530→        deck.receiveShadow = true
+   531→        g.add(deck, back, banner)
+   532→        break
+   533→      }
+   534→      case 'toilet': {
+   535→        const shed = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, 2), new THREE.MeshStandardMaterial({ color: '#7d8a6b', flatShading: true }))
+   536→        shed.position.y = 1.2
+   537→        const roof = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.15, 2.4), new THREE.MeshStandardMaterial({ color: '#4a5a48' }))
+   538→        roof.position.y = 2.5
+   539→        g.add(shed, roof)
+   540→        break
+   541→      }
+   542→    }
+   543→    this.group.add(g)
+   544→  }
+   545→
+   546→  /**
+   547→   * Dense instanced street lamps lining both curbs for the whole map — the deco lamps
+   548→   * above are too sparse to carry a night scene. 3 draw calls for ~60 lamps.
+   549→   */
+   550→  private buildExtraStreetLamps() {
+   551→    const spots: { x: number; z: number; ry: number }[] = []
+   552→    // march down the road, alternating curbs, arm always pointing toward the road
+   553→    let z = 2
+   554→    let side = 1
+   555→    while (z > -578) {
+   556→      const x = side * 9.7
+   557→      const ry = side > 0 ? Math.PI : 0
+   558→      // skip anything too close to an authored deco lamp
+   559→      const clash = this.lightPositions.some(p => Math.abs(p.x - x) < 5 && Math.abs(p.z - z) < 7)
+   560→      if (!clash) spots.push({ x, z, ry })
+   561→      z -= 23
+   562→      side *= -1
+   563→    }
+   564→    if (!spots.length) return
+   565→    const n = spots.length
+   566→    const darkMat = new THREE.MeshStandardMaterial({ color: '#3a4046' })
+   567→    const pole = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.07, 0.1, 5, 6), darkMat, n)
+   568→    const arm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 0.06, 0.06), darkMat, n)
+   569→    const head = new THREE.InstancedMesh(new THREE.SphereGeometry(0.18, 8, 6), this.instHeadMat, n)
+   570→    const cone = new THREE.InstancedMesh(new THREE.ConeGeometry(1.7, 4.8, 10, 1, true), this.coneMat, n)
+   571→    const poolG = new THREE.InstancedMesh(new THREE.PlaneGeometry(5.2, 5.2), this.poolMat, n)
+   572→    const m = new THREE.Matrix4()
+   573→    const q = new THREE.Quaternion()
+   574→    const e = new THREE.Euler()
+   575→    const one = new THREE.Vector3(1, 1, 1)
+   576→    for (let i = 0; i < n; i++) {
+   577→      const s = spots[i]
+   578→      e.set(0, s.ry, 0); q.setFromEuler(e)
+   579→      m.compose(new THREE.Vector3(s.x, 2.5, s.z), q, one); pole.setMatrixAt(i, m)
+   580→      m.compose(new THREE.Vector3(s.x + Math.cos(s.ry) * 0.35, 5, s.z - Math.sin(s.ry) * 0.35), q, one); arm.setMatrixAt(i, m)
+   581→      const hx = s.x + Math.cos(s.ry) * 0.7, hz = s.z - Math.sin(s.ry) * 0.7
+   582→      m.compose(new THREE.Vector3(hx, 4.9, hz), q, one); head.setMatrixAt(i, m)
+   583→      m.compose(new THREE.Vector3(hx, 2.5, hz), q, one); cone.setMatrixAt(i, m)
+   584→      m.compose(new THREE.Vector3(hx + Math.cos(s.ry) * 0.15, 0.045, hz - Math.sin(s.ry) * 0.15), new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)), one); poolG.setMatrixAt(i, m)
+   585→      this.lightPositions.push(new THREE.Vector3(hx, 4.7, hz))
+   586→    }
+   587→    pole.castShadow = true
+   588→    this.group.add(pole, arm, head, cone, poolG)
+   589→  }
+   590→
+   591→  /** A small pool of REAL point lights that silently re-park onto the nearest lamps.
+   592→   *  Lights stay in the scene permanently (intensity 0 by day) — toggling visibility
+   593→   *  would force a full material recompile at every dusk/dawn. */
+   594→  private buildLightPool(quality: 'low' | 'medium' | 'high') {
+   595→    const count = quality === 'high' ? 8 : quality === 'medium' ? 5 : 3
+   596→    for (let i = 0; i < count; i++) {
+   597→      const l = new THREE.PointLight(0xffb46a, 0, 17, 1.7)
+   598→      l.castShadow = false
+   599→      this.lightPool.push(l)
+   600→      this.group.add(l)
+   601→    }
+   602→  }
+   603→
+   604→  /** Called every frame from game.ts with the sky's night factor + player focus. */
+   605→  setNight(nf: number, camPos: THREE.Vector3) {
+   606→    this.nightF = nf
+   607→    this.camPos.copy(camPos)
+   608→    const headE = 0.5 + 2.1 * nf
+   609→    for (const e of this.lampHeadMats) e.m.emissiveIntensity = e.base + 2.1 * nf
+   610→    this.instHeadMat.emissiveIntensity = headE
+   611→    this.glowMat.opacity = 0.85 * nf
+   612→    this.coneMat.opacity = 0.16 * nf
+   613→    this.poolMat.opacity = 0.42 * nf
+   614→    const winE = 1.15 * nf
+   615→    for (const m of this.windowMats) m.emissiveIntensity = winE
+   616→    // searchlights read better against a dark sky
+   617→    for (const m of this.searchlightMats) m.opacity = 0.16 + 0.15 * nf
+   618→  }
+   619→
+   620→  private buildCrowd(world: WorldDef, quality: 'low' | 'medium' | 'high') {
+   621→    const crowd = world.decorations.filter(d => d.kind === 'crowd')
+   622→    if (!crowd.length) return
+   623→    const count = quality === 'low' ? Math.floor(crowd.length * 0.5) : crowd.length
+   624→    const bodies = new THREE.InstancedMesh(
+   625→      new THREE.CylinderGeometry(0.22, 0.3, 1.05, 6),
+   626→      new THREE.MeshStandardMaterial({ flatShading: true }),
+   627→      count,
+   628→    )
+   629→    const heads = new THREE.InstancedMesh(
+   630→      new THREE.SphereGeometry(0.15, 6, 5),
+   631→      new THREE.MeshStandardMaterial({ color: '#c68a5c', flatShading: true }),
+   632→      count,
+   633→    )
+   634→    const m = new THREE.Matrix4()
+   635→    const color = new THREE.Color()
+   636→    const shirtColors = ['#2f9e6e', '#d9822b', '#7ea8d8', '#b54a32', '#e6e0d2', '#8c4a5e']
+   637→    let placed = 0
+   638→    for (let i = 0; i < crowd.length && placed < count; i++) {
+   639→      const c = crowd[i]
+   640→      const bob = Math.random() * 0.05
+   641→      m.makeTranslation(c.x, 0.62 + bob, c.z)
+   642→      bodies.setMatrixAt(placed, m)
+   643→      color.set(shirtColors[(c.variant ?? i) % shirtColors.length])
+   644→      bodies.setColorAt(placed, color)
+   645→      m.makeTranslation(c.x, 1.28 + bob, c.z)
+   646→      heads.setMatrixAt(placed, m)
+   647→      placed++
+   648→      if (c.sign) {
+   649→        // small sign group (max ~15 textured signs)
+   650→        if (this.crowdSigns.length < 16) {
+   651→          const sg = new THREE.Group()
+   652→          const board = new THREE.Mesh(new THREE.PlaneGeometry(0.75, 0.45), new THREE.MeshBasicMaterial({ map: signTexture(c.sign, '#f5efdc', '#8c1f28'), side: THREE.DoubleSide }))
+   653→          board.position.set(0, 1.55, 0)
+   654→          sg.add(board)
+   655→          sg.position.set(c.x, 0, c.z)
+   656→          sg.rotation.y = (c.ry ?? 0) + Math.PI
+   657→          this.crowdSigns.push(sg)
+   658→          this.group.add(sg)
+   659→        }
+   660→      }
+   661→    }
+   662→    bodies.count = placed
+   663→    heads.count = placed
+   664→    bodies.castShadow = quality === 'high'
+   665→    this.group.add(bodies, heads)
+   666→    this.crowdBodies = bodies
+   667→    this.crowdHeads = heads
+   668→  }
+   669→
+   670→  private buildSearchlights() {
+   671→    for (const sl of this.world.searchlights) {
+   672→      const grp = new THREE.Group()
+   673→      grp.position.set(sl.x, 5.6, sl.z)
+   674→      const cone = new THREE.Mesh(
+   675→        new THREE.ConeGeometry(2.6, 18, 12, 1, true),
+   676→        new THREE.MeshBasicMaterial({ color: '#ffe9a0', transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }),
+   677→      )
+   678→      cone.rotation.x = Math.PI / 2 - 0.6
+   679→      cone.position.set(0, 0, 9)
+   680→      const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 0.8, 8), new THREE.MeshStandardMaterial({ color: '#3a4046' }))
+   681→      housing.rotation.x = Math.PI / 2 - 0.6
+   682→      const lens = new THREE.Mesh(new THREE.CircleGeometry(0.42, 10), new THREE.MeshBasicMaterial({ color: '#fff3c4' }))
+   683→      lens.position.set(0, 0, 0.42)
+   684→      lens.rotation.x = -0.3
+   685→      housing.add(lens)
+   686→      grp.add(cone, housing)
+   687→      this.group.add(grp)
+   688→      this.searchlightCones.push(cone)
+   689→      this.searchlightGroups.push(grp)
+   690→      this.searchlightMats.push(cone.material as THREE.MeshBasicMaterial)
+   691→      cone.userData.baseRotation = cone.rotation.x
+   692→    }
+   693→  }
+   694→
+   695→  private buildCheckpointGates() {
+   696→    for (const cp of this.world.checkpoints) {
+   697→      const g = new THREE.Group()
+   698→      g.position.set(cp.x, 0, cp.z)
+   699→      for (const side of [-1, 1]) {
+   700→        const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.65, 6.5, 8), new THREE.MeshStandardMaterial({ color: '#c2b280', flatShading: true }))
+   701→        pillar.position.set(side * 8.5, 3.25, 0)
+   702→        pillar.castShadow = true
+   703→        g.add(pillar)
+   704→        const top = new THREE.Mesh(new THREE.SphereGeometry(0.75, 10, 8), new THREE.MeshStandardMaterial({ color: '#7fa8a0', metalness: 0.4 }))
+   705→        top.position.set(side * 8.5, 6.7, 0)
+   706→        g.add(top)
+   707→      }
+   708→      const banner = new THREE.Mesh(new THREE.PlaneGeometry(14, 1.6), new THREE.MeshBasicMaterial({ map: signTexture(`CHECKPOINT ${cp.id} — ${cp.name.toUpperCase()}`, '#2e6e4e', '#f5efdc'), side: THREE.DoubleSide }))
+   709→      banner.position.set(0, 6, 0)
+   710→      g.add(banner)
+   711→      this.group.add(g)
+   712→    }
+   713→  }
+   714→
+   715→  private buildBossArena() {
+   716→    const a = this.world.bossArena
+   717→    const g = new THREE.Group()
+   718→    g.position.set(a.x, 0, a.z)
+   719→    // circular stone plaza
+   720→    const plaza = new THREE.Mesh(new THREE.CylinderGeometry(a.radius, a.radius + 2, 0.3, 40), new THREE.MeshStandardMaterial({ color: '#cfc4ab', roughness: 0.9 }))
+   721→    plaza.position.y = 0.1
+   722→    plaza.receiveShadow = true
+   723→    const ring = new THREE.Mesh(new THREE.TorusGeometry(a.radius - 1, 0.35, 8, 48), new THREE.MeshStandardMaterial({ color: '#b54a32' }))
+   724→    ring.rotation.x = Math.PI / 2
+   725→    ring.position.y = 0.28
+   726→    // podium for boss
+   727→    const podium = new THREE.Mesh(new THREE.CylinderGeometry(5, 6, 1.2, 24), new THREE.MeshStandardMaterial({ color: '#b8ab8d' }))
+   728→    podium.position.set(0, 0.6, -14)
+   729→    podium.receiveShadow = true
+   730→    // giant ballot box (phase 5 deposit)
+   731→    const box = new THREE.Mesh(new THREE.BoxGeometry(3, 3.4, 3), new THREE.MeshStandardMaterial({ color: '#2e6e4e', flatShading: true }))
+   732→    box.position.set(0, 1.9, -12)
+   733→    const slot = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.2, 0.4), new THREE.MeshStandardMaterial({ color: '#1c1a17' }))
+   734→    slot.position.set(0, 3.2, -10.6)
+   735→    box.castShadow = true
+   736→    g.add(plaza, ring, podium, box, slot)
+   737→    // boss gate pillars + energy barrier
+   738→    for (const side of [-1, 1]) {
+   739→      const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 9, 1.6), new THREE.MeshStandardMaterial({ color: '#8c1f28', flatShading: true }))
+   740→      pillar.position.set(side * 10, 4.5, a.gateZ - a.z)
+   741→      pillar.castShadow = true
+   742→      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 6), new THREE.MeshStandardMaterial({ color: '#ffb84e', emissive: '#ff7b2e', emissiveIntensity: 1.4 }))
+   743→      this.lampHeadMats.push({ m: lamp.material as THREE.MeshStandardMaterial, base: 1.4 })
+   744→      lamp.position.set(side * 10, 9.6, a.gateZ - a.z)
+   745→      g.add(pillar, lamp)
+   746→    }
+   747→    const gate = new THREE.Mesh(
+   748→      new THREE.PlaneGeometry(18.4, 8.4, 1, 1),
+   749→      new THREE.MeshBasicMaterial({ color: '#ff5c3a', transparent: true, opacity: 0.3, side: THREE.DoubleSide }),
+   750→    )
+   751→    gate.position.set(0, 4.2, a.gateZ - a.z)
+   752→    this.bossGate = gate
+   753→    g.add(gate)
+   754→    // barrier stripes warning
+   755→    const warnTex = canvasTex(128, 32, (ctx) => {
+   756→      for (let i = 0; i < 8; i++) { ctx.fillStyle = i % 2 ? '#f2c14e' : '#1c1a17'; ctx.fillRect(i * 16, 0, 16, 32) }
+   757→    })
+   758→    warnTex.repeat.set(6, 1)
+   759→    const warn = new THREE.Mesh(new THREE.PlaneGeometry(22, 1), new THREE.MeshBasicMaterial({ map: warnTex }))
+   760→    warn.rotation.x = -Math.PI / 2
+   761→    warn.position.set(0, 0.06, a.gateZ - a.z + 4)
+   762→    g.add(warn)
+   763→    // crowd ring around arena (instanced)
+   764→    const N = 64
+   765→    const bodies = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.3, 1.05, 6), new THREE.MeshStandardMaterial({ flatShading: true }), N)
+   766→    const heads = new THREE.InstancedMesh(new THREE.SphereGeometry(0.15, 6, 5), new THREE.MeshStandardMaterial({ color: '#c68a5c', flatShading: true }), N)
+   767→    const m = new THREE.Matrix4()
+   768→    const col = new THREE.Color()
+   769→    const shirts = ['#2f9e6e', '#d9822b', '#7ea8d8', '#b54a32', '#e6e0d2']
+   770→    for (let i = 0; i < N; i++) {
+   771→      const ang = (i / N) * Math.PI * 2
+   772→      const r = a.radius + 2.5
+   773→      const x = Math.cos(ang) * r, z = Math.sin(ang) * r
+   774→      const bob = Math.sin(i * 2.3) * 0.05
+   775→      m.makeTranslation(x, 0.62 + bob, z)
+   776→      bodies.setMatrixAt(i, m)
+   777→      col.set(shirts[i % shirts.length])
+   778→      bodies.setColorAt(i, col)
+   779→      m.makeTranslation(x, 1.28 + bob, z)
+   780→      heads.setMatrixAt(i, m)
+   781→    }
+   782→    g.add(bodies, heads)
+   783→    this.group.add(g)
+   784→    this.animated.push((t) => {
+   785→      if (this.bossGate && this.bossGate.visible) {
+   786→        const mm = this.bossGate.material as THREE.MeshBasicMaterial
+   787→        mm.opacity = 0.24 + Math.sin(t * 3) * 0.1
+   788→      }
+   789→      // ballot box glow
+   790→      const em = 0.5 + Math.sin(t * 2.4) * 0.3
+   791→      const boxMat = box.material as THREE.MeshStandardMaterial
+   792→      boxMat.emissive.setRGB(0.1 * em, 0.4 * em, 0.2 * em)
+   793→    })
+   794→  }
+   795→
+   796→  private buildDust() {
+   797→    const N = 140
+   798→    const pos = new Float32Array(N * 3)
+   799→    for (let i = 0; i < N; i++) {
+   800→      pos[i * 3] = (Math.random() - 0.5) * 90
+   801→      pos[i * 3 + 1] = 0.5 + Math.random() * 8
+   802→      pos[i * 3 + 2] = Math.random() * -580
+   803→    }
+   804→    const geo = new THREE.BufferGeometry()
+   805→    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+   806→    const dust = new THREE.Points(geo, new THREE.PointsMaterial({ color: '#e8d5a8', size: 0.18, transparent: true, opacity: 0.35, depthWrite: false }))
+   807→    this.group.add(dust)
+   808→    this.animated.push((_t, dt) => {
+   809→      const arr = geo.attributes.position.array as Float32Array
+   810→      for (let i = 0; i < N; i++) {
+   811→        arr[i * 3] += Math.sin(i + performance.now() * 0.0002) * dt * 0.4
+   812→        arr[i * 3 + 1] += dt * 0.12
+   813→        if (arr[i * 3 + 1] > 9) arr[i * 3 + 1] = 0.5
+   814→      }
+   815→      geo.attributes.position.needsUpdate = true
+   816→    })
+   817→  }
+   818→
+   819→  setBossGateOpen(open: boolean) {
+   820→    if (this.bossGate) this.bossGate.visible = !open
+   821→  }
+   822→
+   823→  update(dt: number, t: number, searchlightRys?: Record<string, number>) {
+   824→    for (const fn of this.animated) fn(t, dt)
+   825→    // flag wave (cheap vertex-less: skew via rotation)
+   826→    for (const f of this.flags) f.rotation.y = Math.sin(t * 2.2 + f.position.x) * 0.14
+   827→    // searchlight rotation from server sim
+   828→    if (searchlightRys) {
+   829→      for (let i = 0; i < this.searchlightGroups.length; i++) {
+   830→        const sl = this.world.searchlights[i]
+   831→        const ry = searchlightRys[sl.id]
+   832→        if (ry !== undefined) {
+   833→          this.searchlightGroups[i].rotation.y = ry
+   834→        }
+   835→      }
+   836→    }
+   837→    // crowd subtle sway
+   838→    if (this.crowdBodies) this.crowdBodies.rotation.y = Math.sin(t * 0.5) * 0.004
+   839→
+   840→    // ---- street light pool: re-park real lights onto the nearest lamps at ~3Hz ----
+   841→    if (this.lightPool.length && this.lightPositions.length) {
+   842→      this.poolTimer -= dt
+   843→      if (this.poolTimer <= 0) {
+   844→        this.poolTimer = 0.35
+   845→        const cam = this.camPos
+   846→        // partial selection: K nearest bulbs (N is ~80 — a simple scan is fine)
+   847→        const k = this.lightPool.length
+   848→        const idx = this.lightPositions
+   849→          .map((p, i) => ({ i, d: (p.x - cam.x) * (p.x - cam.x) + (p.z - cam.z) * (p.z - cam.z) }))
+   850→          .sort((a, b) => a.d - b.d)
+   851→          .slice(0, k)
+   852→        for (let j = 0; j < k; j++) {
+   853→          const l = this.lightPool[j]
+   854→          const src = this.lightPositions[idx[j].i]
+   855→          l.position.set(src.x, src.y, src.z)
+   856→          l.userData.phase = idx[j].i * 1.7
+   857→        }
+   858→      }
+   859→      const base = 30 * this.nightF
+   860→      for (let j = 0; j < this.lightPool.length; j++) {
+   861→        const l = this.lightPool[j]
+   862→        // faint sodium-vapor shimmer so the glow feels alive
+   863→        l.intensity = base * (1 + 0.055 * Math.sin(t * 43 + (l.userData.phase ?? j * 7.3)))
+   864→      }
+   865→    }
+   866→  }
+   867→}
+   868→

@@ -268,7 +268,7 @@ export function tickNpc(
     }
   }
   // clamp to world bounds
-  n.x = Math.max(-47, Math.min(47, n.x))
+  n.x = Math.max(-119, Math.min(119, n.x))
   n.z = Math.max(-570, Math.min(9, n.z))
   return { npc: n, events, moved }
 }

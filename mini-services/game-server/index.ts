@@ -319,7 +319,7 @@ const socketRooms = new Map<string, string>()
 io.on('connection', (socket) => {
   console.log(`[conn] ${socket.id} connected`)
 
-  socket.on('game:join', (payload: { name?: unknown; archetype?: unknown; roomCode?: unknown; season?: unknown } = {}) => {
+  socket.on('game:join', (payload: { name?: unknown; archetype?: unknown; roomCode?: unknown; season?: unknown; cosmetics?: unknown } = {}) => {
     if (socketRooms.has(socket.id)) return // already joined
     if (totalPlayers() >= PLAYER_CAP) {
       socket.emit('game:joined', { ok: false, error: 'Server full' })

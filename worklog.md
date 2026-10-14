@@ -768,3 +768,36 @@ Stage Summary:
 - 自定义系统从"6 顶帽子+眼镜+标语"扩展为 **8 角色 × 6 槽位 × 30+ 道具** 的完整衣柜：脸型(5)/服装(4)/鞋(4)/背具(6)/手持(8)/头饰(8)+肤色(6)+眼镜+专属标语，全部有解锁曲线（等级/成就），实时 3D 预览所见即所得，**多人可见**（服务器同步+远程 rig 完整渲染，bot 也全员随机换装），服务器权威验证解锁
 - 关键修复：cosmetics 部分保存丢字段（现全量发送）；远程玩家此前完全看不到彼此外观（服务器根本不转发 cosmetics — 现已入 ack+join 事件）
 - 下一轮建议：戒指/披风等更多槽位、cosmetics 进游戏内商店（代币购买）、bot 皮肤与名字联动（职业 bot 穿职业装）、衣柜页移动端布局优化（3D 预览小屏折叠）
+
+---
+Task ID: 19
+Agent: Z.ai Code (main)
+Task: 用户要求把"单条小路的地图"升级成德里/GTA式大城市 — 能绕建筑、穿后巷(gali)、走下一批街道和民居；理解 prompt 并专业化实现
+
+Work Log:
+- WORLD EXPANSION (src/game/shared/world-def.ts): 城市从 96m 宽单路条带扩为 **240m 宽 (x ±120) × 582m** 的完整城市网格（面积 2.5×），原有 5 区脊柱（广场→市场→安检→大道→议会）完整保留在中轴：
+  * 4 条东西横街 CROSS_ROADS（导出常量，渲染器/小地图共用数据）：Plaza Cross z-78、Market Exit z-198（2 号检查点正好落在路口）、Avenue z-286、Colony z-452；为此平移了市场建筑行（删第 9 行）、Zone D 建筑行 (-300/-308-i*20)、Zone E 旗杆
+  * 西侧 Purani Gali 贫民巷 mohalla：8 排小住宅 + 2 条贯穿南北的 gali + 庭院围墙 + 南端花园；W2 maidan 空地（树/长椅/茶车/牛）；W4 公寓排 + Neem Park（10 树/5 椅/6 花坛）；W5 政府平房区 + 围墙地块
+  * 东侧 Naya Bazaar：两排商店楼夹 9m 市集巷 + 后巷（木箱/摩托/晒衣绳）+ 住宅排；Saraswati Public School + 操场 + 前院围墙大门；City Depot 3 库房 + 集装箱堆 + 摩托排；Azad Colony Park（纪念碑/树/椅）+ 2 排-colony 住宅
+  * 新 DecoKind：'home'（112 栋小住宅，variant 0 尖顶/1 平顶，10 色灰泥）、'wall'（1.1m 可翻越院墙）、'clothesline'（gali 晒衣绳，4 片布料摆动动画）
+  * 检查点铁丝网从 ±46 延至 ±122（嵌入世界墙）——**安检区无法再从两侧绕过**；QA 时发现并修复了 ±118~±120 的 2m 缝隙漏洞
+  * 6 名新警察巡逻（mohalla/bazaar/park/depot/colony 各 1）、17 个新拾取物（4 token 藏在后巷/gali/公园背后 —— "绕到建筑后面"的探索奖励）、6 台新车辆（2 条横街各 2 台 auto 短驳、Colony Cross 1 台 bus、maidan 1 头牛；A/B 横街车辆路径拆成两半避开检查点门柱）
+- RENDERER (src/game/world.ts): 住宅全部走实例化 —— 4 个 draw call 渲染 112 栋房：bodies InstancedMesh(单灰泥纹理+instanceColor 调色)、尖顶屋顶 InstancedMesh(三棱柱 wedge)+平顶 InstancedMesh、**全部门窗百叶合并成 1 个 merged geometry**（2×2 贴图集：木门/玻璃窗/防盗格栅窗/木百叶；夜间 emissiveMap 让住宅窗户也入万家灯火系统 windowMats）；地面 260m 宽、4 条横街沥青+断续中线+人行道（分段避开主路口）、横街路灯并入 buildExtraStreetLamps（±32 盏、灯臂指向路心、自动接入夜间光锥/光斑/点光池系统）、长栅栏帧距 4m 降耗、尘土扩至 ±115m
+- MAPS: minimap.ts WORLD_W 96→240（地面/边界墙/横街矩形/COLS 24 导航格/雷达 blit 偏移）；game.ts drawMinimap 重构为 **缓存静态底图**（buildMapUnderlay：地面+zone 染色+主路+横街+全部建筑墨块+Boss 竞技场环，只渲染一次，8Hz blit）+ 动态点层；BigMap.tsx 全部硬编码 ±48 参数化为 WORLD_BOUNDS（shared/constants.ts 导出）+ 9 个新街坊地标 HTML 标签（Purani Gali/Naya Bazaar/Saraswati School/Neem Park/City Depot/Azad Colony Park/Fountain/Training Ring/Flyover）；game-store minimapWindow 边界 ±120；GameRoot 缓冲画布 140→240px
+- SERVER: season.ts 导航图 x ±45→±115（bot 现在会游荡到横街和侧街坊； alley 3.2m < NAV_PAD×2 自动保持 bot 不钻窄巷）；npc-brain clamp ±119；顺手修复 2 个 R18 遗留 TS 错误（index.ts join payload cosmetics 类型、season.ts playerNet map 包装）；room.ts RELEASE_POINTS 8/8 验证通过
+- 关键修复：初版把"far wall"box 参数写错（z -576..12 整张世界压成实心）→ tsc 后跑 spawn 检查发现 4 个 release point REJECTED → 修正为 (-124,0,-576,124,14,-572) ✓
+- QA（agent-browser 经 :81 网关全程实测）：
+  * JOIN → CONNECTED 100 人（75 CROWD·24 RIGS），零 console error
+  * 实地走查 6 大新区域截图：Purani Gali（住宅排+gali+路灯+bot 迎面走来）、Naya Bazaar（彩色店面夹巷）、Market Exit 路口（横街虚线+检查点门+瞭望塔+栅栏迷宫）、Neem Park（树/椅/token/住宅排）、City Depot（夜色库房窗光）、Azad Colony（暮色下住宅+雷达墨块）
+  * 大地图：240m 城市建筑墨块 + 4 横街 + 9 地标标签全部渲染；圆形雷达 gali 网格/路口清晰
+  * 夜晚 22:30 横街实拍：新路灯锥+光斑点亮、住宅/商店窗光、探照灯扫掠 —— R16 夜灯系统自动覆盖全部新街
+  * 步行穿过 N-S gali（dz −0.5 @10fps）；**隐藏 token E2E**：后巷 "E — GRAB STOLEN VOTE TOKEN" → 拾取 → 计数 1/12 ✓
+  * 检查点完整性：向西绕行测试被栅栏挡停 (z −202→−203.7)；缝隙封死后重启验证 boot 无 REJECTED
+  * 11 台车辆坐标全对（6 台新横街车辆实时位置确认）；警察在新区域正常伤害/拘留（有机发生）
+  * 性能：白天/夜晚均 10 FPS @ RES 0.7-0.85（headless 软件 GL，与扩城前持平 —— 实例化+合并+缓存策略零回归）；tsc 0 错误、eslint 0 错误、dev.log 干净、game-server 干净重启
+
+Stage Summary:
+- VoteChor 从"一条路"变成真正可游荡的城市：240m 宽 × 582m，4 条横街 + 8 个街坊（贫民巷/市集/学校/公园/库房/政府区/colony），112 栋可绕行小住宅 + 密集 gali + 后巷藏宝 + 横街车流 + 全域夜灯，全部多人同步（服务器同一份 world-def 权威数据：碰撞/导航/巡逻/释放点/道具）
+- 工程要点：住宅 4 draw call（实例化+合并门窗）、大地图底图一次缓存、横街路灯零新增材质、检查点栅栏全域无缝（含缝隙漏洞修复）
+- 已知边界：横街沥青 y 0.008 低于主路 0.01（路口由主路覆盖，无缝）；bot 导航不进 gali（格子 10m+膨胀，玩家专属捷径）；软件 GL 下远端横街在雾中淡出属正常
+- 建议下一轮：住宅屋顶可爬（消防梯/水箱台阶）、横街路口红绿灯+斑马线、gali 里的小型事件（牛挡路/婚礼队伍）、大地图点击地标直接设路点、赛季内动态事件把玩家引向侧街（如"market fire"让 gali 成为撤退路线）

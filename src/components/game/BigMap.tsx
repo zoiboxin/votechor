@@ -6,6 +6,11 @@ import { X, MapPin, Crown, Flag, Vote, Circle, ScanEye, SquareDashedMousePointer
 import { motion } from 'framer-motion'
 import { Slider } from '@/components/ui/slider'
 import { computeRoute } from '@/game/minimap'
+import { WORLD_BOUNDS } from '@/game/shared/constants'
+
+const WB = WORLD_BOUNDS // { minX: -120, maxX: 120, minZ: -572, maxZ: 10 }
+const WSPAN = WB.maxX - WB.minX // 240
+const HSPAN = WB.maxZ - WB.minZ // 582
 
 // Hardcoded from world-def: world z range 10 → -572 mapped onto 0..100% of the strip height.
 // toY(z) = ((10 - z) / 582) * 100
@@ -24,6 +29,19 @@ const CHECKPOINTS = [
   { name: 'Avenue Junction', z: -418 },
 ]
 
+// Round-19 city neighborhoods + key spots (matches world-def landmarks)
+const LANDMARKS = [
+  { name: 'Fountain', x: 0, z: -34 },
+  { name: 'Training Ring', x: 16, z: -64 },
+  { name: 'Purani Gali', x: -78, z: -120 },
+  { name: 'Naya Bazaar', x: 78, z: -104 },
+  { name: 'Saraswati School', x: 78, z: -150 },
+  { name: 'Neem Park', x: -78, z: -360 },
+  { name: 'City Depot', x: 80, z: -330 },
+  { name: 'Azad Colony Park', x: 78, z: -486 },
+  { name: 'Flyover', x: 12, z: -374 },
+]
+
 const ZOOM_PRESETS = [
   { label: 'Near', value: 100 },
   { label: 'Mid', value: 180 },
@@ -31,7 +49,7 @@ const ZOOM_PRESETS = [
   { label: 'Full', value: MINIMAP_MAX_ZOOM },
 ]
 
-const yFor = (z: number) => ((10 - z) / 582) * 100
+const yFor = (z: number) => ((WB.maxZ - z) / HSPAN) * 100
 
 function zoomLabel(z: number) {
   if (z >= 560) return 'Full city'
@@ -41,7 +59,7 @@ function zoomLabel(z: number) {
   return 'Close-up'
 }
 
-const BUF_W = 140
+const BUF_W = 240
 const BUF_H = 420
 
 /**
@@ -71,13 +89,13 @@ function MinimapPreview({ buffer }: { buffer: React.RefObject<HTMLCanvasElement 
           ctx.fillStyle = 'rgba(28,26,23,0.85)'
           ctx.fillRect(0, 0, vis.width, vis.height)
           // intersect the square window with the world bounds, mapped into buffer pixels
-          const cx0 = Math.max(wx0, -48), cx1 = Math.min(wx0 + span, 48)
-          const cz0 = Math.max(wzTop, -572), cz1 = Math.min(wzTop - span, 10)
+          const cx0 = Math.max(wx0, WB.minX), cx1 = Math.min(wx0 + span, WB.maxX)
+          const cz0 = Math.max(wzTop, WB.minZ), cz1 = Math.min(wzTop - span, WB.maxZ)
           if (cx1 > cx0 && cz0 > cz1) {
-            const sx = ((cx0 + 48) / 96) * BUF_W
-            const sy = ((10 - cz0) / 582) * BUF_H
-            const sw = ((cx1 - cx0) / 96) * BUF_W
-            const sh = ((cz0 - cz1) / 582) * BUF_H
+            const sx = ((cx0 - WB.minX) / WSPAN) * BUF_W
+            const sy = ((WB.maxZ - cz0) / HSPAN) * BUF_H
+            const sw = ((cx1 - cx0) / WSPAN) * BUF_W
+            const sh = ((cz0 - cz1) / HSPAN) * BUF_H
             const dx = ((cx0 - wx0) / span) * vis.width
             const dy = ((wzTop - cz0) / span) * vis.height
             const dw = ((cx1 - cx0) / span) * vis.width
@@ -222,8 +240,8 @@ export default function BigMap({ minimapBuffer }: { minimapBuffer: React.RefObje
   // CLICK-TO-WAYPOINT: click anywhere on the city → gold pin + radar marker + route
   const setWaypoint = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
-    const wx = ((e.clientX - rect.left) / rect.width) * 96 - 48
-    const wz = 10 - ((e.clientY - rect.top) / rect.height) * 582
+    const wx = ((e.clientX - rect.left) / rect.width) * WSPAN + WB.minX
+    const wz = WB.maxZ - ((e.clientY - rect.top) / rect.height) * HSPAN
     patchHud({ waypoint: { x: Math.round(wx * 10) / 10, z: Math.round(wz * 10) / 10, label: 'WAYPOINT' } })
   }
 
@@ -243,8 +261,8 @@ export default function BigMap({ minimapBuffer }: { minimapBuffer: React.RefObje
           const st = useGameStore.getState()
           const wp = st.hud.waypoint
           if (wp) {
-            const toX = (x: number) => ((x + 48) / 96) * vis.width
-            const toY = (z: number) => ((10 - z) / 582) * vis.height
+            const toX = (x: number) => ((x - WB.minX) / WSPAN) * vis.width
+            const toY = (z: number) => ((WB.maxZ - z) / HSPAN) * vis.height
             const route = computeRoute(st.hud.mapX, st.hud.mapZ, wp.x, wp.z)
             const pts = [{ x: st.hud.mapX, z: st.hud.mapZ }, ...(route ?? [{ x: wp.x, z: wp.z }])]
             ctx.lineJoin = 'round'
@@ -271,12 +289,12 @@ export default function BigMap({ minimapBuffer }: { minimapBuffer: React.RefObje
   if (!open) return null
 
   // circular radar footprint on the map — a true world-circle becomes an ellipse
-  // here because the map stretches x and z differently (96m→320px vs 582m→700px)
+  // here because the map stretches x and z differently (240m→320px vs 582m→700px)
   const radarRect = {
-    left: `${Math.max(0, Math.min(100, ((mapX + 48) / 96) * 100))}%`,
-    top: `${Math.max(0, Math.min(100, ((10 - mapZ) / 582) * 100))}%`,
-    width: `${Math.min(160, (minimapZoom / 96) * 100)}%`,
-    height: `${Math.min(110, (minimapZoom / 582) * 100)}%`,
+    left: `${Math.max(0, Math.min(100, ((mapX - WB.minX) / WSPAN) * 100))}%`,
+    top: `${Math.max(0, Math.min(100, ((WB.maxZ - mapZ) / HSPAN) * 100))}%`,
+    width: `${Math.min(160, (minimapZoom / WSPAN) * 100)}%`,
+    height: `${Math.min(110, (minimapZoom / HSPAN) * 100)}%`,
   }
 
   return (
@@ -341,6 +359,20 @@ export default function BigMap({ minimapBuffer }: { minimapBuffer: React.RefObje
               </div>
             ))}
 
+            {/* neighborhood landmarks — dots with tiny labels */}
+            {LANDMARKS.map((l) => (
+              <div
+                key={l.name}
+                className="pointer-events-none absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1"
+                style={{ left: `${((l.x - WB.minX) / WSPAN) * 100}%`, top: `${yFor(l.z)}%` }}
+              >
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full border border-[#1c1a17]/70 bg-[#f2c14e] shadow-[0_0_3px_rgba(242,193,78,0.8)]" />
+                <span className="whitespace-nowrap rounded bg-[#1c1a17]/75 px-1 text-[7px] font-black uppercase tracking-wider text-[#f5efdc]/90 sm:text-[8px]">
+                  {l.name}
+                </span>
+              </div>
+            ))}
+
             {/* gold radar ellipse = the ground the circular radar sweeps (moves with the player);
                 a world-circle maps to an ellipse because this map stretches x and z differently */}
             <div
@@ -359,7 +391,7 @@ export default function BigMap({ minimapBuffer }: { minimapBuffer: React.RefObje
                 title="Waypoint — click the pin to clear it"
                 aria-label="Clear waypoint"
                 className="pointer-events-auto absolute -translate-x-1/2 -translate-y-[92%] text-[#f2c14e] drop-shadow-[1px_1px_0_rgba(28,26,23,0.65)] transition-transform hover:scale-110"
-                style={{ left: `${Math.max(2, Math.min(98, ((waypoint.x + 48) / 96) * 100))}%`, top: `${Math.max(2, Math.min(98, yFor(waypoint.z)))}%` }}
+                style={{ left: `${Math.max(2, Math.min(98, ((waypoint.x - WB.minX) / WSPAN) * 100))}%`, top: `${Math.max(2, Math.min(98, yFor(waypoint.z)))}%` }}
               >
                 <MapPin className="h-5 w-5 fill-[#f2c14e] text-[#1c1a17]" />
               </button>

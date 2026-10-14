@@ -103,7 +103,9 @@ function clearPath(ax: number, az: number, bx: number, bz: number): boolean {
 function buildNavGraph(): NavNode[] {
   const nodes: NavNode[] = []
   const index = new Map<string, number>()
-  for (let x = -45; x <= 45; x += NAV_GRID) {
+  // round 19: the city widened to x ±120 — bots now roam the cross streets and
+  // side mohalla blocks too (alley cells stay blocked; streets are all linked)
+  for (let x = -115; x <= 115; x += NAV_GRID) {
     for (let z = NAV_Z_MAX; z <= 6; z += NAV_GRID) {
       if (pointBlocked(x, z, NAV_PAD)) continue
       index.set(`${x}|${z}`, nodes.length)
@@ -811,7 +813,7 @@ export class Season {
       windowIds,
       near: nearCache,
       mid: midCache,
-      humans: humans.map(playerNet), // humans: always full detail in every payload
+      humans: humans.map((p) => playerNet(p)), // humans: always full detail in every payload
     }
     let entriesSent = 0
     for (const h of humans) {
