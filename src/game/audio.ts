@@ -3,8 +3,8 @@
 'use client'
 
 export type SfxName =
-  | 'footstep' | 'footstepRun' | 'jump' | 'land' | 'slide' | 'whistle' | 'whistleFar'
-  | 'pickup' | 'token' | 'throw' | 'impact' | 'hit' | 'capture' | 'release'
+  | 'footstep' | 'footstepRun' | 'jump' | 'doublejump' | 'land' | 'slide' | 'whistle' | 'whistleFar'
+  | 'pickup' | 'token' | 'throw' | 'impact' | 'hit' | 'policehit' | 'vault' | 'capture' | 'release'
   | 'heal' | 'revive' | 'checkpoint' | 'uiClick' | 'uiHover' | 'bossHit' | 'stampSlam'
   | 'shockwave' | 'paperRustle' | 'dizzy' | 'victory' | 'defeat' | 'cash' | 'horn' | 'moo' | 'gate'
   | 'thunder'
@@ -100,6 +100,30 @@ class AudioManagerImpl {
       case 'footstep': this.noise(0.08, t, 0.12 * v, 500 + Math.random() * 300, 0.8); break
       case 'footstepRun': this.noise(0.09, t, 0.2 * v, 600 + Math.random() * 400, 0.8); this.osc('triangle', 90, t, 0.05, 0.06 * v); break
       case 'jump': this.osc('sine', 260, t, 0.18, 0.16 * v, 480); break
+      case 'doublejump': {
+        // distinctive whoosh-flap: layered filtered-noise sweeps + quick flutter blips
+        this.noise(0.28, t, 0.14 * v, 900, 0.6)
+        this.noise(0.22, t + 0.05, 0.1 * v, 2000, 0.7)
+        this.osc('sine', 340, t, 0.26, 0.1 * v, 820)
+        this.osc('triangle', 520, t + 0.02, 0.09, 0.06 * v, 700)
+        this.osc('triangle', 660, t + 0.11, 0.09, 0.05 * v, 880)
+        break
+      }
+      case 'vault': {
+        // soft rise-and-thud mantle: airy swish landing on a low wooden knock
+        this.noise(0.16, t, 0.07 * v, 700, 0.5)
+        this.osc('sine', 150, t + 0.08, 0.12, 0.09 * v, 90)
+        this.noise(0.06, t + 0.09, 0.05 * v, 320, 0.8)
+        break
+      }
+      case 'policehit': {
+        // comic, non-graphic thwack — cartoon bonk + quick slide-whistle wobble
+        this.noise(0.09, t, 0.22 * v, 1000, 0.9)
+        this.osc('sine', 300, t, 0.16, 0.18 * v, 110)
+        this.osc('triangle', 190, t + 0.015, 0.14, 0.1 * v, 90)
+        this.osc('sine', 620, t + 0.05, 0.22, 0.05 * v, 380)
+        break
+      }
       case 'land': this.noise(0.12, t, 0.25 * v, 300, 0.7); break
       case 'slide': this.noise(0.4, t, 0.16 * v, 900, 0.5); break
       case 'whistle': {

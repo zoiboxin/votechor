@@ -16,6 +16,10 @@ export const MOVE = {
   accel: 34,
   friction: 22,
   jumpVel: 7.4,
+  doubleJumpVel: 6.9,   // mid-air second jump impulse
+  maxAirJumps: 1,       // extra jumps per airborne sequence (double jump)
+  coyoteTime: 0.1,      // grace window after leaving a ledge (s)
+  jumpBuffer: 0.12,     // early-press buffering window (s)
   gravity: 21,
   slideBoost: 11.5,
   slideFriction: 6.5,
@@ -45,6 +49,18 @@ export const DETECT = {
   sameTargetCooldown: 8,
 }
 
+// ---------- Police melee combat (Phase 5) — shared by server FSM + client telegraphs ----------
+export const POLICE_ATTACK = {
+  windupSec: 0.55,          // visible telegraph before the strike lands (dodge window)
+  chaseAttackRange: 2.2,    // distance at which a chasing NPC begins a wind-up
+  strikeRange: 2.6,         // target must still be within this at strike moment
+  cooldownSec: 1.5,         // per-NPC delay between attacks
+  dmgByType: { police: 13, security: 11, guard: 16 } as Record<string, number>,
+  fallbackDmg: 13,          // unknown NPC types
+  weakenedHealth: 30,       // below this HP the capture hold time is halved
+  weakenedCaptureMul: 0.5,
+}
+
 // ---------- Items ----------
 export const ITEM_CONFIG: Record<ItemType, { name: string; icon: string; stack: number; desc: string }> = {
   bottle: { name: 'Plastic Bottle', icon: '🍾', stack: 5, desc: 'Throw to distract police (Q)' },
@@ -61,6 +77,7 @@ export const INVENTORY_MAX = 8
 
 // ---------- Damage ----------
 export const DAMAGE = {
+  policeHit: 13, // legacy reference value (POLICE_ATTACK.dmgByType is authoritative)
   vehicleHit: 35,
   stampHit: 30,
   paperworkHit: 10,

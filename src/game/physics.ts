@@ -6,6 +6,8 @@ export class PhysicsWorld {
   colliders: AABB[] = []
   private grid = new Map<string, AABB[]>()
   private cell = 12
+  /** Moving colliders (vehicles) — NOT in the static grid; linear-scanned each move. */
+  private dynamic: AABB[] = []
 
   setColliders(list: AABB[]) {
     this.colliders = list
@@ -20,6 +22,11 @@ export class PhysicsWorld {
         else this.grid.set(key, [c])
       }
     }
+  }
+
+  /** Replace the dynamic (moving) collider set — called at ~10Hz with vehicle AABBs. */
+  setDynamic(list: AABB[]) {
+    this.dynamic = list
   }
 
   nearby(x: number, z: number, pad = 1.5): AABB[] {
@@ -41,6 +48,11 @@ export class PhysicsWorld {
       if (x < c.minX - 0.42 || x > c.maxX + 0.42 || z < c.minZ - 0.42 || z > c.maxZ + 0.42) continue
       if (c.maxY <= maxY + 0.02 && c.maxY > h) h = c.maxY
     }
+    // dynamic colliders (vehicles) are standable too — small linear scan
+    for (const c of this.dynamic) {
+      if (x < c.minX - 0.42 || x > c.maxX + 0.42 || z < c.minZ - 0.42 || z > c.maxZ + 0.42) continue
+      if (c.maxY <= maxY + 0.02 && c.maxY > h) h = c.maxY
+    }
     return h
   }
 
@@ -52,8 +64,9 @@ export class PhysicsWorld {
   }
 
   /**
-   * Move actor with axis-separated collision + step-up.
-   * Returns collision flags.
+   * Move actor with axis-separated collision + step-up + sprint vault.
+   * Returns collision flags. `vaulted` is set when a sprinting, grounded actor
+   * mantled onto a low obstacle (top between stepHeight and 1.18m above the feet).
    */
   moveActor(
     pos: { x: number; y: number; z: number },
@@ -61,11 +74,12 @@ export class PhysicsWorld {
     dt: number,
     r: number,
     h: number,
-  ): { grounded: boolean; hitWall: boolean; groundY: number; landed: boolean } {
+  ): { grounded: boolean; hitWall: boolean; groundY: number; landed: boolean; vaulted: boolean } {
     let hitWall = false
+    let vaulted = false
     // --- horizontal X ---
     const nx = pos.x + vel.x * dt
-    for (const c of this.nearby(nx, pos.z)) {
+    for (const c of this.nearby(nx, pos.z).concat(this.dynamic)) {
       if (c.walkable) continue // walkable platforms are ground, not walls
       if (this.hits(nx, pos.y, pos.z, r, h, c)) {
         // step-up?
@@ -73,29 +87,32 @@ export class PhysicsWorld {
           const g = this.groundHeight(nx, pos.z, c.maxY + 0.5)
           if (g <= c.maxY + 0.01) { pos.y = g; continue }
         }
+        // sprint vault/mantle — extends the 0.62 step-up to 1.18m (walk speed untouched)
+        if (this.tryVault(pos, vel, r, h, c, 'x')) { vaulted = true; break }
         hitWall = true
         pos.x = vel.x > 0 ? Math.min(pos.x, c.minX - r - 0.001) : Math.max(pos.x, c.maxX + r + 0.001)
         break
       }
     }
-    if (!hitWall || Math.abs(pos.x - nx) > 1e-6) { if (!hitWall) pos.x = nx }
+    if (!hitWall && !vaulted) pos.x = nx
 
     // --- horizontal Z ---
     let hitWallZ = false
     const nz = pos.z + vel.z * dt
-    for (const c of this.nearby(pos.x, nz)) {
+    for (const c of this.nearby(pos.x, nz).concat(this.dynamic)) {
       if (c.walkable) continue
       if (this.hits(pos.x, pos.y, nz, r, h, c)) {
         if (c.maxY - pos.y <= 0.62 && c.maxY - pos.y > -0.01) {
           const g = this.groundHeight(pos.x, nz, c.maxY + 0.5)
           if (g <= c.maxY + 0.01) { pos.y = g; continue }
         }
+        if (this.tryVault(pos, vel, r, h, c, 'z')) { vaulted = true; break }
         hitWallZ = true
         pos.z = vel.z > 0 ? Math.min(pos.z, c.minZ - r - 0.001) : Math.max(pos.z, c.maxZ + r + 0.001)
         break
       }
     }
-    if (!hitWallZ) pos.z = nz
+    if (!hitWallZ && !vaulted) pos.z = nz
     if (hitWallZ) hitWall = true
 
     // --- vertical ---
@@ -111,7 +128,47 @@ export class PhysicsWorld {
     } else {
       grounded = pos.y - groundY < 0.06
     }
-    return { grounded, hitWall, groundY, landed }
+    return { grounded, hitWall, groundY, landed, vaulted }
+  }
+
+  /**
+   * Sprint vault/mantle: the actor was grounded, is moving into a blocked collider
+   * whose top sits 0.62–1.18m above the feet, and is sprinting (hSpeed > 6).
+   * Places the actor on the top surface (respecting ground beyond) and keeps
+   * forward momentum. Refuses when the landing spot has no headroom or a taller
+   * box sits behind the wall.
+   */
+  private tryVault(
+    pos: { x: number; y: number; z: number },
+    vel: { x: number; y: number; z: number },
+    r: number,
+    h: number,
+    c: AABB,
+    axis: 'x' | 'z',
+  ): boolean {
+    const rise = c.maxY - pos.y
+    if (!(rise > 0.62 && rise <= 1.18)) return false
+    if (Math.hypot(vel.x, vel.z) <= 6) return false // walk speed keeps the plain step-up only
+    // must be grounded (feet resting on a surface) — no air-mantles
+    if (this.groundHeight(pos.x, pos.z, pos.y + 0.35) < pos.y - 0.05) return false
+    const forward = axis === 'x' ? vel.x > 0 : vel.z > 0
+    // landing spot just past the collider face
+    const landX = axis === 'x' ? (forward ? c.maxX + r + 0.02 : c.minX - r - 0.02) : pos.x
+    const landZ = axis === 'z' ? (forward ? c.maxZ + r + 0.02 : c.minZ - r - 0.02) : pos.z
+    // headroom probe: no solid box may intersect the body standing on the top
+    for (const o of this.nearby(landX, landZ, r + 0.4).concat(this.dynamic)) {
+      if (o === c || o.walkable) continue
+      if (this.hits(landX, c.maxY + 0.02, landZ, r, h, o)) return false
+    }
+    // the top must be standable — refuse walls with a taller box directly behind
+    const top = this.groundHeight(landX, landZ, c.maxY + 0.5)
+    if (top > c.maxY + 0.02) return false
+    // mantle: place feet on the top surface, keep small forward velocity
+    if (axis === 'x') pos.x = landX
+    else pos.z = landZ
+    pos.y = top
+    vel.y = Math.max(vel.y, 0)
+    return true
   }
 
   /** Line of sight between two points (for camera clip + detection preview) */

@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor, CloudSun, Gauge } from 'lucide-react'
+import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor, CloudSun, Gauge, Accessibility } from 'lucide-react'
 
 const KEYBIND_LABELS: Record<string, string> = {
   forward: 'Move Forward', back: 'Move Back', left: 'Move Left', right: 'Move Right',
@@ -36,6 +36,8 @@ const DEFAULTS: Settings = {
   timeMode: 'cycle',
   weatherMode: 'auto',
   perfHud: true,
+  minimapRotate: true,
+  reducedShake: false,
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 
@@ -250,6 +252,20 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
                   <SelectItem value="fog" className="font-bold">Lohri Fog</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+        </section>
+
+        {/* Accessibility (reduced camera shake) */}
+        <section>
+          <SectionTitle icon={Accessibility}>Accessibility</SectionTitle>
+          <div className="space-y-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Reduced Camera Shake</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Dampens hit, explosion &amp; detention shake</div>
+              </div>
+              <Switch checked={settings.reducedShake ?? false} onCheckedChange={(v) => update({ reducedShake: v })} />
             </div>
           </div>
         </section>

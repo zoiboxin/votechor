@@ -25,8 +25,9 @@ import {
   archetypeById, XP_TABLE, levelFromXp, CAPTURE_MESSAGES, RANDOM_NOTIFICATIONS, BOSS_NAME,
   BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES,
 } from './shared/constants'
-import type { AnimName, BossNetState, ItemType } from './shared/types'
-import { useGameStore, registerUIActions, minimapWindow, type MatchSummary } from '@/lib/game-store'
+import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
+import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
+import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG } from '@/lib/cosmetics'
 
 export const QUICK_MESSAGES = [
@@ -138,6 +139,15 @@ export class Game {
   private serverNpcRys: Record<string, number> = {}
   private lastTokenPos = { x: 0, z: 0 }
   private humorTimer = 30
+  // ---- police melee telegraphs (Phase 5 client feel) ----
+  private pendingPoliceStrike: { npcId: string; attackAt: number } | null = null
+  private lastPoliceDamageAt = 0
+  private windupUntil = new Map<string, number>()
+  private staggerUntil = new Map<string, number>()
+  // engine-level damage vignette (DOM overlay owned here, Hud.tsx untouched)
+  private dmgFlashEl: HTMLDivElement | null = null
+  private dmgFlashTimer: ReturnType<typeof setTimeout> | null = null
+  private lastDynSync = 0
   private minimapCanvas: HTMLCanvasElement | null = null
   private hudMinimapCanvas: HTMLCanvasElement | null = null
   private matchEnded = false
@@ -203,7 +213,11 @@ export class Game {
     this.net.ev = {
       onJoinAck: (ack) => this.onJoinAck(ack),
       onPlayers: (players) => this.onServerPlayers(players),
-      onNpcs: (npcs) => { this.npcs.applyServerState(npcs); for (const n of npcs) this.serverNpcRys[n.id] = n.ry },
+      onNpcs: (npcs) => {
+        this.npcs.applyServerState(npcs)
+        for (const n of npcs) this.serverNpcRys[n.id] = n.ry
+        this.observePoliceTelegraphs(npcs)
+      },
       onItems: (items) => this.items.applyServerState(items, this.worldTime),
       onBoss: (boss, ballots) => this.onServerBoss(boss, ballots),
       onCapture: (playerId, until, message) => this.onCapture(playerId, until, message),
@@ -498,6 +512,14 @@ export class Game {
     this.player.onFootstep = (running) => AudioManager.play(running ? 'footstepRun' : 'footstep')
     this.player.onLand = (hard) => AudioManager.play(hard ? 'land' : 'footstep')
     this.player.onJump = () => AudioManager.play('jump')
+    this.player.onDoubleJump = () => {
+      AudioManager.play('doublejump')
+      const p = this.player!
+      this.fx.burst(p.pos.x, p.pos.y + 0.25, p.pos.z, '#f2c14e', 14, 3.6, 0.5)
+      this.fx.burst(p.pos.x, p.pos.y + 0.15, p.pos.z, '#ffffff', 8, 2.4, 0.4)
+      p.rig.flip() // quick procedural front-flip flourish
+    }
+    this.player.onVault = () => AudioManager.play('vault')
     this.player.onSlide = () => AudioManager.play('slide')
     this.player.onDazed = () => { AudioManager.play('hit'); this.store.notify(randomOf(RANDOM_NOTIFICATIONS), 'warning') }
     this.engine.scene.add(this.player.rig.group)
@@ -792,7 +814,7 @@ export class Game {
       this.detainUntil = until
       this.store.notify(message || randomOf(CAPTURE_MESSAGES), 'capture')
       AudioManager.play('capture')
-      this.camRig.addShake(0.7)
+      this.addShake(0.7)
     } else {
       const r = this.remotePlayers.get(playerId)
       if (r) r.detained = true
@@ -1232,7 +1254,7 @@ export class Game {
     }
     this.player.knockback(x, z, kind === 'cow' ? 4 : 9)
     AudioManager.play(kind === 'cow' ? 'moo' : 'horn')
-    this.camRig.addShake(kind === 'cow' ? 0.3 : 0.8)
+    this.addShake(kind === 'cow' ? 0.3 : 0.8)
     this.applyDamage(0, kind) // trigger HUD update
   }
 
@@ -1240,10 +1262,134 @@ export class Game {
     if (!this.player) return
     if (amount > 0) {
       this.player.damage(amount, kind)
-      AudioManager.play('hit')
-      this.camRig.addShake(Math.min(0.8, amount / 40))
+      if (kind === 'police') {
+        // police baton (Phase 5 feel) — comic thwack + red vignette + stagger + knockback
+        this.lastPoliceDamageAt = Date.now()
+        this.applyPoliceHitFeel(amount)
+      } else {
+        AudioManager.play('hit')
+        this.addShake(Math.min(0.8, amount / 40))
+      }
     }
     this.syncHud()
+  }
+
+  /** Camera shake — gated by the accessibility setting (Settings.reducedShake). */
+  private addShake(v: number) {
+    if (useGameStore.getState().settings.reducedShake) return
+    this.camRig.addShake(v)
+  }
+
+  /**
+   * Full police-baton hit feel on the local player. Fires exactly once per
+   * confirmed `game:damage` kind 'police' event (server-authoritative).
+   */
+  private applyPoliceHitFeel(amount: number) {
+    const p = this.player!
+    // knock away from the attacker (nearest chasing/wind-up npc targeting me)
+    let ax: number | null = null
+    let az: number | null = null
+    let bestD = 7
+    for (const v of this.npcs.visuals) {
+      const st = v.brain.state
+      if (st !== 'chase' && st !== 'capture' && !this.windupUntil.has(v.brain.id)) continue
+      const d = Math.hypot(v.brain.x - p.pos.x, v.brain.z - p.pos.z)
+      if (d < bestD) { bestD = d; ax = v.brain.x; az = v.brain.z }
+    }
+    if (ax !== null && az !== null) p.knockback(ax, az, 7)
+    // brief stagger — animOverride only, player state stays 'normal'
+    p.playAnim('dazed', 0.35)
+    AudioManager.play('policehit')
+    this.addShake(0.55)
+    this.showDamageFlash()
+    this.fx.popup(`-${amount}`, '#ff3b30', p.pos.x, 2.1, p.pos.z)
+    this.fx.burst(p.pos.x, p.pos.y + 1.1, p.pos.z, '#ff9f1c', 8, 2.6, 0.35)
+  }
+
+  /** Engine-owned full-screen red vignette flash (no Hud.tsx changes needed). */
+  private showDamageFlash() {
+    const canvas = this.canvasEl
+    if (!canvas) return
+    if (!this.dmgFlashEl) {
+      const el = document.createElement('div')
+      el.setAttribute('data-vc-dmg-flash', '')
+      el.style.cssText =
+        'position:absolute;inset:0;pointer-events:none;z-index:40;opacity:0;' +
+        'transition:opacity 0.38s ease-out;' +
+        'background:radial-gradient(ellipse at center, rgba(140,31,40,0) 42%, rgba(140,31,40,0.62) 100%)'
+      const parent = canvas.parentElement
+      if (!parent) return
+      if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative'
+      parent.appendChild(el)
+      this.dmgFlashEl = el
+    }
+    const el = this.dmgFlashEl
+    el.style.transition = 'opacity 0.05s linear'
+    el.style.opacity = '1'
+    if (this.dmgFlashTimer) clearTimeout(this.dmgFlashTimer)
+    this.dmgFlashTimer = setTimeout(() => {
+      if (!this.dmgFlashEl) return
+      this.dmgFlashEl.style.transition = 'opacity 0.38s ease-out'
+      this.dmgFlashEl.style.opacity = '0'
+    }, 90)
+  }
+
+  /** Push current vehicle AABBs into the physics world (solid buses/autos/cows). */
+  private syncDynamicColliders() {
+    // VehicleSystem.getSolidAABBs() is added by the vehicles workstream this round —
+    // consume defensively so an older build simply passes an empty list.
+    const vs = this.vehicles as VehicleSystem & { getSolidAABBs?: () => AABB[] }
+    const boxes = vs.getSolidAABBs?.() ?? []
+    this.physics.setDynamic(boxes)
+  }
+
+  /** Track server police wind-up/stagger views + the pending strike at this player. */
+  private observePoliceTelegraphs(npcs: import('./shared/types').NpcNetState[]) {
+    const now = Date.now()
+    this.pendingPoliceStrike = null
+    for (const n of npcs) {
+      if (n.anim === 'windup' && typeof n.attackAt === 'number') {
+        this.windupUntil.set(n.id, n.attackAt + 150) // hold the pose briefly past the strike
+        if (n.target === this.net.playerId) {
+          this.pendingPoliceStrike = { npcId: n.id, attackAt: n.attackAt }
+        }
+      } else if (n.anim === 'stagger') {
+        this.staggerUntil.set(n.id, now + 500)
+      }
+    }
+  }
+
+  /**
+   * Per-frame police telegraph polish:
+   *  - rigs mid-wind-up hold the lathi 'throw' pose until the strike lands;
+   *  - 'stagger' rigs read dazed for half a second;
+   *  - the pending strike on the local player is confirmed when attackAt crosses
+   *    AND a kind 'police' game:damage arrived within ±400ms (the damage event
+   *    itself drives the full hit feel — this only validates/clears the window).
+   */
+  private updatePoliceTelegraphs() {
+    const now = Date.now()
+    for (const v of this.npcs.visuals) {
+      const id = v.brain.id
+      const wu = this.windupUntil.get(id)
+      if (wu !== undefined && wu > now) { v.rig.forceAnim = 'throw'; continue }
+      const su = this.staggerUntil.get(id)
+      if (su !== undefined && su > now) { v.rig.forceAnim = 'dazed'; continue }
+      if (wu !== undefined || su !== undefined) v.rig.forceAnim = null
+    }
+    if (this.windupUntil.size > 12) for (const [id, at] of this.windupUntil) if (at < now - 1000) this.windupUntil.delete(id)
+    if (this.staggerUntil.size > 12) for (const [id, at] of this.staggerUntil) if (at < now - 1000) this.staggerUntil.delete(id)
+
+    const ps = this.pendingPoliceStrike
+    if (!ps) return
+    if (now >= ps.attackAt - 150 && now <= ps.attackAt + 400) {
+      // strike moment — confirmed only if the authoritative damage event arrived
+      const confirmed = this.lastPoliceDamageAt >= ps.attackAt - 400 && this.lastPoliceDamageAt <= ps.attackAt + 400
+      if (confirmed) this.pendingPoliceStrike = null // feel already fired via game:damage
+    } else if (now > ps.attackAt + 400) {
+      // dodged, packet loss, or the strike landed on someone else — no FX
+      this.pendingPoliceStrike = null
+    }
   }
 
   // ================= core loops =================
@@ -1321,6 +1467,14 @@ export class Game {
     const vehicleTime = this.offline || !this.serverMatchStart ? this.matchTime : (Date.now() - this.serverMatchStart) / 1000
     this.vehicles.update(vehicleTime, dt, this.player.pos, true)
 
+    // solid vehicles: feed their current AABBs to physics at ~10Hz so players
+    // cannot walk through buses/autos (defensive optional chain — if the vehicle
+    // system has not exposed getSolidAABBs yet, this is a no-op)
+    if (this.worldTime - this.lastDynSync >= 0.1) {
+      this.lastDynSync = this.worldTime
+      this.syncDynamicColliders()
+    }
+
     // offline boss tick
     if (this.offline && this.localBoss) {
       this.localBossAccum += dt
@@ -1331,7 +1485,7 @@ export class Game {
         const pv: import('./shared/boss-brain').BossPlayerView = { id: 'me', x: this.player.pos.x, z: this.player.pos.z, detained: this.player.isDetained, dazed: this.player.isDazed }
         const ev = tickBoss(this.localBoss, [pv], step, Date.now())
         for (const d of ev.damage) this.applyDamage(d.amount, d.kind)
-        if (ev.speechShock) { AudioManager.play('shockwave'); this.camRig.addShake(0.6) }
+        if (ev.speechShock) { AudioManager.play('shockwave'); this.addShake(0.6) }
         if (ev.phaseDone >= 1) {
           AudioManager.play('checkpoint')
           if (ev.defeated) { this.doVictory() }
@@ -1568,6 +1722,7 @@ export class Game {
     if (playing) {
       this.player.render(dt)
       this.npcs.update(dt, 1, this.worldTime, this.player.pos.x, this.player.pos.z)
+      this.updatePoliceTelegraphs()
       this.items.update(dt, this.worldTime, this.worldTime)
     } else {
       this.npcs.update(dt, 1, this.worldTime)
@@ -1858,108 +2013,71 @@ export class Game {
   }
 
   /**
-   * Corner minimap: a zoomed, player-following window (settings.minimapZoom meters tall)
-   * so you can actually see yourself, patrols and nearby loot. Drawn straight into the
-   * HUD's visible canvas every frame. The full-city buffer above is only for the big map.
+   * Corner minimap — GTA-style circular radar (rotation, routes, waypoint pin).
+   * Rendering + caching live in minimap.ts (drawCircularMinimap + A* computeRoute);
+   * this is a thin data adapter that feeds the same sources the old strip renderer
+   * used (zones/colliders from world-def, checkpoints, boss arena, tokens, chasing
+   * patrols, squadmates + nearby protesters). The full-city buffer above stays the
+   * big map's data source. Kept on the 60Hz renderUpdate cadence — the static world
+   * layer is prerendered in minimap.ts, so a frame is one blit + a few dozen dots.
    */
   private drawHudMinimap() {
     const canvas = this.hudMinimapCanvas
     if (!canvas || !this.player) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const W = canvas.width, H = canvas.height
-    ctx.clearRect(0, 0, W, H)
-    const win = minimapWindow(this.player.pos.x, this.player.pos.z, this.store.settings.minimapZoom)
-    const toX = (x: number) => ((x - (win.cx - win.spanX / 2)) / win.spanX) * W
-    const toY = (z: number) => (((win.cz + win.spanZ / 2) - z) / win.spanZ) * H
-    const inWin = (x: number, z: number, pad = 8) => {
-      const px = toX(x), py = toY(z)
-      return px > -pad && px < W + pad && py > -pad && py < H + pad
+    const st = this.store
+    const hud = st.hud
+    const p = this.player
+    // auto-route objective: boss gate once the votes are in, else the next checkpoint
+    const nextCp = this.world.checkpoints.find(cp => !this.activatedCheckpoints.has(cp.id))
+    const objective = (this.gateOpen || this.tokens >= this.tokensNeeded)
+      ? { x: this.world.bossArena.x, z: this.world.bossArena.z, label: 'BOSS' }
+      : nextCp
+        ? { x: nextCp.x, z: nextCp.z, label: 'CHECKPOINT' }
+        : null
+    // detained → route to the release point. Release coords are not stored in the
+    // hud store, but the client computes the exact same deterministic detention
+    // point the offline countdown releases at (world-def checkpoint.detention);
+    // the server releases at the same shared-world coords.
+    let releaseTarget: { x: number; z: number } | null = null
+    if (p.isDetained) {
+      const cp = this.activatedCheckpoints.size > 0
+        ? this.world.checkpoints[Math.min(this.activatedCheckpoints.size, this.world.checkpoints.length) - 1]
+        : this.world.checkpoints[0]
+      if (cp) releaseTarget = { x: cp.detention.x, z: cp.detention.z }
     }
-    // outside-world shade
-    ctx.fillStyle = 'rgba(28,26,23,0.6)'
-    ctx.fillRect(0, 0, W, H)
-    // zones
-    const zoneColors = ['rgba(201,111,74,0.4)', 'rgba(184,92,62,0.4)', 'rgba(127,154,140,0.4)', 'rgba(201,168,106,0.4)', 'rgba(154,123,95,0.45)']
-    this.world.zones.forEach((z, i) => {
-      ctx.fillStyle = zoneColors[i]
-      ctx.fillRect(0, toY(z.zStart), W, toY(z.zEnd) - toY(z.zStart))
+    // squadmates bright, nearby protesters/bots dim (capped — seasons hold 100)
+    const squadIds = this.squad.memberIds
+    const remotes: MinimapRemote[] = []
+    for (const [id, r] of this.remotePlayers) {
+      const dx = r.target.x - p.pos.x
+      const dz = r.target.z - p.pos.z
+      if (dx * dx + dz * dz > 70 * 70) continue
+      remotes.push({ x: r.target.x, z: r.target.z, squad: squadIds.has(id) })
+      if (remotes.length >= 48) break
+    }
+    drawCircularMinimap(ctx, {
+      px: p.pos.x,
+      pz: p.pos.z,
+      ry: p.ry,
+      zoomM: st.settings.minimapZoom,
+      rotate: st.settings.minimapRotate,
+      waypoint: hud.waypoint,
+      objective,
+      detained: hud.detained,
+      releaseTarget,
+      checkpoints: this.world.checkpoints,
+      activatedIds: this.activatedCheckpoints,
+      boss: this.world.bossArena,
+      gateOpen: this.gateOpen,
+      tokens: this.items.tokenData(),
+      npcs: this.npcs.minimapData(),
+      remotes,
+      seeDist: this.archetype === 'journalist' ? 70 : 42,
+      colliders: this.world.colliders,
+      zones: this.world.zones,
     })
-    // road
-    ctx.fillStyle = 'rgba(60,58,54,0.85)'
-    ctx.fillRect(toX(-8), 0, Math.max(3, toX(8) - toX(-8)), H)
-    // world side edges (visible when zoomed into a side lane)
-    ctx.strokeStyle = 'rgba(245,239,220,0.35)'
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.moveTo(toX(-48), 0); ctx.lineTo(toX(-48), H)
-    ctx.moveTo(toX(48), 0); ctx.lineTo(toX(48), H)
-    ctx.stroke()
-    // checkpoints
-    for (const cp of this.world.checkpoints) {
-      if (!inWin(cp.x, cp.z)) continue
-      ctx.fillStyle = this.activatedCheckpoints.has(cp.id) ? '#4e9b6e' : '#c9482e'
-      ctx.beginPath(); ctx.arc(toX(cp.x), toY(cp.z), 4.2, 0, 7); ctx.fill()
-      ctx.strokeStyle = 'rgba(28,26,23,0.8)'; ctx.lineWidth = 1.2; ctx.stroke()
-    }
-    // boss arena
-    if (inWin(this.world.bossArena.x, this.world.bossArena.z)) {
-      ctx.fillStyle = this.gateOpen ? '#8c1f28' : 'rgba(140,31,40,0.45)'
-      ctx.beginPath(); ctx.arc(toX(this.world.bossArena.x), toY(this.world.bossArena.z), 6, 0, 7); ctx.fill()
-    }
-    // tokens
-    for (const t of this.items.tokenData()) {
-      if (t.taken || !inWin(t.x, t.z)) continue
-      ctx.fillStyle = '#f2c14e'
-      ctx.fillRect(toX(t.x) - 2, toY(t.z) - 2, 4, 4)
-      ctx.strokeStyle = 'rgba(28,26,23,0.7)'; ctx.lineWidth = 1
-      ctx.strokeRect(toX(t.x) - 2, toY(t.z) - 2, 4, 4)
-    }
-    // npcs (journalist sees far, others ~42m)
-    const seeDist = this.archetype === 'journalist' ? 70 : 42
-    for (const n of this.npcs.minimapData()) {
-      if (Math.hypot(n.x - this.player.pos.x, n.z - this.player.pos.z) > seeDist) continue
-      if (!inWin(n.x, n.z)) continue
-      ctx.fillStyle = n.chasing ? '#ff3b30' : '#3a6ea5'
-      ctx.beginPath(); ctx.arc(toX(n.x), toY(n.z), 3, 0, 7); ctx.fill()
-      if (n.chasing) { // chasing patrols pulse a warning ring
-        ctx.strokeStyle = 'rgba(255,59,48,0.6)'; ctx.lineWidth = 1.5
-        ctx.beginPath(); ctx.arc(toX(n.x), toY(n.z), 5.5, 0, 7); ctx.stroke()
-      }
-    }
-    // squadmates
-    for (const [, r] of this.remotePlayers) {
-      if (!inWin(r.target.x, r.target.z)) continue
-      ctx.fillStyle = '#4ecdc4'
-      ctx.beginPath(); ctx.arc(toX(r.target.x), toY(r.target.z), 3.4, 0, 7); ctx.fill()
-      ctx.strokeStyle = 'rgba(28,26,23,0.7)'; ctx.lineWidth = 1; ctx.stroke()
-    }
-    // player: soft pulse ring + bigger arrow (this map is about YOU)
-    const px = toX(this.player.pos.x), py = toY(this.player.pos.z)
-    ctx.strokeStyle = 'rgba(255,255,255,0.45)'
-    ctx.lineWidth = 1.6
-    ctx.beginPath(); ctx.arc(px, py, 7.5, 0, 7); ctx.stroke()
-    ctx.save()
-    ctx.translate(px, py)
-    ctx.rotate(-this.player.ry + Math.PI)
-    ctx.fillStyle = '#ffffff'
-    ctx.strokeStyle = '#1c1a17'
-    ctx.lineWidth = 1.4
-    ctx.beginPath()
-    ctx.moveTo(0, -7); ctx.lineTo(5, 5.5); ctx.lineTo(0, 2.8); ctx.lineTo(-5, 5.5)
-    ctx.closePath(); ctx.fill(); ctx.stroke()
-    ctx.restore()
-    // north tick (window no longer covers the whole city, so orient the walker)
-    ctx.fillStyle = 'rgba(245,239,220,0.85)'
-    ctx.font = 'bold 10px sans-serif'
-    ctx.textAlign = 'center'
-    ctx.fillText('▲ N', W / 2, 12)
-    // zoom readout
-    ctx.font = 'bold 9px sans-serif'
-    ctx.textAlign = 'right'
-    ctx.fillStyle = 'rgba(245,239,220,0.55)'
-    const zm = Math.round(win.spanZ)
-    ctx.fillText(zm >= 580 ? 'FULL CITY' : `${zm}m`, W - 4, H - 5)
   }
 
   // ================= match end =================
@@ -2222,6 +2340,10 @@ export class Game {
     this.crowd = null
     this.input?.dispose()
     this.engine?.dispose()
+    if (this.dmgFlashTimer) clearTimeout(this.dmgFlashTimer)
+    this.dmgFlashTimer = null
+    this.dmgFlashEl?.remove()
+    this.dmgFlashEl = null
   }
 }
 

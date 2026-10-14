@@ -59,6 +59,11 @@ export class CharacterRig {
   private lathi: THREE.Group | null = null
   private phase = Math.random() * 10
   anim: AnimName = 'idle'
+  /** External pose override (e.g. police wind-up telegraph) — wins over the anim arg. */
+  forceAnim: AnimName | null = null
+  /** Double-jump flourish: remaining seconds of a procedural front-flip (0 = off). */
+  private flipTimer = 0
+  private flipDur = 0.45
   speedRatio = 0
   private nameSprite: THREE.Sprite | null = null
   private alertIndicator: THREE.Sprite | null = null
@@ -304,6 +309,11 @@ export class CharacterRig {
   }
 
   setAlert(v: boolean) { if (this.alertIndicator) this.alertIndicator.visible = v }
+
+  /** Procedural double-jump flourish — a quick front-flip of the torso (no assets). */
+  flip() {
+    this.flipTimer = this.flipDur
+  }
   setNameVisible(v: boolean) { if (this.nameSprite) this.nameSprite.visible = v }
   /** Rebuild the name sprite with a new color (squadmates get green tags). */
   setNameColor(name: string, color: string) {
@@ -321,6 +331,7 @@ export class CharacterRig {
 
   update(dt: number, anim: AnimName, moveSpeed: number) {
     this.anim = anim
+    if (this.forceAnim) anim = this.forceAnim
     this.speedRatio = Math.min(1, moveSpeed / 9)
     const p = (this.phase += dt * (anim === 'run' ? 11 : anim === 'walk' ? 7.2 : 1.6))
     const s = Math.sin(p), c = Math.cos(p)
@@ -348,6 +359,13 @@ export class CharacterRig {
         this.torsoPivot.rotation.x += (0.1 - this.torsoPivot.rotation.x) * Math.min(1, dt * 8)
         set(this.legL, -0.5); set(this.legR, 0.25)
         set(this.armL, -2.6); set(this.armR, -2.6)
+        // double-jump front-flip flourish (procedural, rides on top of the jump pose)
+        if (this.flipTimer > 0) {
+          this.flipTimer = Math.max(0, this.flipTimer - dt)
+          const t = 1 - this.flipTimer / this.flipDur
+          const eased = t < 0.7 ? (t / 0.7) * (Math.PI * 2) : Math.PI * 2 // flip then hold
+          this.torsoPivot.rotation.x = eased
+        }
         break
       }
       case 'slide': {

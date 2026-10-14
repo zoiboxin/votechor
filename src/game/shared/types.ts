@@ -119,6 +119,8 @@ export interface NpcNetState {
   state: NpcStateName
   alert: number // 0..1
   target?: string // player id being chased
+  anim?: 'idle' | 'walk' | 'run' | 'windup' | 'stagger' // police melee telegraph/render state
+  attackAt?: number // server Date.now() the pending strike lands (client syncs impact FX)
 }
 
 export interface ItemNetState { id: string; taken: boolean; takenBy?: string; respawnAt?: number }

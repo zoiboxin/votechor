@@ -7,8 +7,8 @@ import { BOSS_NAME, BOSS_PHASE_NAMES } from '@/game/shared/constants'
 const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['W', 'A', 'S', 'D'], action: 'Move' },
   { keys: ['MOUSE'], action: 'Camera' },
-  { keys: ['SPACE'], action: 'Jump', note: 'Barricades are just Suggestions With Height' },
-  { keys: ['SHIFT'], action: 'Sprint', note: 'Stamina drains. Chai fixes it.' },
+  { keys: ['SPACE'], action: 'Jump', note: 'Double-tap = Double Jump · press early before landing to buffer it' },
+  { keys: ['SHIFT'], action: 'Sprint', note: 'Stamina drains. Chai fixes it. Sprint into low props to vault them.' },
   { keys: ['C'], action: 'Slide', note: 'Slide under searchlights. Very cinematic.' },
   { keys: ['E'], action: 'Interact / Rescue', note: 'Checkpoints, ballots, bailing out friends' },
   { keys: ['Q'], action: 'Throw Item', note: 'Bottles distract patrols. The bottle is fine.' },
@@ -110,6 +110,7 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
           </div>
           <ul className="space-y-1 text-[10px] font-semibold leading-snug text-[#1c1a17]/80">
             <li>• Police look where they walk. Break line of sight behind buildings, then breathe.</li>
+            <li>• Police batons hurt — when an officer raises his lathi (the wind-up), dodge sideways! A double jump works too.</li>
             <li>• Searchlights rotate. Watch the rhythm like cricket. Or traffic.</li>
             <li>• Red dots on the minimap are chasing you. Blue dots are merely disappointed in you.</li>
             <li>• The cow on Grand Avenue is not a bug. Give it the respect it demands.</li>

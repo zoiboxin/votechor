@@ -59,6 +59,14 @@ export interface HudState {
   env: EnvHud
   /** live performance readout for the optional HUD chip (patched at 1Hz, only on change) */
   perf: PerfHud
+  /** user-set map marker — circular minimap draws it + route; null clears */
+  waypoint: Waypoint | null
+}
+
+export interface Waypoint {
+  x: number
+  z: number
+  label: string
 }
 
 export interface EnvHud {
@@ -112,6 +120,10 @@ export interface Settings {
   weatherMode: 'auto' | 'clear' | 'cloudy' | 'overcast' | 'rain' | 'storm' | 'fog'
   /** live perf chip (FPS · net · crowd · rigs · render res) on the HUD */
   perfHud: boolean
+  /** GTA-style circular minimap rotates with player heading (false = north-up) */
+  minimapRotate: boolean
+  /** accessibility — dampens camera shake on hits/explosions */
+  reducedShake: boolean
 }
 
 // ---- minimap zoom window helpers (shared by the engine renderer + BigMap settings UI) ----
@@ -309,6 +321,7 @@ const defaultHud: HudState = {
   mapX: 0, mapZ: 0,
   env: { time: '10:30', phase: 'Morning', weather: 'Clear Skies', icon: 'sun', wIcon: 'clear', flashAt: 0 },
   perf: { fps: 60, kbps: 0, crowd: 0, rigs: 0, res: 1 },
+  waypoint: null,
 }
 
 const defaultBoss: BossHud = {
@@ -324,6 +337,8 @@ const defaultSettings: Settings = {
   timeMode: 'cycle',
   weatherMode: 'auto',
   perfHud: true,
+  minimapRotate: true,
+  reducedShake: false,
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 

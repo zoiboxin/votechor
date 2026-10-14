@@ -67,7 +67,7 @@ const io = new Server(httpServer, {
 
 const rooms = new Map<string, Room>()
 const privateRooms = new Map<string, Room>() // code -> room
-const seasonManager = new SeasonManager(io, rooms)
+const seasonManager = new SeasonManager(io, rooms, attachSquadProvider)
 let pubCounter = 0
 
 function totalPlayers(): number {
@@ -79,9 +79,30 @@ function totalPlayers(): number {
 
 function createRoom(id: string, code: string, isPublic: boolean): Room {
   const room = new Room(io, id, code, isPublic)
+  attachSquadProvider(room)
   rooms.set(id, room)
   if (!isPublic && code) privateRooms.set(code, room)
   return room
+}
+
+/**
+ * Give a room access to squad-cell knowledge for Phase 6 release points (the squad
+ * maps live in this module — rooms only get a read-only position hook). Applies to
+ * every room created here AND to season rooms via the SeasonManager decorate hook.
+ */
+function attachSquadProvider(room: Room) {
+  room.squadmatePositions = (playerId: string) => {
+    const membership = socketSquad.get(playerId)
+    const squad = membership ? roomSquads.get(membership.roomId)?.get(membership.code) : undefined
+    if (!squad) return []
+    const out: Array<{ x: number; z: number }> = []
+    for (const id of squad.members) {
+      if (id === playerId) continue
+      const m = room.getPlayer(id)
+      if (m && !m.detained) out.push({ x: m.x, z: m.z }) // squad members are always socket-backed humans
+    }
+    return out
+  }
 }
 
 function findPublicRoom(): Room {

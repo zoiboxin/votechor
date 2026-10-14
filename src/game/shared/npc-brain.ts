@@ -1,6 +1,6 @@
 // VoteChor NPC AI brain — pure deterministic FSM logic (no three.js/DOM).
 // Ticked server-side at NPC_TICK_HZ; clients interpolate rendered transforms.
-import { DETECT } from './constants'
+import { DETECT, POLICE_ATTACK } from './constants'
 import type { AABB, NpcStateName, NpcType } from './types'
 
 export interface NpcBrainState {
@@ -21,6 +21,9 @@ export interface NpcBrainState {
   investigateTimer: number
   captureProgress: number
   speedMul: number
+  attackTelegraphUntil: number // epoch ms — pending melee wind-up strike lands at this time (0 = none)
+  nextAttackAt: number         // epoch ms — per-NPC melee cooldown gate
+  staggerUntil: number         // epoch ms — brief 'stagger' render window after a landed strike
 }
 
 export interface NpcPlayerView {
@@ -31,12 +34,14 @@ export interface NpcPlayerView {
   dazed: boolean
   hidden?: boolean // inside a hide spot
   bot?: boolean // season bots — police deprioritize them so humans stay the main quarry
+  health?: number // server-owned HP — weakened targets (POLICE_ATTACK.weakenedHealth) get grabbed faster
 }
 
 export interface NpcEvent {
-  kind: 'capture'
+  kind: 'capture' | 'hit'
   npcId: string
   playerId: string
+  amount?: number // hit events: damage dealt (validated server-side before applying)
 }
 
 export function createNpcStates(spawns: { id: string; type: NpcType; x: number; z: number; patrol: Array<[number, number]> | { x: number; z: number }[] }[]): NpcBrainState[] {
@@ -45,6 +50,7 @@ export function createNpcStates(spawns: { id: string; type: NpcType; x: number; 
     alert: 0, waypoint: 0, patrol: s.patrol.map((p) => (Array.isArray(p) ? { x: p[0], z: p[1] } : { ...p })), targetId: null, targetTimer: 0,
     cooldownUntil: 0, cooldownTarget: null, investigate: null, investigateTimer: 0,
     captureProgress: 0, speedMul: 1,
+    attackTelegraphUntil: 0, nextAttackAt: 0, staggerUntil: 0,
   }))
 }
 
@@ -180,19 +186,55 @@ export function tickNpc(
     }
     case 'chase': {
       const target = players.find(p => p.id === n.targetId)
-      if (!target || target.detained) { n.state = 'return'; n.targetId = null; break }
+      if (!target || target.detained) { n.state = 'return'; n.targetId = null; n.attackTelegraphUntil = 0; break }
       n.targetTimer += dt
       const dx = target.x - n.x, dz = target.z - n.z
       const d = Math.hypot(dx, dz)
       n.ry = Math.atan2(dx, dz)
+      // --- Phase 5 police melee: resolve a pending wind-up before anything else ---
+      if (n.attackTelegraphUntil > 0) {
+        if (now < n.attackTelegraphUntil) {
+          // winding up: slow to 15% speed, keep facing the target, no capture accrual
+          // (attack OR capture hold — never both)
+          if (d > 0.4) {
+            const step = Math.min(d, speed * 0.15 * dt)
+            n.x += (dx / d) * step; n.z += (dz / d) * step
+            moved = true
+          }
+          break
+        }
+        // STRIKE: re-validate — target still in range, not dazed/detained/hidden, LOS not blocked
+        n.attackTelegraphUntil = 0
+        const strikeOk = d <= POLICE_ATTACK.strikeRange && !target.dazed && !target.detained && !target.hidden &&
+          !segmentBlocked(n.x, n.z, target.x, target.z, colliders)
+        if (strikeOk) {
+          events.push({
+            kind: 'hit', npcId: n.id, playerId: target.id,
+            amount: POLICE_ATTACK.dmgByType[n.type] ?? POLICE_ATTACK.fallbackDmg,
+          })
+          n.nextAttackAt = now + POLICE_ATTACK.cooldownSec * 1000
+          n.staggerUntil = now + 350 // brief 'stagger' render window on clients
+          break // landed a hit this tick — no capture accrual in the same tick
+        }
+        n.nextAttackAt = now + 400 // target dodged — short re-attack delay
+        break
+      }
+      // start a wind-up when in range (attack preferred over capture inside that range)
+      if (d <= POLICE_ATTACK.chaseAttackRange && !target.hidden && now >= n.nextAttackAt) {
+        n.attackTelegraphUntil = now + POLICE_ATTACK.windupSec * 1000
+        break
+      }
       if (d > 0.4) {
         const step = Math.min(d, speed * dt)
         n.x += (dx / d) * step; n.z += (dz / d) * step
         moved = true
       }
       if (d < DETECT.captureRadius) {
+        // weakened targets (< weakenedHealth HP) get grabbed at the multiplied capture time
+        const weakened = typeof target.health === 'number' && target.health < POLICE_ATTACK.weakenedHealth
+        const captureTime = DETECT.captureTime * (weakened ? POLICE_ATTACK.weakenedCaptureMul : 1)
         n.captureProgress += dt
-        if (n.captureProgress >= DETECT.captureTime) {
+        if (n.captureProgress >= captureTime) {
           events.push({ kind: 'capture', npcId: n.id, playerId: target.id })
           n.captureProgress = 0
           n.cooldownTarget = target.id

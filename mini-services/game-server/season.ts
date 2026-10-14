@@ -322,13 +322,14 @@ export class Season {
   private disposed = false
   private onEmpty: (id: string) => void
 
-  constructor(io: SocketIOServer, id: string, name: string, onEmpty: (id: string) => void) {
+  constructor(io: SocketIOServer, id: string, name: string, onEmpty: (id: string) => void, decorateRoom?: (room: Room) => void) {
     this.io = io
     this.id = id
     this.name = name
     this.onEmpty = onEmpty
     this.room = new Room(io, id, '', true)
     this.room.playersBroadcaster = () => this.broadcastPlayers()
+    decorateRoom?.(this.room) // injects the squadmate-position hook for Phase 6 release points
     this.tickTimer = setInterval(() => this.tick(), TICK_MS)
     this.tickTimer.unref?.()
     console.log(`[season] ${name} (${id}) created`)
@@ -843,7 +844,7 @@ export class SeasonManager {
   private seasons = new Map<string, Season>()
   private counter = 0
 
-  constructor(private io: SocketIOServer, private rooms: Map<string, Room>) {}
+  constructor(private io: SocketIOServer, private rooms: Map<string, Room>, private decorateRoom?: (room: Room) => void) {}
 
   /**
    * Find the liveliest season with room for one more human, or create the next one.
@@ -863,7 +864,7 @@ export class SeasonManager {
     const season = new Season(this.io, `sea_${this.counter}`, `SEASON #${this.counter}`, (id) => {
       const s = this.seasons.get(id)
       if (s) { s.dispose(); this.seasons.delete(id); this.rooms.delete(id) }
-    })
+    }, this.decorateRoom)
     this.seasons.set(season.id, season)
     this.rooms.set(season.id, season.room)
     return season

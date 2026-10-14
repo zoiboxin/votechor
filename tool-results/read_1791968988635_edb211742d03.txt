@@ -1,0 +1,890 @@
+     1→     1→// VoteChor Seasons — persistent 100-protester worlds for the solo queue.
+     2→     2→//
+     3→     3→// Design (user request):
+     4→     4→//  • A solo player joins ONE season. Every season holds up to 100 occupants.
+     5→     5→//  • Every free slot is filled by a server-simulated bot protester, so a fresh
+     6→     6→//    season immediately feels like a living city (you + 99 bots).
+     7→     7→//  • When a NEW human joins a season, one bot steps aside (removed + announced)
+     8→     8→//    so the human takes its place — population stays at 100.
+     9→     9→//  • When ANY occupant leaves, a fresh bot walks in from the plaza to backfill.
+    10→    10→//  • When a season is "full" of humans (SEASON_MAX_HUMANS), matchmaking creates
+    11→    11→//    the next season instead.
+    12→    12→//  • Bots are realistic: they wander the streets on a nav graph, idle, chat
+    13→    13→//    (quick messages), emote, socialize with each other AND with humans, flee
+    14→    14→//    police, join protest marches to checkpoints, and pick up supplies.
+    15→    15→//    Police will still chase them (they are real NPC targets), the boss ignores
+    16→    16→//    them, and they get detained / released like everyone else.
+    17→    17→//
+    18→    18→// Network: bots are regular PlayerState entries inside the Room, so snapshots,
+    19→    19→// NPC brains, vehicles, checkpoints, detention and the client renderer all work
+    20→    20→// on them with zero special-casing. A per-recipient graded-AOI broadcaster keeps
+    21→    21→// the 12 Hz player snapshot cheap: NEAR (≤150 m) every tick at full fidelity,
+    22→    22→// MID (150–300 m) at 1/3 rate with 1-decimal payloads, FAR (>300 m) on the
+    23→    23→// rotating far-window sweep. Bot wire payloads are cached once per tick.
+    24→    24→import type { Server as SocketIOServer } from 'socket.io'
+    25→    25→import { Room, WORLD, playerNet, type PlayerState } from './room'
+    26→    26→import { ARCHETYPES } from '../../src/game/shared/constants'
+    27→    27→import type { AnimName, PlayerNetState } from '../../src/game/shared/types'
+    28→    28→
+    29→    29→// ---------- tuning ----------
+    30→    30→export const SEASON_CAP = 100 // total occupants (you + 99 others)
+    31→    31→export const SEASON_MAX_HUMANS = 12 // season is "full" for matchmaking at this many real players
+    32→    32→export const SEASON_RETIRE_MS = 90_000 // empty season lingers 90s for quick rejoins, then dissolves
+    33→    33→const BOT_AOI = 150 // NEAR band radius: bots within this range stream every tick at full rate
+    34→    34→const BOT_MID_AOI = 300 // MID band outer radius: 150–300 m streams at 1/3 rate (10 cm precision)
+    35→    35→const BOT_FAR_WINDOW = 14 // far bots refreshed per broadcast tick (rotating sweep ≈ every 0.7s)
+    36→    36→const TICK_MS = 100
+    37→    37→const CHURN_MIN_MS = 16_000 // bot churn: one occupant leaves & is replaced
+    38→    38→const CHURN_MAX_MS = 38_000
+    39→    39→const MARCH_MIN_MS = 70_000 // occasional protest march to the next checkpoint
+    40→    40→const MARCH_MAX_MS = 140_000
+    41→    41→
+    42→    42→const BOT_EMOTES = ['wave', 'dance', 'chant', 'chai', 'flex', 'salute'] as const
+    43→    43→const EMOTE_ANIM: Record<string, AnimName> = {
+    44→    44→  wave: 'celebrate', dance: 'celebrate', chant: 'celebrate',
+    45→    45→  chai: 'heal', flex: 'celebrate', salute: 'idle',
+    46→    46→}
+    47→    47→
+    48→    48→// Realistic protester names — mix of plain names and satirical handles.
+    49→    49→const BOT_NAMES = [
+    50→    50→  'Arjun', 'Meera', 'Rohan', 'Priya', 'Kabir', 'Aisha', 'Vikram', 'Sneha', 'Irfan', 'Rahul',
+    51→    51→  'Ananya', 'Farhan', 'Divya', 'Aditya', 'Zoya', 'Karan', 'Neha', 'Sameer', 'Pooja', 'Arnav',
+    52→    52→  'Tara', 'Nikhil', 'Ishita', 'Varun', 'Riya', 'Dhruv', 'Mira', 'Aman', 'Sana', 'Kunal',
+    53→    53→  'Ritu', 'Omkar', 'Fatima', 'Gaurav', 'Lakshmi', 'Imran', 'Shalini', 'Yusuf', 'Kavya', 'Manav',
+    54→    54→  'ChaiFirstVoteLater', 'UncleJiSpeaks', 'Form12BVictim', 'AntiCommittee', 'SamosaSocialist',
+    55→    55→  'MeriChappalMeriMarzi', 'StreetwiseStrategist', 'DebateChamp89', 'CricketOverCommittee',
+    56→    56→  'WiFiProtester', 'AuntyApproves', 'JaiHindJaiChai', 'PaperworkPhantom', 'TheQuietMarcher',
+    57→    57→  'FlyoverPhilosopher', 'StampDodgePro', 'BarricadeBob', 'MegaphoneMike', 'PosterPaintPro',
+    58→    58→  'ChowkChampion', 'MonsoonMarcher', 'AutoRickshawAce', 'SamosaSquadron', 'FilterKoffee',
+    59→    59→  'ThelaKing', 'GullyGamer', 'NukkadNeta', 'SadakSideHero', 'ChappalChampion', 'JalebiJedi',
+    60→    60→  'BandraBandit', 'DabbaDelivery', 'KurtaKicker', 'LassiLover', 'PakoraPilot', 'RickshawRaja',
+    61→    61→]
+    62→    62→
+    63→    63→// ---------- helpers ----------
+    64→    64→const rand = (a: number, b: number) => a + Math.random() * (b - a)
+    65→    65→const randInt = (a: number, b: number) => Math.floor(rand(a, b + 1))
+    66→    66→const pick = <T,>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)]
+    67→    67→const chance = (p: number) => Math.random() < p
+    68→    68→const dist2d = (ax: number, az: number, bx: number, bz: number) => Math.hypot(ax - bx, az - bz)
+    69→    69→
+    70→    70→function angleLerp(from: number, to: number, t: number): number {
+    71→    71→  let d = to - from
+    72→    72→  while (d > Math.PI) d -= Math.PI * 2
+    73→    73→  while (d < -Math.PI) d += Math.PI * 2
+    74→    74→  return from + d * Math.min(1, t)
+    75→    75→}
+    76→    76→
+    77→    77→// ---------- nav graph (built once from the shared deterministic world) ----------
+    78→    78→interface NavNode { x: number; z: number; links: number[] }
+    79→    79→
+    80→    80→const NAV_GRID = 10
+    81→    81→const NAV_PAD = 1.7 // keep this far from building walls
+    82→    82→const NAV_Z_MAX = -474 // bots never wander into the Government District / boss arena
+    83→    83→
+    84→    84→function pointBlocked(x: number, z: number, pad: number): boolean {
+    85→    85→  for (const c of WORLD.colliders) {
+    86→    86→    if (c.walkable) continue // low walkable platforms (stage) are fine
+    87→    87→    if (x >= c.minX - pad && x <= c.maxX + pad && z >= c.minZ - pad && z <= c.maxZ + pad) return true
+    88→    88→  }
+    89→    89→  return false
+    90→    90→}
+    91→    91→
+    92→    92→function clearPath(ax: number, az: number, bx: number, bz: number): boolean {
+    93→    93→  const d = dist2d(ax, az, bx, bz)
+    94→    94→  const steps = Math.max(1, Math.ceil(d / 2))
+    95→    95→  for (let i = 0; i <= steps; i++) {
+    96→    96→    const t = i / steps
+    97→    97→    if (pointBlocked(ax + (bx - ax) * t, az + (bz - az) * t, 0.8)) return false
+    98→    98→  }
+    99→    99→  return true
+   100→   100→}
+   101→   101→
+   102→   102→function buildNavGraph(): NavNode[] {
+   103→   103→  const nodes: NavNode[] = []
+   104→   104→  const index = new Map<string, number>()
+   105→   105→  for (let x = -45; x <= 45; x += NAV_GRID) {
+   106→   106→    for (let z = NAV_Z_MAX; z <= 6; z += NAV_GRID) {
+   107→   107→      if (pointBlocked(x, z, NAV_PAD)) continue
+   108→   108→      index.set(`${x}|${z}`, nodes.length)
+   109→   109→      nodes.push({ x, z, links: [] })
+   110→   110→    }
+   111→   111→  }
+   112→   112→  // 8-neighborhood edges with line-of-sight (no cutting through buildings)
+   113→   113→  for (let i = 0; i < nodes.length; i++) {
+   114→   114→    const n = nodes[i]
+   115→   115→    for (const [dx, dz] of [[NAV_GRID, 0], [0, NAV_GRID], [NAV_GRID, NAV_GRID], [NAV_GRID, -NAV_GRID]] as const) {
+   116→   116→      const j = index.get(`${n.x + dx}|${n.z + dz}`)
+   117→   117→      if (j === undefined) continue
+   118→   118→      const m = nodes[j]
+   119→   119→      if (clearPath(n.x, n.z, m.x, m.z)) { n.links.push(j); m.links.push(i) }
+   120→   120→    }
+   121→   121→  }
+   122→   122→  return nodes
+   123→   123→}
+   124→   124→
+   125→   125→const NAV: NavNode[] = buildNavGraph()
+   126→   126→
+   127→   127→function nearestNode(x: number, z: number): number {
+   128→   128→  let best = 0
+   129→   129→  let bestD = Infinity
+   130→   130→  for (let i = 0; i < NAV.length; i++) {
+   131→   131→    const d = (NAV[i].x - x) ** 2 + (NAV[i].z - z) ** 2
+   132→   132→    if (d < bestD) { bestD = d; best = i }
+   133→   133→  }
+   134→   134→  return best
+   135→   135→}
+   136→   136→
+   137→   137→const MARCH_GOALS = [
+   138→   138→  ...WORLD.checkpoints.map(c => ({ x: c.x, z: c.z })),
+   139→   139→  { x: 0, z: -34 }, // fountain
+   140→   140→  { x: -16, z: -18 }, // stage
+   141→   141→  { x: 0, z: -140 }, // market heart
+   142→   142→  { x: 0, z: -350 }, // grand avenue
+   143→   143→  { x: 0, z: -468 }, // boss gate crowd
+   144→   144→]
+   145→   145→
+   146→   146→function randomGoal(): { x: number; z: number } {
+   147→   147→  if (chance(0.2) || NAV.length === 0) return { x: rand(-40, 40), z: rand(-460, -4) }
+   148→   148→  return pick(MARCH_GOALS)
+   149→   149→}
+   150→   150→
+   151→   151→// ---------- bot AI ----------
+   152→   152→type BotStateName = 'arrive' | 'wander' | 'idle' | 'social' | 'flee' | 'march'
+   153→   153→
+   154→   154→interface Bot {
+   155→   155→  p: PlayerState
+   156→   156→  node: number // current nearest nav node
+   157→   157→  wp: { x: number; z: number } | null
+   158→   158→  goal: { x: number; z: number } | null
+   159→   159→  state: BotStateName
+   160→   160→  stateUntil: number
+   161→   161→  speed: number
+   162→   162→  partner: string | null // social target (bot or human id)
+   163→   163→  marchCp: number | null
+   164→   164→  fleeFrom: { x: number; z: number } | null
+   165→   165→  emoteUntil: number
+   166→   166→  emoteAnim: AnimName
+   167→   167→  nextEmoteAt: number
+   168→   168→  nextQuipAt: number
+   169→   169→  nextPickupAt: number
+   170→   170→}
+   171→   171→
+   172→   172→export interface SeasonInfo {
+   173→   173→  id: string
+   174→   174→  name: string
+   175→   175→  humans: number
+   176→   176→  bots: number
+   177→   177→  cap: number
+   178→   178→  humansMax: number
+   179→   179→}
+   180→   180→
+   181→   181→// ---------- graded AOI bands (pure helpers — unit-testable without sockets) ----------
+   182→   182→
+   183→   183→/** NEAR band: dist² ≤ 150² → included EVERY tick with the round2 payload. */
+   184→   184→export const AOI_NEAR_SQ = BOT_AOI * BOT_AOI
+   185→   185→/** MID band: 150² < dist² ≤ 300² → included at 1/3 rate, 1-decimal payload. */
+   186→   186→export const AOI_MID = BOT_MID_AOI
+   187→   187→export const AOI_MID_SQ = BOT_MID_AOI * BOT_MID_AOI
+   188→   188→
+   189→   189→/** 1-decimal quantization (10 cm) for MID/FAR payloads — plenty at that range. */
+   190→   190→export function round1(v: number): number {
+   191→   191→  return Math.round(v * 10) / 10
+   192→   192→}
+   193→   193→
+   194→   194→/** Minimal shape the AOI selection needs — plain literals work in unit tests. */
+   195→   195→export interface AoiEntity { id: string; x: number; z: number }
+   196→   196→
+   197→   197→/** Per-tick context for selectAoiPayload (payload caches are built once per tick). */
+   198→   198→export interface AoiCtx {
+   199→   199→  tick: number // broadcast tick counter — drives the 3-slot MID rotation
+   200→   200→  farCursor: number // informational: far-window cursor (the window is already resolved)
+   201→   201→  windowIds: ReadonlySet<string> // bot ids refreshed by the FAR sweep this tick
+   202→   202→  near: readonly PlayerNetState[] // per-bot round2 payloads (index-aligned with `bots`)
+   203→   203→  mid: readonly PlayerNetState[] // per-bot round1 payloads (index-aligned with `bots`)
+   204→   204→  humans: readonly PlayerNetState[] // full-detail human entries, prepended to every payload
+   205→   205→}
+   206→   206→
+   207→   207→/**
+   208→   208→ * Per-recipient AOI selection (pure):
+   209→   209→ *  • NEAR (≤150 m): every tick, round2 payload.
+   210→   210→ *  • MID (150–300 m): 1/3 rate via `botIndex % 3 === tick % 3`, round1 payload (~4 Hz each).
+   211→   211→ *  • FAR (>300 m): ONLY via the rotating BOT_FAR_WINDOW sweep, round1 payload.
+   212→   212→ *  • Humans: always full detail (and never duplicated).
+   213→   213→ * Client prunes rigs unseen for 6 s — every band stays far inside that window.
+   214→   214→ */
+   215→   215→export function selectAoiPayload(bots: readonly AoiEntity[], human: AoiEntity, ctx: AoiCtx): PlayerNetState[] {
+   216→   216→  const out: PlayerNetState[] = ctx.humans.slice()
+   217→   217→  const midSlot = ctx.tick % 3
+   218→   218→  for (let i = 0; i < bots.length; i++) {
+   219→   219→    const b = bots[i]
+   220→   220→    const dx = b.x - human.x
+   221→   221→    const dz = b.z - human.z
+   222→   222→    const d2 = dx * dx + dz * dz
+   223→   223→    if (d2 <= AOI_NEAR_SQ) {
+   224→   224→      out.push(ctx.near[i])
+   225→   225→    } else if (d2 <= AOI_MID_SQ) {
+   226→   226→      if (i % 3 === midSlot) out.push(ctx.mid[i])
+   227→   227→    } else if (ctx.windowIds.has(b.id)) {
+   228→   228→      out.push(ctx.mid[i])
+   229→   229→    }
+   230→   230→  }
+   231→   231→  return out
+   232→   232→}
+   233→   233→
+   234→   234→/**
+   235→   235→ * Rotating far-window sweep (semantics unchanged): the ids of the BOT_FAR_WINDOW
+   236→   236→ * bots starting at `cursor`, plus the next cursor. Pure so tests can verify the
+   237→   237→ * ≈ every (bots / BOT_FAR_WINDOW)-tick refresh cadence without sockets.
+   238→   238→ */
+   239→   239→export function computeFarWindow(bots: readonly AoiEntity[], cursor: number): { ids: Set<string>; nextCursor: number } {
+   240→   240→  const ids = new Set<string>()
+   241→   241→  const n = bots.length
+   242→   242→  if (n === 0) return { ids, nextCursor: 0 }
+   243→   243→  for (let i = 0; i < Math.min(BOT_FAR_WINDOW, n); i++) ids.add(bots[(cursor + i) % n].id)
+   244→   244→  return { ids, nextCursor: (cursor + BOT_FAR_WINDOW) % n }
+   245→   245→}
+   246→   246→
+   247→   247→/** 1-decimal wire variant of playerNet for MID/FAR bots — identical fields, 10 cm precision. */
+   248→   248→export function botNet1(p: PlayerState): PlayerNetState {
+   249→   249→  return {
+   250→   250→    id: p.id,
+   251→   251→    name: p.name,
+   252→   252→    archetype: p.archetype,
+   253→   253→    x: round1(p.x),
+   254→   254→    y: round1(p.y),
+   255→   255→    z: round1(p.z),
+   256→   256→    ry: round1(p.ry),
+   257→   257→    anim: p.anim,
+   258→   258→    health: p.health,
+   259→   259→    detained: p.detained,
+   260→   260→    dazed: p.dazed,
+   261→   261→    tokens: p.tokens,
+   262→   262→    carrying: p.carrying,
+   263→   263→  } as PlayerNetState
+   264→   264→}
+   265→   265→
+   266→   266→// ---------- broadcast observability (module-level, folded across all seasons) ----------
+   267→   267→
+   268→   268→const EST_BYTES_PER_ENTRY = 90 // rough wire estimate per player entry — an ESTIMATE, not measured bytes
+   269→   269→export interface BroadcastStats {
+   270→   270→  ticksPerSec: number // broadcast passes / sec across all seasons (1 s sampler)
+   271→   271→  avgEntriesPerTick: number // EMA of payload entries summed over recipients
+   272→   272→  avgTickMs: number // EMA of full broadcast duration
+   273→   273→  estBytesPerSec: number // ESTIMATE: avgEntriesPerTick × ticksPerSec × 90
+   274→   274→}
+   275→   275→export const broadcastStats: BroadcastStats = {
+   276→   276→  ticksPerSec: 0,
+   277→   277→  avgEntriesPerTick: 0,
+   278→   278→  avgTickMs: 0,
+   279→   279→  estBytesPerSec: 0,
+   280→   280→}
+   281→   281→const tickWindow = { count: 0, at: Date.now() }
+   282→   282→
+   283→   283→/** Fold one completed broadcast pass (one season, all recipients) into the stats. */
+   284→   284→function recordBroadcastTick(entriesSent: number, durationMs: number): void {
+   285→   285→  const k = 0.15
+   286→   286→  broadcastStats.avgEntriesPerTick += (entriesSent - broadcastStats.avgEntriesPerTick) * k
+   287→   287→  broadcastStats.avgTickMs += (durationMs - broadcastStats.avgTickMs) * k
+   288→   288→  tickWindow.count++
+   289→   289→}
+   290→   290→
+   291→   291→// 1 Hz sampler: real ticks/sec + wire estimate (decays to 0 when idle). unref'd:
+   292→   292→// never keeps the process (or a test run) alive on its own.
+   293→   293→setInterval(() => {
+   294→   294→  const now = Date.now()
+   295→   295→  const dt = (now - tickWindow.at) / 1000
+   296→   296→  if (dt <= 0) return
+   297→   297→  broadcastStats.ticksPerSec = tickWindow.count / dt
+   298→   298→  broadcastStats.estBytesPerSec = Math.round(broadcastStats.avgEntriesPerTick * broadcastStats.ticksPerSec * EST_BYTES_PER_ENTRY)
+   299→   299→  tickWindow.count = 0
+   300→   300→  tickWindow.at = now
+   301→   301→}, 1000).unref?.()
+   302→   302→
+   303→   303→export class Season {
+   304→   304→  readonly room: Room
+   305→   305→  readonly id: string
+   306→   306→  readonly name: string
+   307→   307→  readonly createdAt = Date.now()
+   308→   308→  private io: SocketIOServer
+   309→   309→  private bots = new Map<string, Bot>()
+   310→   310→  private usedNames = new Set<string>()
+   311→   311→  private farCursor = 0
+   312→   312→  private tickCount = 0 // broadcast tick counter (drives the MID 3-slot rotation)
+   313→   313→  private lastBroadcastAt = 0 // performance.now() of the previous broadcast pass
+   314→   314→  private statRate = 0 // EMA: this season's broadcast ticks/sec
+   315→   315→  private statEntries = 0 // EMA: payload entries summed over recipients per tick
+   316→   316→  private statMs = 0 // EMA: full broadcast duration ms
+   317→   317→  private tickTimer: ReturnType<typeof setInterval> | null = null
+   318→   318→  private churnAt = Date.now() + rand(18_000, 36_000)
+   319→   319→  private marchAt = Date.now() + rand(MARCH_MIN_MS, MARCH_MAX_MS)
+   320→   320→  private retireTimer: ReturnType<typeof setTimeout> | null = null
+   321→   321→  private churnTimers: ReturnType<typeof setTimeout>[] = []
+   322→   322→  private disposed = false
+   323→   323→  private onEmpty: (id: string) => void
+   324→   324→
+   325→   325→  constructor(io: SocketIOServer, id: string, name: string, onEmpty: (id: string) => void) {
+   326→   326→    this.io = io
+   327→   327→    this.id = id
+   328→   328→    this.name = name
+   329→   329→    this.onEmpty = onEmpty
+   330→   330→    this.room = new Room(io, id, '', true)
+   331→   331→    this.room.playersBroadcaster = () => this.broadcastPlayers()
+   332→   332→    this.tickTimer = setInterval(() => this.tick(), TICK_MS)
+   333→   333→    this.tickTimer.unref?.()
+   334→   334→    console.log(`[season] ${name} (${id}) created`)
+   335→   335→  }
+   336→   336→
+   337→   337→  info(): SeasonInfo {
+   338→   338→    return {
+   339→   339→      id: this.id,
+   340→   340→      name: this.name,
+   341→   341→      humans: this.room.humansCount(),
+   342→   342→      bots: this.bots.size,
+   343→   343→      cap: SEASON_CAP,
+   344→   344→      humansMax: SEASON_MAX_HUMANS,
+   345→   345→    }
+   346→   346→  }
+   347→   347→
+   348→   348→  /** Per-season broadcast EMAs (cheap observability; also folded into module broadcastStats). */
+   349→   349→  broadcastEma(): { ticksPerSec: number; entriesPerTick: number; tickMs: number } {
+   350→   350→    return { ticksPerSec: this.statRate, entriesPerTick: this.statEntries, tickMs: this.statMs }
+   351→   351→  }
+   352→   352→
+   353→   353→  dispose() {
+   354→   354→    if (this.disposed) return
+   355→   355→    this.disposed = true
+   356→   356→    if (this.tickTimer) clearInterval(this.tickTimer)
+   357→   357→    if (this.retireTimer) clearTimeout(this.retireTimer)
+   358→   358→    for (const t of this.churnTimers) clearTimeout(t)
+   359→   359→    this.room.dispose()
+   360→   360→    console.log(`[season] ${this.name} (${this.id}) dissolved`)
+   361→   361→  }
+   362→   362→
+   363→   363→  // ---------- population ----------
+   364→   364→
+   365→   365→  /** Called right after a human was added to the room: swap a bot out if needed, top up bots. */
+   366→   366→  onHumanJoined() {
+   367→   367→    if (this.retireTimer) { clearTimeout(this.retireTimer); this.retireTimer = null }
+   368→   368→    // "if new user join the game remove bot and let player join" — one bot steps aside
+   369→   369→    while (this.room.humansCount() + this.bots.size >= SEASON_CAP) {
+   370→   370→      const victim = this.pickRemovableBot()
+   371→   371→      if (!victim) break
+   372→   372→      this.removeBot(victim, true)
+   373→   373→    }
+   374→   374→    // fill every remaining slot with a fresh bot
+   375→   375→    let guard = 0
+   376→   376→    while (this.room.humansCount() + this.bots.size < SEASON_CAP && guard++ < SEASON_CAP + 20) {
+   377→   377→      this.createBot('seed', false)
+   378→   378→    }
+   379→   379→    this.emitSeason()
+   380→   380→    console.log(`[season] ${this.name}: human joined → ${this.room.humansCount()} humans / ${this.bots.size} bots`)
+   381→   381→  }
+   382→   382→
+   383→   383→  /** Called after a human was removed from the room: backfill + retirement check. */
+   384→   384→  onHumanLeft() {
+   385→   385→    this.emitSeason()
+   386→   386→    // "when any player left the game new user will join the same season" — backfill bot walks in
+   387→   387→    const t = setTimeout(() => {
+   388→   388→      if (this.disposed) return
+   389→   389→      if (this.room.humansCount() + this.bots.size < SEASON_CAP) this.createBot('arrive', true)
+   390→   390→      this.emitSeason()
+   391→   391→    }, rand(2500, 7000))
+   392→   392→    t.unref?.()
+   393→   393→    this.churnTimers.push(t)
+   394→   394→    this.checkRetire()
+   395→   395→    console.log(`[season] ${this.name}: human left → ${this.room.humansCount()} humans / ${this.bots.size} bots`)
+   396→   396→  }
+   397→   397→
+   398→   398→  private checkRetire() {
+   399→   399→    if (this.room.humansCount() > 0 || this.disposed) return
+   400→   400→    if (this.retireTimer) return
+   401→   401→    this.retireTimer = setTimeout(() => this.onEmpty(this.id), SEASON_RETIRE_MS)
+   402→   402→    this.retireTimer.unref?.()
+   403→   403→  }
+   404→   404→
+   405→   405→  private emitSeason() {
+   406→   406→    this.io.to(this.room.id).emit('game:season', this.info())
+   407→   407→  }
+   408→   408→
+   409→   409→  // ---------- bots ----------
+   410→   410→
+   411→   411→  private takeName(): string {
+   412→   412→    for (let i = 0; i < 40; i++) {
+   413→   413→      const base = pick(BOT_NAMES)
+   414→   414→      if (!this.usedNames.has(base)) { this.usedNames.add(base); return base }
+   415→   415→    }
+   416→   416→    let n = randInt(2, 99)
+   417→   417→    const base = pick(BOT_NAMES)
+   418→   418→    while (this.usedNames.has(`${base}${n}`)) n = randInt(2, 9999)
+   419→   419→    const name = `${base}${n}`
+   420→   420→    this.usedNames.add(name)
+   421→   421→    return name
+   422→   422→  }
+   423→   423→
+   424→   424→  private spawnPoint(mode: 'seed' | 'arrive'): { x: number; z: number } {
+   425→   425→    if (mode === 'arrive') return { x: rand(-7, 7), z: rand(-10, -4) } // walk in from the plaza gate
+   426→   426→    // seed: distribute across the public zones (plaza heavy, gov-district gate light)
+   427→   427→    const bands: [number, number, number][] = [
+   428→   428→      [-78, -6, 30], [-198, -80, 25], [-278, -200, 15], [-418, -280, 20], [-472, -420, 10],
+   429→   429→    ]
+   430→   430→    const total = bands.reduce((s, b) => s + b[2], 0)
+   431→   431→    let roll = Math.random() * total
+   432→   432→    let band = bands[0]
+   433→   433→    for (const b of bands) { roll -= b[2]; if (roll <= 0) { band = b; break } }
+   434→   434→    for (let i = 0; i < 12; i++) {
+   435→   435→      const n = NAV[randInt(0, NAV.length - 1)]
+   436→   436→      if (n.z <= band[0] && n.z >= band[1]) return { x: n.x, z: n.z }
+   437→   437→    }
+   438→   438→    const n = NAV[randInt(0, NAV.length - 1)]
+   439→   439→    return { x: n.x, z: n.z }
+   440→   440→  }
+   441→   441→
+   442→   442→  private createBot(mode: 'seed' | 'arrive', announce: boolean): Bot | null {
+   443→   443→    if (this.disposed || NAV.length === 0) return null
+   444→   444→    const id = `bot_${Math.random().toString(36).slice(2, 9)}`
+   445→   445→    const name = this.takeName()
+   446→   446→    const archetype = pick(ARCHETYPES).id
+   447→   447→    const pos = this.spawnPoint(mode)
+   448→   448→    const p = this.room.addPlayer(id, name, archetype, { bot: true, x: pos.x, z: pos.z })
+   449→   449→    const bot: Bot = {
+   450→   450→      p,
+   451→   451→      node: nearestNode(pos.x, pos.z),
+   452→   452→      wp: null,
+   453→   453→      goal: mode === 'arrive' ? { x: rand(-30, 30), z: rand(-60, -10) } : randomGoal(),
+   454→   454→      state: mode === 'arrive' ? 'arrive' : (chance(0.3) ? 'idle' : 'wander'),
+   455→   455→      stateUntil: Date.now() + (mode === 'arrive' ? 0 : rand(1000, 5000)),
+   456→   456→      speed: rand(2.3, 3.4),
+   457→   457→      partner: null,
+   458→   458→      marchCp: null,
+   459→   459→      fleeFrom: null,
+   460→   460→      emoteUntil: 0,
+   461→   461→      emoteAnim: 'idle',
+   462→   462→      nextEmoteAt: Date.now() + rand(8000, 50_000),
+   463→   463→      nextQuipAt: Date.now() + rand(20_000, 120_000),
+   464→   464→      nextPickupAt: Date.now() + rand(6000, 40_000),
+   465→   465→    }
+   466→   466→    this.bots.set(id, bot)
+   467→   467→    if (announce) this.io.to(this.room.id).emit('game:playerjoined', id, name)
+   468→   468→    return bot
+   469→   469→  }
+   470→   470→
+   471→   471→  /** Remove a bot (announced to the room so clients drop the rig + feed the event). */
+   472→   472→  private removeBot(bot: Bot, announce: boolean) {
+   473→   473→    this.bots.delete(bot.p.id)
+   474→   474→    this.usedNames.delete(bot.p.name)
+   475→   475→    this.room.removePlayer(bot.p.id)
+   476→   476→    if (announce) this.io.to(this.room.id).emit('game:playerleft', bot.p.id, bot.p.name)
+   477→   477→  }
+   478→   478→
+   479→   479→  /** A bot to sacrifice for an incoming human — prefer one NOT standing next to a human. */
+   480→   480→  private pickRemovableBot(): Bot | null {
+   481→   481→    const all = [...this.bots.values()]
+   482→   482→    if (all.length === 0) return null
+   483→   483→    const humans = this.room.humans()
+   484→   484→    const away = all.filter((b) => !humans.some((h) => dist2d(h.x, h.z, b.p.x, b.p.z) < 9))
+   485→   485→    return pick(away.length > 0 ? away : all)
+   486→   486→  }
+   487→   487→
+   488→   488→  // ---------- simulation ----------
+   489→   489→
+   490→   490→  private tick() {
+   491→   491→    if (this.disposed) return
+   492→   492→    const now = Date.now()
+   493→   493→    const dt = TICK_MS / 1000
+   494→   494→
+   495→   495→    for (const bot of this.bots.values()) this.stepBot(bot, dt, now)
+   496→   496→
+   497→   497→    // churn — the world breathes: someone leaves, someone new arrives
+   498→   498→    if (now >= this.churnAt && this.room.humansCount() > 0) {
+   499→   499→      const victim = this.pickRemovableBot()
+   500→   500→      if (victim) {
+   501→   501→        this.removeBot(victim, true)
+   502→   502→        const t = setTimeout(() => {
+   503→   503→          if (this.disposed) return
+   504→   504→          if (this.room.humansCount() + this.bots.size < SEASON_CAP) this.createBot('arrive', true)
+   505→   505→          this.emitSeason()
+   506→   506→        }, rand(2500, 7000))
+   507→   507→        t.unref?.()
+   508→   508→        this.churnTimers.push(t)
+   509→   509→      }
+   510→   510→      this.churnAt = now + rand(CHURN_MIN_MS, CHURN_MAX_MS)
+   511→   511→    }
+   512→   512→
+   513→   513→    // protest marches to the next checkpoint
+   514→   514→    if (now >= this.marchAt && this.room.humansCount() > 0) {
+   515→   515→      this.startMarch()
+   516→   516→      this.marchAt = now + rand(MARCH_MIN_MS, MARCH_MAX_MS)
+   517→   517→    }
+   518→   518→  }
+   519→   519→
+   520→   520→  private startMarch() {
+   521→   521→    const inactive = WORLD.checkpoints.filter((c) => !this.room.checkpoints.has(c.id))
+   522→   522→    if (inactive.length === 0) return
+   523→   523→    const cp = pick(inactive)
+   524→   524→    const crowd = [...this.bots.values()].filter((b) => b.state === 'wander' && !b.p.detained && !b.p.dazed)
+   525→   525→    if (crowd.length < 3) return
+   526→   526→    const n = Math.min(crowd.length, randInt(3, 8))
+   527→   527→    for (let i = 0; i < n; i++) {
+   528→   528→      const b = crowd.splice(randInt(0, crowd.length - 1), 1)[0]
+   529→   529→      b.state = 'march'
+   530→   530→      b.marchCp = cp.id
+   531→   531→      b.goal = { x: cp.x + rand(-5, 5), z: cp.z + rand(-5, 5) }
+   532→   532→      b.wp = null
+   533→   533→      b.speed = rand(3.8, 4.4)
+   534→   534→    }
+   535→   535→    // a march leader shouts the plan
+   536→   536→    const leader = this.bots.get(crowd[0]?.p.id ?? '')
+   537→   537→    if (leader) this.io.to(this.room.id).emit('game:quickmsg', leader.p.id, randInt(5, 8)) // "To the flyover!" / "Form a squad!" / "The gate needs votes!"
+   538→   538→  }
+   539→   539→
+   540→   540→  private stepBot(bot: Bot, dt: number, now: number) {
+   541→   541→    const p = bot.p
+   542→   542→    if (p.detained || p.dazed) return // capture/daze systems own the bot
+   543→   543→
+   544→   544→    // --- threat scan: police chasing me, or an officer breathing down my neck ---
+   545→   545→    if (bot.state !== 'flee') {
+   546→   546→      for (const n of this.room.npcs) {
+   547→   547→        if (n.type === 'searchlight') continue
+   548→   548→        const d = dist2d(n.x, n.z, p.x, p.z)
+   549→   549→        if ((n.state === 'chase' && n.targetId === p.id && d < 20) || d < 5.5) {
+   550→   550→          bot.state = 'flee'
+   551→   551→          bot.fleeFrom = { x: n.x, z: n.z }
+   552→   552→          bot.stateUntil = now + rand(2200, 3600)
+   553→   553→          bot.partner = null
+   554→   554→          bot.marchCp = null
+   555→   555→          break
+   556→   556→        }
+   557→   557→      }
+   558→   558→    }
+   559→   559→
+   560→   560→    // --- emote chatter (bots stand still and perform) ---
+   561→   561→    if (now < bot.emoteUntil) {
+   562→   562→      p.anim = bot.emoteAnim
+   563→   563→      p.lastStateTime = now
+   564→   564→      return
+   565→   565→    }
+   566→   566→    if (now >= bot.nextEmoteAt && bot.state !== 'flee' && bot.state !== 'arrive') {
+   567→   567→      const emote = pick(BOT_EMOTES)
+   568→   568→      bot.emoteUntil = now + rand(1500, 2200)
+   569→   569→      bot.emoteAnim = EMOTE_ANIM[emote] ?? 'celebrate'
+   570→   570→      p.anim = bot.emoteAnim
+   571→   571→      bot.nextEmoteAt = now + rand(26_000, 80_000)
+   572→   572→      this.io.to(this.room.id).emit('game:emote', p.id, emote)
+   573→   573→      return
+   574→   574→    }
+   575→   575→
+   576→   576→    // --- one-liners ---
+   577→   577→    if (now >= bot.nextQuipAt && bot.state !== 'flee') {
+   578→   578→      bot.nextQuipAt = now + rand(50_000, 170_000)
+   579→   579→      this.io.to(this.room.id).emit('game:quickmsg', p.id, randInt(0, 9))
+   580→   580→    }
+   581→   581→
+   582→   582→    // --- supply runs: grab a nearby non-token item ---
+   583→   583→    if (now >= bot.nextPickupAt && bot.state !== 'flee') {
+   584→   584→      bot.nextPickupAt = now + rand(30_000, 80_000)
+   585→   585→      for (const def of WORLD.items) {
+   586→   586→        if (def.type === 'token') continue
+   587→   587→        if (dist2d(def.x, def.z, p.x, p.z) > 2.5) continue
+   588→   588→        const st = this.room.itemStates.get(def.id)
+   589→   589→        if (st && !st.taken && this.room.pickup(p.id, def.id)) break
+   590→   590→      }
+   591→   591→    }
+   592→   592→
+   593→   593→    // --- state machine ---
+   594→   594→    switch (bot.state) {
+   595→   595→      case 'arrive': {
+   596→   596→        // walk from the spawn gate into the plaza, then blend into the crowd
+   597→   597→        if (this.moveToward(bot, bot.goal!.x, bot.goal!.z, dt) || dist2d(p.x, p.z, bot.goal!.x, bot.goal!.z) < 4) {
+   598→   598→          bot.state = 'wander'
+   599→   599→          bot.goal = randomGoal()
+   600→   600→          bot.wp = null
+   601→   601→        }
+   602→   602→        break
+   603→   603→      }
+   604→   604→      case 'wander': {
+   605→   605→        if (!bot.wp) { this.pickWaypoint(bot); break }
+   606→   606→        if (this.moveToward(bot, bot.wp.x, bot.wp.z, dt)) {
+   607→   607→          bot.wp = null
+   608→   608→          // arrived at the wider goal?
+   609→   609→          if (bot.goal && dist2d(p.x, p.z, bot.goal.x, bot.goal.z) < 7) {
+   610→   610→            bot.goal = randomGoal()
+   611→   611→            if (chance(0.5)) { this.enterIdle(bot, now); break }
+   612→   612→            if (chance(0.45)) { this.trySocialize(bot, now); break }
+   613→   613→          }
+   614→   614→        }
+   615→   615→        break
+   616→   616→      }
+   617→   617→      case 'idle': {
+   618→   618→        p.anim = 'idle'
+   619→   619→        p.ry += Math.sin(now / 900 + p.x) * dt * 0.6 // look around
+   620→   620→        if (now >= bot.stateUntil) {
+   621→   621→          if (chance(0.35)) this.trySocialize(bot, now)
+   622→   622→          else { bot.state = 'wander'; bot.goal = randomGoal(); bot.wp = null }
+   623→   623→        }
+   624→   624→        break
+   625→   625→      }
+   626→   626→      case 'social': {
+   627→   627→        const partner = partnerPos(this, bot)
+   628→   628→        if (!partner) { bot.state = 'wander'; bot.wp = null; bot.goal = randomGoal(); break }
+   629→   629→        const d = dist2d(p.x, p.z, partner.x, partner.z)
+   630→   630→        if (d > 4.5) {
+   631→   631→          this.moveToward(bot, partner.x, partner.z, dt)
+   632→   632→        } else {
+   633→   633→          p.anim = 'idle'
+   634→   634→          p.ry = angleLerp(p.ry, Math.atan2(partner.x - p.x, partner.z - p.z), dt * 6)
+   635→   635→        }
+   636→   636→        if (now >= bot.stateUntil) { bot.state = 'wander'; bot.partner = null; bot.wp = null; bot.goal = randomGoal() }
+   637→   637→        break
+   638→   638→      }
+   639→   639→      case 'flee': {
+   640→   640→        if (bot.fleeFrom) this.moveAway(bot, bot.fleeFrom.x, bot.fleeFrom.z, dt)
+   641→   641→        if (now >= bot.stateUntil) {
+   642→   642→          bot.state = 'wander'
+   643→   643→          bot.fleeFrom = null
+   644→   644→          bot.node = nearestNode(p.x, p.z)
+   645→   645→          bot.goal = randomGoal()
+   646→   646→          bot.wp = null
+   647→   647→          bot.speed = rand(2.3, 3.4)
+   648→   648→        }
+   649→   649→        break
+   650→   650→      }
+   651→   651→      case 'march': {
+   652→   652→        const cp = WORLD.checkpoints.find((c) => c.id === bot.marchCp)
+   653→   653→        if (!cp || this.room.checkpoints.has(cp.id)) {
+   654→   654→          // checkpoint reached (by anyone) — celebrate then disperse
+   655→   655→          if (chance(0.6)) { bot.emoteUntil = now + 2200; bot.emoteAnim = 'celebrate' }
+   656→   656→          bot.state = 'wander'
+   657→   657→          bot.marchCp = null
+   658→   658→          bot.goal = randomGoal()
+   659→   659→          bot.wp = null
+   660→   660→          break
+   661→   661→        }
+   662→   662→        if (this.moveToward(bot, bot.goal!.x, bot.goal!.z, dt)) {
+   663→   663→          if (chance(0.5)) { bot.emoteUntil = now + 2000; bot.emoteAnim = 'celebrate' }
+   664→   664→          bot.state = 'wander'
+   665→   665→          bot.marchCp = null
+   666→   666→          bot.goal = randomGoal()
+   667→   667→          bot.wp = null
+   668→   668→        }
+   669→   669→        break
+   670→   670→      }
+   671→   671→    }
+   672→   672→
+   673→   673→    p.lastX = p.x
+   674→   674→    p.lastZ = p.z
+   675→   675→    p.lastStateTime = now
+   676→   676→  }
+   677→   677→
+   678→   678→  private enterIdle(bot: Bot, now: number) {
+   679→   679→    bot.state = 'idle'
+   680→   680→    bot.stateUntil = now + rand(2000, 6000)
+   681→   681→    bot.wp = null
+   682→   682→  }
+   683→   683→
+   684→   684→  private trySocialize(bot: Bot, now: number) {
+   685→   685→    const p = bot.p
+   686→   686→    // prefer a nearby human (bots gravitate toward real protesters), else another bot
+   687→   687→    let target: { id: string; x: number; z: number } | null = null
+   688→   688→    for (const h of this.room.humans()) {
+   689→   689→      if (h.detained || h.id === p.id) continue
+   690→   690→      const d = dist2d(h.x, h.z, p.x, p.z)
+   691→   691→      if (d < 10 && d > 1 && chance(0.5)) { target = { id: h.id, x: h.x, z: h.z }; break }
+   692→   692→    }
+   693→   693→    if (!target) {
+   694→   694→      for (const b of this.bots.values()) {
+   695→   695→        if (b.p.id === p.id || b.p.detained || b.p.dazed || b.state === 'march' || b.state === 'flee') continue
+   696→   696→        const d = dist2d(b.p.x, b.p.z, p.x, p.z)
+   697→   697→        if (d < 9 && d > 1.2) { target = { id: b.p.id, x: b.p.x, z: b.p.z }; break }
+   698→   698→      }
+   699→   699→    }
+   700→   700→    if (!target) { this.enterIdle(bot, now); return }
+   701→   701→    bot.state = 'social'
+   702→   702→    bot.partner = target.id
+   703→   703→    bot.stateUntil = now + rand(4500, 10_000)
+   704→   704→    bot.wp = null
+   705→   705→    if (chance(0.5)) this.io.to(this.room.id).emit('game:quickmsg', p.id, randInt(0, 9))
+   706→   706→    // mutual: if the partner is a bot, it turns to face us too
+   707→   707→    const other = this.bots.get(target.id)
+   708→   708→    if (other && other.state !== 'flee' && other.state !== 'march') {
+   709→   709→      other.state = 'social'
+   710→   710→      other.partner = p.id
+   711→   711→      other.stateUntil = bot.stateUntil
+   712→   712→      if (chance(0.5)) this.io.to(this.room.id).emit('game:quickmsg', other.p.id, randInt(0, 9))
+   713→   713→    }
+   714→   714→  }
+   715→   715→
+   716→   716→  /** Pick the next nav-graph waypoint, biased toward the current goal. */
+   717→   717→  private pickWaypoint(bot: Bot) {
+   718→   718→    const node = NAV[bot.node]
+   719→   719→    if (!node || node.links.length === 0) { bot.node = nearestNode(bot.p.x, bot.p.z); return }
+   720→   720→    let next: number
+   721→   721→    if (bot.goal && chance(0.68)) {
+   722→   722→      let best = node.links[0]
+   723→   723→      let bestD = Infinity
+   724→   724→      for (const l of node.links) {
+   725→   725→        const d = (NAV[l].x - bot.goal.x) ** 2 + (NAV[l].z - bot.goal.z) ** 2
+   726→   726→        if (d < bestD) { bestD = d; best = l }
+   727→   727→      }
+   728→   728→      next = best
+   729→   729→    } else {
+   730→   730→      next = pick(node.links)
+   731→   731→    }
+   732→   732→    bot.node = next
+   733→   733→    const n = NAV[next]
+   734→   734→    // small lateral jitter so bots don't walk in perfect single file
+   735→   735→    const jx = n.x + rand(-2.2, 2.2)
+   736→   736→    const jz = n.z + rand(-2.2, 2.2)
+   737→   737→    bot.wp = pointBlocked(jx, jz, 1.0) ? { x: n.x, z: n.z } : { x: jx, z: jz }
+   738→   738→  }
+   739→   739→
+   740→   740→  /** Move toward a point; returns true on arrival. Handles anim + facing. */
+   741→   741→  private moveToward(bot: Bot, tx: number, tz: number, dt: number): boolean {
+   742→   742→    const p = bot.p
+   743→   743→    const dx = tx - p.x
+   744→   744→    const dz = tz - p.z
+   745→   745→    const d = Math.hypot(dx, dz)
+   746→   746→    if (d < 0.6) { p.anim = 'idle'; return true }
+   747→   747→    const step = bot.speed * dt
+   748→   748→    if (d <= step) { p.x = tx; p.z = tz; p.anim = 'idle'; return true }
+   749→   749→    p.x += (dx / d) * step
+   750→   750→    p.z += (dz / d) * step
+   751→   751→    p.ry = angleLerp(p.ry, Math.atan2(dx, dz), dt * 8)
+   752→   752→    p.anim = bot.speed > 4.6 ? 'run' : 'walk'
+   753→   753→    return false
+   754→   754→  }
+   755→   755→
+   756→   756→  /** Run away from a threat, steering around walls. */
+   757→   757→  private moveAway(bot: Bot, fx: number, fz: number, dt: number) {
+   758→   758→    const p = bot.p
+   759→   759→    const speed = 6.6
+   760→   760→    let dx = p.x - fx
+   761→   761→    let dz = p.z - fz
+   762→   762→    const d = Math.hypot(dx, dz) || 1
+   763→   763→    dx /= d; dz /= d
+   764→   764→    const step = speed * dt
+   765→   765→    // try the direct route, then swing up to ±100° if a wall is in the way
+   766→   766→    for (const ang of [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6]) {
+   767→   767→      const ca = Math.cos(ang), sa = Math.sin(ang)
+   768→   768→      const nx = p.x + (dx * ca - dz * sa) * step
+   769→   769→      const nz = p.z + (dx * sa + dz * ca) * step
+   770→   770→      if (nx < -45 || nx > 45 || nz > 7 || nz < NAV_Z_MAX + 2) continue
+   771→   771→      if (!pointBlocked(nx, nz, 1.1)) {
+   772→   772→        p.x = nx
+   773→   773→        p.z = nz
+   774→   774→        p.ry = angleLerp(p.ry, Math.atan2(dx * ca - dz * sa, dx * sa + dz * ca), dt * 10)
+   775→   775→        p.anim = 'run'
+   776→   776→        return
+   777→   777→      }
+   778→   778→    }
+   779→   779→    p.anim = 'run' // cornered — keep running on the spot
+   780→   780→  }
+   781→   781→
+   782→   782→  // ---------- AOI broadcast (replaces Room's flat game:players blast) ----------
+   783→   783→
+   784→   784→  private broadcastPlayers() {
+   785→   785→    if (this.disposed) return
+   786→   786→    const started = performance.now()
+   787→   787→    const humans: PlayerState[] = this.room.humans()
+   788→   788→    if (humans.length === 0) return
+   789→   789→    const bots: PlayerState[] = []
+   790→   790→    for (const b of this.bots.values()) bots.push(b.p)
+   791→   791→    const n = bots.length
+   792→   792→    // Per-tick payload cache: each bot's wire state is built exactly ONCE per tick
+   793→   793→    // (was O(humans × bots) recomputation + allocation at 12 Hz). Near cache keeps
+   794→   794→    // the full round2 fidelity; mid cache quantizes to 1 decimal (10 cm) for the
+   795→   795→    // MID band and the FAR sweep.
+   796→   796→    const nearCache: PlayerNetState[] = new Array(n)
+   797→   797→    const midCache: PlayerNetState[] = new Array(n)
+   798→   798→    for (let i = 0; i < n; i++) {
+   799→   799→      nearCache[i] = playerNet(bots[i])
+   800→   800→      midCache[i] = botNet1(bots[i])
+   801→   801→    }
+   802→   802→    // rotating far-window sweep — cadence unchanged (≈ every n / BOT_FAR_WINDOW ticks)
+   803→   803→    const { ids: windowIds, nextCursor } = computeFarWindow(bots, this.farCursor)
+   804→   804→    this.farCursor = nextCursor
+   805→   805→    this.tickCount++
+   806→   806→    const ctx: AoiCtx = {
+   807→   807→      tick: this.tickCount,
+   808→   808→      farCursor: this.farCursor,
+   809→   809→      windowIds,
+   810→   810→      near: nearCache,
+   811→   811→      mid: midCache,
+   812→   812→      humans: humans.map(playerNet), // humans: always full detail in every payload
+   813→   813→    }
+   814→   814→    let entriesSent = 0
+   815→   815→    for (const h of humans) {
+   816→   816→      const payload = selectAoiPayload(bots, h, ctx)
+   817→   817→      entriesSent += payload.length
+   818→   818→      this.io.to(h.id).emit('game:players', payload)
+   819→   819→    }
+   820→   820→    // cheap EMAs on this season + fold into the module-level aggregate for /health
+   821→   821→    const dur = performance.now() - started
+   822→   822→    const gap = this.lastBroadcastAt > 0 ? started - this.lastBroadcastAt : TICK_MS
+   823→   823→    this.lastBroadcastAt = started
+   824→   824→    const k = 0.15
+   825→   825→    this.statRate += (1000 / Math.max(1, gap) - this.statRate) * k
+   826→   826→    this.statEntries += (entriesSent - this.statEntries) * k
+   827→   827→    this.statMs += (dur - this.statMs) * k
+   828→   828→    recordBroadcastTick(entriesSent, dur)
+   829→   829→  }
+   830→   830→}
+   831→   831→
+   832→   832→/** Partner position for a socializing bot (human or bot). */
+   833→   833→function partnerPos(season: Season, bot: Bot): { x: number; z: number } | null {
+   834→   834→  if (!bot.partner) return null
+   835→   835→  const other = season.room.getPlayer(bot.partner)
+   836→   836→  if (!other || other.detained || other.dazed) return null
+   837→   837→  return { x: other.x, z: other.z }
+   838→   838→}
+   839→   839→
+   840→   840→// ---------- matchmaking ----------
+   841→   841→
+   842→   842→export class SeasonManager {
+   843→   843→  private seasons = new Map<string, Season>()
+   844→   844→  private counter = 0
+   845→   845→
+   846→   846→  constructor(private io: SocketIOServer, private rooms: Map<string, Room>) {}
+   847→   847→
+   848→   848→  /**
+   849→   849→   * Find the liveliest season with room for one more human, or create the next one.
+   850→   850→   * "Full" = SEASON_MAX_HUMANS real players — bots always backfill the rest.
+   851→   851→   */
+   852→   852→  assign(): Season {
+   853→   853→    let best: Season | null = null
+   854→   854→    for (const s of this.seasons.values()) {
+   855→   855→      if (s.room.humansCount() >= SEASON_MAX_HUMANS) continue
+   856→   856→      if (!best) { best = s; continue }
+   857→   857→      const bh = best.room.humansCount()
+   858→   858→      const sh = s.room.humansCount()
+   859→   859→      if (sh > bh || (sh === bh && s.createdAt > best.createdAt)) best = s
+   860→   860→    }
+   861→   861→    if (best) return best
+   862→   862→    this.counter++
+   863→   863→    const season = new Season(this.io, `sea_${this.counter}`, `SEASON #${this.counter}`, (id) => {
+   864→   864→      const s = this.seasons.get(id)
+   865→   865→      if (s) { s.dispose(); this.seasons.delete(id); this.rooms.delete(id) }
+   866→   866→    })
+   867→   867→    this.seasons.set(season.id, season)
+   868→   868→    this.rooms.set(season.id, season.room)
+   869→   869→    return season
+   870→   870→  }
+   871→   871→
+   872→   872→  get(roomId: string): Season | undefined {
+   873→   873→    return this.seasons.get(roomId)
+   874→   874→  }
+   875→   875→
+   876→   876→  /** Cheap live snapshot of every season — consumed by the /health endpoint. */
+   877→   877→  list(): SeasonInfo[] {
+   878→   878→    const out: SeasonInfo[] = []
+   879→   879→    for (const s of this.seasons.values()) out.push(s.info())
+   880→   880→    return out
+   881→   881→  }
+   882→   882→
+   883→   883→  /** Real (socket-backed) players across every season — for the global join cap. */
+   884→   884→  totalHumans(): number {
+   885→   885→    let n = 0
+   886→   886→    for (const s of this.seasons.values()) n += s.room.humansCount()
+   887→   887→    return n
+   888→   888→  }
+   889→   889→}
+   890→   890→

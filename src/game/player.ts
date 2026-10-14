@@ -24,13 +24,23 @@ export class PlayerController {
   animOverride: AnimName | null = null
   animOverrideTimer = 0
   distance = 0
+  // ---- double jump / coyote / jump buffer (Phase 2) ----
+  jumpsUsed = 0 // jumps consumed in the current airborne sequence
+  coyoteTimer = 0 // grace window after leaving a ledge
+  jumpBufTimer = 0 // early-press buffering window
   private wasGrounded = true
   private footPhase = 0
   onFootstep: ((running: boolean) => void) | null = null
   onLand: ((hard: boolean) => void) | null = null
   onJump: (() => void) | null = null
+  onDoubleJump: (() => void) | null = null
+  onVault: (() => void) | null = null
   onSlide: (() => void) | null = null
   onDazed: (() => void) | null = null
+
+  // stamina costs (floor at 0 — never blocks walking; sprint/jump gating unchanged)
+  private static JUMP_COST = 3
+  private static DOUBLE_JUMP_COST = 6
 
   constructor(
     archetype: string,
@@ -114,11 +124,30 @@ export class PlayerController {
       if (canSprint) this.stamina = Math.max(0, this.stamina - MOVE.staminaDrain * dt / Math.max(0.5, arch.stats.staminaMul))
       else this.stamina = Math.min(this.maxStamina, this.stamina + MOVE.staminaRegen * dt)
 
-      // jump
-      if (oneShot === 'jump' && this.grounded) {
-        this.vel.y = MOVE.jumpVel
-        this.grounded = false
-        this.onJump?.()
+      // ---- jump (double jump + coyote time + 0.12s jump buffer) ----
+      // `oneShot === 'jump'` is a fresh keydown edge (input manager swallows auto-repeat
+      // and fires only on the down transition), so holding Space never double-fires.
+      if (oneShot === 'jump') this.jumpBufTimer = MOVE.jumpBuffer
+      if (this.jumpBufTimer > 0) {
+        if (this.grounded || this.coyoteTimer > 0) {
+          // grounded jump (or coyote-window jump just after stepping off a ledge)
+          this.jumpBufTimer = 0
+          this.coyoteTimer = 0
+          this.stamina = Math.max(0, this.stamina - PlayerController.JUMP_COST)
+          this.vel.y = MOVE.jumpVel
+          this.grounded = false
+          this.jumpsUsed = 1
+          this.onJump?.()
+        } else if (this.jumpsUsed <= MOVE.maxAirJumps) {
+          // mid-air second jump (double jump)
+          this.jumpBufTimer = 0
+          this.stamina = Math.max(0, this.stamina - PlayerController.DOUBLE_JUMP_COST)
+          this.vel.y = MOVE.doubleJumpVel
+          this.jumpsUsed++
+          this.onDoubleJump?.()
+        }
+        // else: airborne with both jumps spent — buffer stays armed and
+        // auto-jumps on the next landing (or coyote window).
       }
       // slide
       if (oneShot === 'slide' && this.grounded && this.stamina >= MOVE.slideCost) {
@@ -143,6 +172,22 @@ export class PlayerController {
     const res = this.physics.moveActor(this.pos, this.vel, dt, MOVE.playerRadius, MOVE.playerHeight)
     this.grounded = res.grounded
     this.distance += Math.hypot(this.pos.x - before.x, this.pos.z - before.z)
+
+    // vault/mantle landed on top of a low obstacle — treat as a fresh grounded contact
+    if (res.vaulted) {
+      this.jumpsUsed = 0
+      this.coyoteTimer = MOVE.coyoteTime
+      this.playAnim('jump', 0.25)
+      this.onVault?.()
+    }
+
+    // coyote-time bookkeeping: refill while grounded, decay while airborne
+    if (this.grounded) {
+      this.jumpsUsed = 0
+      this.coyoteTimer = MOVE.coyoteTime
+    } else if (this.coyoteTimer > 0) {
+      this.coyoteTimer = Math.max(0, this.coyoteTimer - dt)
+    }
 
     // hard landing damage
     if (res.landed && this.wasGrounded === false) {

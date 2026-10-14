@@ -26,6 +26,7 @@ import {
   CAPTURE_MESSAGES,
   archetypeById,
   GIFT_TYPES,
+  POLICE_ATTACK,
 } from '../../src/game/shared/constants'
 import type {
   AnimName,
@@ -39,12 +40,89 @@ import type {
 // One shared immutable world (defs are pure data; brains are per-room).
 export const WORLD = buildWorldDef()
 
+// ---------- Phase 6: random detention release points ----------
+
+export interface ReleasePoint { id: string; x: number; z: number; label: string }
+
+const RELEASE_PAD = 1.2 // clearance required from every (non-walkable) collider
+
+/**
+ * Candidates derived from WORLD data: the four checkpoint detention spots, the plaza
+ * gate area, the market heart and the government-district garden corners. All sit at
+ * z < -60 (out of the spawn/tutorial strip), off-road-ish, and far from the boss arena
+ * gate at the world's far end. Colliding candidates are nudged (or rejected) at module
+ * init — RELEASE_POINTS below is the validated list.
+ */
+const RELEASE_CANDIDATES: ReleasePoint[] = [
+  { id: 'rel_plaza_gate', x: 6, z: -74, label: 'Plaza Gate Post' },        // checkpoint 1 detention, nudged off the tutorial platform
+  { id: 'rel_plaza_west', x: -24, z: -76, label: 'Plaza West Corner' },    // plaza gate / west side
+  { id: 'rel_market_heart', x: 0, z: -140, label: 'Chowk Market' },        // market center (Zone B)
+  { id: 'rel_cp2_market_exit', x: 12, z: -190, label: 'Market Exit Post' },// checkpoint 2 detention
+  { id: 'rel_cp3_security', x: 10, z: -268, label: 'Security Gate Post' }, // checkpoint 3 detention
+  { id: 'rel_cp4_avenue', x: 14, z: -408, label: 'Avenue Junction Post' }, // checkpoint 4 detention
+  { id: 'rel_gov_garden_w', x: -18, z: -470, label: 'Ministry Garden West' },
+  { id: 'rel_gov_garden_e', x: 18, z: -470, label: 'Ministry Garden East' },
+]
+
+/** True when (x,z) sits inside any non-walkable collider inflated by `pad` (walkable platforms are step-ups, fine). */
+function releasePointBlocked(x: number, z: number, pad: number): boolean {
+  for (const c of WORLD.colliders) {
+    if (c.walkable) continue
+    if (x >= c.minX - pad && x <= c.maxX + pad && z >= c.minZ - pad && z <= c.maxZ + pad) return true
+  }
+  return false
+}
+
+/** Validated release points (colliding candidates nudged on a small deterministic spiral, then rejected). */
+export const RELEASE_POINTS: ReleasePoint[] = (() => {
+  const out: ReleasePoint[] = []
+  for (const c of RELEASE_CANDIDATES) {
+    if (!releasePointBlocked(c.x, c.z, RELEASE_PAD)) { out.push(c); continue }
+    let placed = false
+    for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2], [3, 0], [-3, 0], [0, 3], [0, -3], [4, 0], [-4, 0], [0, 4], [0, -4]]) {
+      const nx = c.x + dx, nz = c.z + dz
+      if (nx < -46 || nx > 46 || nz < -568 || nz > 7) continue
+      if (!releasePointBlocked(nx, nz, RELEASE_PAD)) { out.push({ ...c, x: nx, z: nz }); placed = true; break }
+    }
+    if (!placed) console.log(`[room] release point REJECTED (collides with world): ${c.id}`)
+  }
+  return out
+})()
+
+/**
+ * Pick a random release destination (Phase 6).
+ * Filters: (a) never the player's lastReleaseId, (b) ≥30 m from any non-detained
+ * squadmate — but only while ≥2 alternatives remain, (c) outside the boss arena zone,
+ * (d) still clear of world colliders. Fallbacks: relax the squad filter → any point →
+ * the spawn plaza (legacy detention behavior).
+ */
+export function pickReleasePoint(
+  lastReleaseId: string | null,
+  squadPositions: ReadonlyArray<{ x: number; z: number }>,
+): ReleasePoint {
+  const arena = WORLD.bossArena
+  const inArena = (x: number, z: number) => Math.hypot(x - arena.x, z - arena.z) < arena.radius + 4
+  const base = RELEASE_POINTS.filter((pt) =>
+    pt.id !== lastReleaseId && !inArena(pt.x, pt.z) && !releasePointBlocked(pt.x, pt.z, RELEASE_PAD))
+  let pool = base.filter((pt) => !squadPositions.some((s) => Math.hypot(s.x - pt.x, s.z - pt.z) < 30))
+  if (pool.length < 2) pool = base // keep ≥2 alternatives: drop the squadmate filter first
+  if (pool.length === 0) pool = RELEASE_POINTS.filter((pt) => !inArena(pt.x, pt.z))
+  if (pool.length === 0) pool = RELEASE_POINTS.slice()
+  if (pool.length === 0) return { id: 'spawn', x: WORLD.spawn.x, z: WORLD.spawn.z, label: 'Protest Plaza' }
+  return randomOf(pool)
+}
+
 export const ROOM_CAP = 20
 export const PLAYER_CAP = 200
 const BOUNDS_X = 47 // ±
 const BOUNDS_Z_MIN = -570
 const BOUNDS_Z_MAX = 9
-const MAX_STATE_DIST = 25 // max meters between accepted state updates (else snap)
+// Max horizontal movement accepted between two client state updates (>18 m/tick is a
+// teleport — snap back to the last accepted position). Phase 3/10 tightened from 25:
+// legit sprint tops out ~1 m per 83 ms update, so 18 m is a huge grace margin while
+// still catching warp-cheats; the mechanism (snap to last accepted pos) is unchanged.
+const MAX_STATE_DIST = 18
+const MAX_STATE_Y = 14 // impossible altitude reject (world walls are 14 m tall)
 const PICKUP_RADIUS = 3
 const REVIVE_RADIUS = 3
 const GIFT_RADIUS = 4.5
@@ -91,6 +169,7 @@ export interface PlayerState {
   giftTimes: number[]
   inviteTimes: number[]
   kudosTimes: number[]
+  lastReleaseId: string | null // anti-repeat: avoid releasing to the same point twice in a row
 }
 
 export interface ItemState {
@@ -194,6 +273,7 @@ export class Room {
       giftTimes: [],
       inviteTimes: [],
       kudosTimes: [],
+      lastReleaseId: null,
     }
     this.players.set(socketId, p)
     this.start()
@@ -233,6 +313,14 @@ export class Room {
    */
   playersBroadcaster: (() => void) | null = null
 
+  /**
+   * Optional: returns the positions of a player's non-detained squadmates (used by
+   * release-point selection to avoid dropping detainees on their cell). index.ts owns
+   * the squad maps and injects this for every room it creates (incl. seasons).
+   * When unset, releasePlayer falls back to "all other non-detained humans".
+   */
+  squadmatePositions: ((playerId: string) => Array<{ x: number; z: number }>) | null = null
+
   private emitRoom(event: string, ...args: unknown[]) {
     this.io.to(this.id).emit(event, ...args)
   }
@@ -247,7 +335,7 @@ export class Room {
 
     let x = clamp(num(s.x, p.x), -BOUNDS_X, BOUNDS_X)
     let z = clamp(num(s.z, p.z), BOUNDS_Z_MIN, BOUNDS_Z_MAX)
-    const y = num(s.y, p.y)
+    const y = Math.min(num(s.y, p.y), MAX_STATE_Y) // Phase 3/10: impossible altitude is clamped (walls are 14 m)
     const ry = num(s.ry, p.ry)
 
     // Boss gate: while closed, nobody slips through the barrier corridor
@@ -436,12 +524,17 @@ export class Room {
     this.emitRoom('game:capture', p.id, p.detainUntil, randomOf(CAPTURE_MESSAGES))
   }
 
-  /** Release to the furthest activated checkpoint's detention point. */
+  /**
+   * Release to a random validated point (Phase 6): never the same point twice in a
+   * row, ≥30 m from non-detained squadmates while alternatives remain, never inside
+   * the boss arena. Detention duration semantics are unchanged.
+   */
   private releasePlayer(p: PlayerState) {
-    let cpId = 0
-    for (const c of this.checkpoints) cpId = Math.max(cpId, c)
-    const cp = WORLD.checkpoints.find(c => c.id === cpId)
-    const dest = cp?.detention ?? WORLD.spawn
+    const squad = this.squadmatePositions
+      ? this.squadmatePositions(p.id)
+      : [...this.humans()].filter((h) => h.id !== p.id && !h.detained).map((h) => ({ x: h.x, z: h.z }))
+    const dest = pickReleasePoint(p.lastReleaseId, squad)
+    p.lastReleaseId = dest.id
     p.detained = false
     p.detainUntil = 0
     p.x = dest.x
@@ -451,7 +544,8 @@ export class Room {
     p.lastZ = dest.z
     p.lastStateTime = Date.now()
     p.anim = 'idle'
-    this.emitRoom('game:release', p.id, p.x, p.z)
+    // 4th arg `label` is additive — existing clients ignore extra args
+    this.emitRoom('game:release', p.id, p.x, p.z, dest.label)
   }
 
   // ---------- tick ----------
@@ -469,7 +563,7 @@ export class Room {
     for (const p of this.players.values()) {
       if (!p.detained && !p.dazed) {
         const grace = now - p.joinedAt < 10000 && dist2d(p.x, p.z, WORLD.spawn.x, WORLD.spawn.z) < 16
-        const view: NpcPlayerView = { id: p.id, x: p.x, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot }
+        const view: NpcPlayerView = { id: p.id, x: p.x, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot, health: p.health }
         views.push(view)
         if (!p.bot) bossViews.push(view)
       }
@@ -480,6 +574,11 @@ export class Room {
       const res = tickNpc(n, views, WORLD.colliders, dt, now)
       for (const ev of res.events) {
         if (ev.kind === 'capture') this.capturePlayer(ev.playerId, now)
+        else if (ev.kind === 'hit') {
+          // Phase 5 police melee — damagePlayer emits game:damage (kind 'police') + game:health,
+          // and 0 hp → dazed. No extra event: clients react to game:damage.
+          this.damagePlayer(ev.playerId, ev.amount ?? POLICE_ATTACK.fallbackDmg, 'police', now)
+        }
       }
     }
 
@@ -499,7 +598,7 @@ export class Room {
       }
     }
 
-    // 5. Detention timers → release at furthest activated checkpoint
+    // 5. Detention timers → release to a random validated point (Phase 6)
     for (const p of this.players.values()) {
       if (p.detained && now >= p.detainUntil) this.releasePlayer(p)
     }
@@ -627,8 +726,19 @@ export class Room {
 
   npcsArray(): NpcNetState[] {
     const out: NpcNetState[] = []
+    const now = Date.now()
     for (const n of this.npcs) {
-      out.push({ id: n.id, x: round2(n.x), z: round2(n.z), ry: round2(n.ry), state: n.state, alert: round2(n.alert) })
+      const net: NpcNetState = { id: n.id, x: round2(n.x), z: round2(n.z), ry: round2(n.ry), state: n.state, alert: round2(n.alert) }
+      // Phase 5 telegraph fields — only sent while meaningful (keeps the 10 Hz payload small):
+      // 'windup' + attackAt (absolute server ms the strike lands → client times impact FX),
+      // or 'stagger' for the 0.35 s window after a landed strike.
+      if (n.attackTelegraphUntil > now) {
+        net.anim = 'windup'
+        net.attackAt = n.attackTelegraphUntil
+      } else if (n.staggerUntil > now) {
+        net.anim = 'stagger'
+      }
+      out.push(net)
     }
     for (const sl of this.searchlights) {
       out.push({ id: sl.id, x: WORLD.searchlights.find(s => s.id === sl.id)?.x ?? 0, z: WORLD.searchlights.find(s => s.id === sl.id)?.z ?? 0, ry: round2(sl.ry), state: 'idle', alert: 0 })

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useGameStore, type EnvHud, type PerfHud } from '@/lib/game-store'
-import { uiActions, ZONE_ACCENTS } from '@/lib/game-store'
+import { uiActions, ZONE_ACCENTS, MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM } from '@/lib/game-store'
 import { ITEM_CONFIG, CAPTURE_MESSAGES } from '@/game/shared/constants'
 import {
   Heart, Zap, Vote, Users, Wifi, WifiOff, Map as MapIcon, Hand, Star,
@@ -212,6 +212,7 @@ export default function Hud() {
   const season = useGameStore((s) => s.season)
   const toggleMap = useGameStore((s) => s.toggleMap)
   const minimapRef = useRef<HTMLCanvasElement>(null)
+  const minimapBoxRef = useRef<HTMLDivElement>(null)
   const [zoneVisible, setZoneVisible] = useState(true)
   const [now, setNow] = useState(Date.now())
   const flashAt = useGameStore((s) => s.hud.env.flashAt)
@@ -229,6 +230,29 @@ export default function Hud() {
   useEffect(() => {
     uiActions().setHudMinimap(minimapRef.current)
     return () => uiActions().setHudMinimap(null)
+  }, [])
+
+  // mouse-wheel over the radar adjusts the minimap zoom (clamped + persisted via the
+  // same setSettings + localStorage('votechor_settings') contract the big map uses)
+  useEffect(() => {
+    const el = minimapBoxRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const st = useGameStore.getState()
+      const cur = st.settings.minimapZoom ?? 150
+      const next = Math.max(MINIMAP_MIN_ZOOM, Math.min(MINIMAP_MAX_ZOOM, Math.round((cur + (e.deltaY > 0 ? 12 : -12)) / 2) * 2))
+      if (next === cur) return
+      st.setSettings({ minimapZoom: next })
+      try {
+        localStorage.setItem('votechor_settings', JSON.stringify({ ...st.settings, minimapZoom: next, keybinds: { ...st.settings.keybinds } }))
+      } catch {
+        /* private browsing — lives for this session only */
+      }
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
   // zone banner fades out after a change
@@ -505,19 +529,22 @@ export default function Hud() {
         </AnimatePresence>
       </div>
 
-      {/* ---------- bottom-right: minimap ---------- */}
-      <div className="absolute bottom-2 right-2 origin-bottom-right scale-90 sm:bottom-3 sm:right-3 sm:scale-100">
+      {/* ---------- bottom-right: circular minimap (GTA-style radar) ---------- */}
+      <div
+        ref={minimapBoxRef}
+        className="absolute bottom-2 right-2 origin-bottom-right scale-90 sm:bottom-3 sm:right-3 sm:scale-100"
+      >
         <button
           onClick={() => toggleMap(true)}
-          title="Open big map (M) — adjust minimap zoom there"
-          className="pointer-events-auto group relative block overflow-hidden rounded-2xl border-2 border-[#1c1a17]/80 bg-[#1c1a17]/85 p-1 shadow-[4px_4px_0_rgba(28,26,23,0.8)] transition-all hover:-translate-y-0.5 hover:shadow-[5px_6px_0_rgba(28,26,23,0.8)]"
+          title="Open big map (M) — scroll on the radar to zoom it"
+          className="pointer-events-auto group relative block h-[148px] w-[148px] overflow-hidden rounded-full border-2 border-[#f5efdc]/85 bg-[#1c1a17] shadow-[4px_4px_0_rgba(28,26,23,0.8)] transition-transform duration-150 hover:scale-[1.035] hover:shadow-[5px_6px_0_rgba(28,26,23,0.8)] sm:h-[172px] sm:w-[172px]"
         >
-          <canvas ref={minimapRef} width={140} height={420} className="block h-[210px] w-[70px] rounded-xl sm:h-[280px] sm:w-[93px]" />
-          <span className="mt-0.5 flex items-center justify-center gap-1 text-[8px] font-black uppercase tracking-widest text-[#f5efdc]/70">
-            <MapIcon className="h-2.5 w-2.5" /> M — big map
-          </span>
-          <span className="absolute left-1.5 top-1.5 rounded bg-[#1c1a17]/80 px-1 py-px text-[7px] font-black uppercase tracking-wider text-[#f2c14e]">
+          <canvas ref={minimapRef} width={176} height={176} className="block h-full w-full" />
+          <span className="absolute left-2 top-2 rounded bg-[#1c1a17]/80 px-1 py-px text-[7px] font-black uppercase tracking-wider text-[#f2c14e]">
             {settings.minimapZoom >= 580 ? 'full city' : `${Math.round(settings.minimapZoom)}m view`}
+          </span>
+          <span className="absolute bottom-1.5 left-1/2 flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded bg-[#1c1a17]/70 px-1.5 py-px text-[7px] font-black uppercase tracking-widest text-[#f5efdc]/75">
+            <MapIcon className="h-2.5 w-2.5" /> M — big map
           </span>
         </button>
       </div>
