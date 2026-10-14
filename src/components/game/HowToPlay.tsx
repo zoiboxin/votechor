@@ -15,7 +15,7 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['F'], action: 'Gift Item', note: 'Hand your best item to the nearest teammate — support points + Good Samaritan medal at 3 gifts' },
   { keys: ['G'], action: 'Emote Wheel', note: '4 unlocked by default — level up & earn medals for the rest' },
   { keys: ['T'], action: 'Quick Messages' },
-  { keys: ['M'], action: 'Big Map' },
+  { keys: ['M'], action: 'Big Map', note: 'Also sets your minimap zoom — slider + live preview on the map' },
   { keys: ['TAB'], action: 'Squad Panel', note: 'Create a protest cell, share the 4-letter code, RALLY to cellmates' },
   { keys: ['1–8'], action: 'Use Inventory Item', note: 'Right-click a slot to drop it' },
   { keys: ['P'], action: 'Photo Mode', note: 'O cycles filters · wheel zooms · K saves a snapshot PNG' },

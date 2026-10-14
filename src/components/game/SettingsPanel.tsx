@@ -32,6 +32,7 @@ const DEFAULTS: Settings = {
   masterVolume: 0.8, musicVolume: 0.5, sfxVolume: 0.9,
   mouseSensitivity: 1, invertY: false, quality: 'auto',
   showFps: false, reducedEffects: false,
+  minimapZoom: 150,
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 

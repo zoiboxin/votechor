@@ -17,6 +17,10 @@ export class InputManager {
   keys = new Set<string>()
   keybinds: Record<string, string> = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' }
   enabled = false
+  /** While true (map/big overlay open) movement output is zeroed but keys + one-shots keep working. */
+  suppressed = false
+  /** When false, losing pointer lock (intentional release for map UI) does not fire the pause one-shot. */
+  pauseOnUnlock = true
   pointerLocked = false
   sensitivity = 1
   invertY = false
@@ -38,7 +42,7 @@ export class InputManager {
     add(window, 'keyup', (e) => this.onKey(e as KeyboardEvent, false))
     add(document, 'pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === this.el
-      if (!this.pointerLocked && this.enabled) this.onOneShot?.('pause')
+      if (!this.pointerLocked && this.enabled && this.pauseOnUnlock) this.onOneShot?.('pause')
     })
     add(el, 'mousemove', (e) => {
       if (!this.pointerLocked || !this.enabled) return
@@ -47,7 +51,7 @@ export class InputManager {
       this.state.lookDy += me.movementY * 0.0022 * this.sensitivity * (this.invertY ? -1 : 1)
     })
     add(el, 'click', () => {
-      if (this.enabled && !this.pointerLocked) this.el.requestPointerLock()
+      if (this.enabled && !this.pointerLocked) this.requestLock()
     })
     add(window, 'blur', () => { this.keys.clear(); this.sync() })
   }
@@ -78,22 +82,26 @@ export class InputManager {
     this.sync()
   }
 
-  /** Recompute derived input state (called after any input source changes). */
+  /** Recompute derived input state (called after any input source changes).
+   *  While suppressed (map open) movement output is zeroed but key tracking + one-shots stay live,
+   *  so M/Escape can still close the overlay. */
   sync() {
     const k = this.keys, b = this.keybinds
     let f = 0, s = 0
-    if (k.has(b.forward) || k.has('ArrowUp')) f += 1
-    if (k.has(b.back) || k.has('ArrowDown')) f -= 1
-    if (k.has(b.left) || k.has('ArrowLeft')) s -= 1
-    if (k.has(b.right) || k.has('ArrowRight')) s += 1
-    if (this.touchActive) { f += -this.touchMove.y; s += this.touchMove.x }
+    if (!this.suppressed) {
+      if (k.has(b.forward) || k.has('ArrowUp')) f += 1
+      if (k.has(b.back) || k.has('ArrowDown')) f -= 1
+      if (k.has(b.left) || k.has('ArrowLeft')) s -= 1
+      if (k.has(b.right) || k.has('ArrowRight')) s += 1
+      if (this.touchActive) { f += -this.touchMove.y; s += this.touchMove.x }
+    }
     const clamp = (v: number) => Math.max(-1, Math.min(1, v))
     this.state.forward = clamp(f)
     this.state.strafe = clamp(s)
-    this.state.jump = k.has(b.jump) || this.touchButtons.jump
-    this.state.sprint = k.has(b.sprint) || this.touchButtons.sprint
-    this.state.slide = k.has(b.slide) || this.touchButtons.slide
-    this.state.interact = k.has(b.interact) || this.touchButtons.interact
+    this.state.jump = !this.suppressed && (k.has(b.jump) || this.touchButtons.jump)
+    this.state.sprint = !this.suppressed && (k.has(b.sprint) || this.touchButtons.sprint)
+    this.state.slide = !this.suppressed && (k.has(b.slide) || this.touchButtons.slide)
+    this.state.interact = !this.suppressed && (k.has(b.interact) || this.touchButtons.interact)
   }
 
   consumeLook(): [number, number] {
@@ -112,7 +120,27 @@ export class InputManager {
   setEnabled(v: boolean) {
     this.enabled = v
     if (!v) { this.keys.clear(); this.sync() }
-    else if (!this.pointerLocked && matchMedia('(pointer: fine)').matches) this.el.requestPointerLock?.()
+    else if (!this.pointerLocked && matchMedia('(pointer: fine)').matches) this.requestLock()
+  }
+
+  /** Drop every held key (used when an overlay opens so the protester stops mid-stride). */
+  clearKeys() {
+    this.keys.clear()
+    this.sync()
+  }
+
+  /** Release pointer lock WITHOUT triggering the pause one-shot (used when the map opens). */
+  releasePointer() {
+    this.pauseOnUnlock = false
+    if (this.pointerLocked) document.exitPointerLock?.()
+  }
+
+  /** requestPointerLock that swallows cooldown/gesture rejections (Chrome rate-limits re-locks). */
+  requestLock() {
+    try {
+      const r = this.el.requestPointerLock?.() as unknown
+      if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch(() => { /* cooldown — canvas click re-locks */ })
+    } catch { /* pointer lock unavailable */ }
   }
 
   dispose() {

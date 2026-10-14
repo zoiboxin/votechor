@@ -154,7 +154,7 @@ function DazedOverlay() {
   )
 }
 
-export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<HTMLCanvasElement | null> }) {
+export default function Hud() {
   const hud = useGameStore((s) => s.hud)
   const settings = useGameStore((s) => s.settings)
   const fps = useGameStore((s) => s.fps)
@@ -165,24 +165,11 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
   const [zoneVisible, setZoneVisible] = useState(true)
   const [now, setNow] = useState(Date.now())
 
-  // copy engine-drawn minimap buffer to the visible strip every frame
+  // the engine draws the zoomed, player-following minimap straight into the visible strip
   useEffect(() => {
-    let raf = 0
-    const draw = () => {
-      const buf = minimapBuffer.current
-      const vis = minimapRef.current
-      if (buf && vis) {
-        const ctx = vis.getContext('2d')
-        if (ctx) {
-          ctx.clearRect(0, 0, vis.width, vis.height)
-          ctx.drawImage(buf, 0, 0)
-        }
-      }
-      raf = requestAnimationFrame(draw)
-    }
-    raf = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(raf)
-  }, [minimapBuffer])
+    uiActions().setHudMinimap(minimapRef.current)
+    return () => uiActions().setHudMinimap(null)
+  }, [])
 
   // zone banner fades out after a change
   useEffect(() => {
@@ -411,12 +398,15 @@ export default function Hud({ minimapBuffer }: { minimapBuffer: React.RefObject<
       <div className="absolute bottom-2 right-2 origin-bottom-right scale-90 sm:bottom-3 sm:right-3 sm:scale-100">
         <button
           onClick={() => toggleMap(true)}
-          title="Open big map (M)"
+          title="Open big map (M) — adjust minimap zoom there"
           className="pointer-events-auto group relative block overflow-hidden rounded-2xl border-2 border-[#1c1a17]/80 bg-[#1c1a17]/85 p-1 shadow-[4px_4px_0_rgba(28,26,23,0.8)] transition-all hover:-translate-y-0.5 hover:shadow-[5px_6px_0_rgba(28,26,23,0.8)]"
         >
           <canvas ref={minimapRef} width={140} height={420} className="block h-[210px] w-[70px] rounded-xl sm:h-[280px] sm:w-[93px]" />
           <span className="mt-0.5 flex items-center justify-center gap-1 text-[8px] font-black uppercase tracking-widest text-[#f5efdc]/70">
             <MapIcon className="h-2.5 w-2.5" /> M — big map
+          </span>
+          <span className="absolute left-1.5 top-1.5 rounded bg-[#1c1a17]/80 px-1 py-px text-[7px] font-black uppercase tracking-wider text-[#f2c14e]">
+            {settings.minimapZoom >= 580 ? 'full city' : `${Math.round(settings.minimapZoom)}m view`}
           </span>
         </button>
       </div>

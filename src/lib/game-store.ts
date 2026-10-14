@@ -53,6 +53,8 @@ export interface HudState {
   cinematic: boolean
   spectating: string | null // teammate name when camera follows them while detained
   hunted: boolean // police/security actively chasing the local player
+  mapX: number // player world x (0.5m grid) — used by the big-map minimap-window overlay
+  mapZ: number // player world z
 }
 
 export interface BossHud {
@@ -79,6 +81,35 @@ export interface Settings {
   showFps: boolean
   reducedEffects: boolean
   keybinds: Record<string, string>
+  /** How many world-meters the corner minimap shows vertically (80 = close-up, 582 = full city). */
+  minimapZoom: number
+}
+
+// ---- minimap zoom window helpers (shared by the engine renderer + BigMap settings UI) ----
+export const MINIMAP_ASPECT = 140 / 420 // HUD strip aspect (w/h)
+export const MINIMAP_MIN_ZOOM = 80
+export const MINIMAP_MAX_ZOOM = 582 // full world z-span
+const WORLD_MIN_X = -48
+const WORLD_MAX_X = 48
+const WORLD_MIN_Z = -572
+const WORLD_MAX_Z = 10
+
+/**
+ * The world-rectangle the corner minimap currently shows: a window of `zoom` meters
+ * (vertically) centered on the player, clamped so it never sticks out past the city bounds.
+ */
+export function minimapWindow(x: number, z: number, zoom: number) {
+  const spanZ = Math.max(MINIMAP_MIN_ZOOM, Math.min(MINIMAP_MAX_ZOOM, zoom || MINIMAP_MAX_ZOOM))
+  const spanX = spanZ * MINIMAP_ASPECT
+  const fullW = WORLD_MAX_X - WORLD_MIN_X
+  const fullH = WORLD_MAX_Z - WORLD_MIN_Z
+  const cx = spanX >= fullW
+    ? (WORLD_MIN_X + WORLD_MAX_X) / 2
+    : Math.max(WORLD_MIN_X + spanX / 2, Math.min(WORLD_MAX_X - spanX / 2, x))
+  const cz = spanZ >= fullH
+    ? (WORLD_MIN_Z + WORLD_MAX_Z) / 2
+    : Math.max(WORLD_MIN_Z + spanZ / 2, Math.min(WORLD_MAX_Z - spanZ / 2, z))
+  return { cx, cz, spanX, spanZ }
 }
 
 export interface MatchSummary extends MatchEndPayload {
@@ -231,6 +262,7 @@ const defaultHud: HudState = {
   cinematic: false,
   spectating: null,
   hunted: false,
+  mapX: 0, mapZ: 0,
 }
 
 const defaultBoss: BossHud = {
@@ -242,6 +274,7 @@ const defaultSettings: Settings = {
   masterVolume: 0.8, musicVolume: 0.5, sfxVolume: 0.9,
   mouseSensitivity: 1, invertY: false, quality: 'auto',
   showFps: false, reducedEffects: false,
+  minimapZoom: 150,
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 
@@ -333,6 +366,8 @@ export interface UIActions {
   giftTo: (targetId: string) => void
   kudosTo: (targetId: string) => void
   mvpVote: (targetId: string) => void
+  /** Hand the visible HUD minimap canvas to the engine (it draws the zoomed window directly). */
+  setHudMinimap: (c: HTMLCanvasElement | null) => void
 }
 const actionImpl: Partial<UIActions> = {}
 export function registerUIActions(impl: UIActions) { Object.assign(actionImpl, impl) }

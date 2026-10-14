@@ -24,7 +24,7 @@ import {
   BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES,
 } from './shared/constants'
 import type { AnimName, BossNetState, ItemType } from './shared/types'
-import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
+import { useGameStore, registerUIActions, minimapWindow, type MatchSummary } from '@/lib/game-store'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG } from '@/lib/cosmetics'
 
 export const QUICK_MESSAGES = [
@@ -131,6 +131,7 @@ export class Game {
   private lastTokenPos = { x: 0, z: 0 }
   private humorTimer = 30
   private minimapCanvas: HTMLCanvasElement | null = null
+  private hudMinimapCanvas: HTMLCanvasElement | null = null
   private matchEnded = false
   private endHandled = false
   private archetype = 'student'
@@ -283,13 +284,31 @@ export class Game {
       },
     }
 
-    // store subscription for settings
-    this.unsubStore = useGameStore.subscribe((s) => {
+    // store subscription for settings + map/pause input orchestration
+    this.unsubStore = useGameStore.subscribe((s, prev) => {
       this.store = s
       AudioManager.setVolumes({ master: s.settings.masterVolume, music: s.settings.musicVolume, sfx: s.settings.sfxVolume })
       this.input.keybinds = s.settings.keybinds
       this.input.sensitivity = s.settings.mouseSensitivity
       this.input.invertY = s.settings.invertY
+      // ---- map toggled from ANY source (M key, HUD minimap click, big-map X / backdrop / Escape) ----
+      if (s.mapOpen !== prev.mapOpen) {
+        this.input.suppressed = s.mapOpen
+        this.input.pauseOnUnlock = !s.mapOpen
+        if (s.mapOpen) {
+          this.input.clearKeys() // stop mid-stride
+          this.input.releasePointer() // free the mouse for the map UI — no pause side-effect
+        } else if (s.uiMode === 'playing') {
+          this.input.clearKeys()
+          this.input.setEnabled(true) // re-arm keyboard + pointer lock (fixes frozen controls)
+        }
+      }
+      // ---- returning to 'playing' from the pause menu must ALWAYS restore input ----
+      // (the Resume button only flips uiMode; without this the keyboard stays dead)
+      if (s.uiMode !== prev.uiMode && s.uiMode === 'playing' && prev.uiMode === 'paused') {
+        this.input.suppressed = s.mapOpen
+        if (!s.mapOpen) { this.input.clearKeys(); this.input.setEnabled(true) }
+      }
     })
 
     this.engine.onFixedUpdate = (dt) => this.fixedUpdate(dt)
@@ -350,6 +369,7 @@ export class Game {
         if (!targetId || targetId === this.net.playerId) return
         this.net.mvpVote(targetId)
       },
+      setHudMinimap: (c) => this.setHudMinimapCanvas(c),
     })
 
     this.ensurePhotoKeyHandler()
@@ -382,6 +402,11 @@ export class Game {
     this.clearOnboarding()
     this.matchEnded = false
     this.endHandled = false
+    // force-close any overlays so a fresh match never boots with stuck suppressed input
+    useGameStore.getState().toggleMap(false)
+    useGameStore.getState().toggleSquad(false)
+    useGameStore.getState().toggleEmoteWheel(false)
+    this.input.suppressed = false
     this.tokens = 0
     this.kudosSentTo.clear()
     useGameStore.getState().resetPostMatch()
@@ -523,6 +548,10 @@ export class Game {
     this.net.leave()
     this.running = false
     this.input.setEnabled(false)
+    this.input.suppressed = false
+    useGameStore.getState().toggleMap(false)
+    useGameStore.getState().toggleSquad(false)
+    useGameStore.getState().toggleEmoteWheel(false)
     this.clearOnboarding()
     this.npcs.bubbles.clear()
     this.playerBubbles.clear()
@@ -934,6 +963,8 @@ export class Game {
     const store = useGameStore.getState()
     switch (a) {
       case 'pause':
+        // while the big map is open, Escape closes the map instead of pausing
+        if (store.mapOpen) { store.toggleMap(false); break }
         if (store.uiMode === 'playing') { this.exitPhotoMode(false); store.setUIMode('paused'); this.input.setEnabled(false) }
         else if (store.uiMode === 'paused') { store.setUIMode('playing'); this.input.setEnabled(true) }
         break
@@ -1385,6 +1416,8 @@ export class Game {
   private renderUpdate(dt: number) {
     if (!this.player) return
     const store = useGameStore.getState()
+    // corner minimap (zoomed player-following window) — every frame for smooth re-centering
+    this.drawHudMinimap()
     // fx update (floating popups) + player speech bubbles (emotes, quick messages)
     this.fx.update(dt)
     this.playerBubbles.update(dt)
@@ -1564,10 +1597,13 @@ export class Game {
       score: this.stats.tokens * 45 + this.stats.checkpoints * 60,
       compass: { yawDeg, markers },
       spectating: p.isDetained ? this.spectateName : null,
+      mapX: Math.round(p.pos.x * 2) / 2,
+      mapZ: Math.round(p.pos.z * 2) / 2,
     })
   }
 
   setMinimapCanvas(c: HTMLCanvasElement | null) { this.minimapCanvas = c }
+  setHudMinimapCanvas(c: HTMLCanvasElement | null) { this.hudMinimapCanvas = c }
 
   private drawMinimap() {
     const canvas = this.minimapCanvas
@@ -1626,6 +1662,111 @@ export class Game {
     ctx.moveTo(0, -5); ctx.lineTo(3.6, 4); ctx.lineTo(0, 2); ctx.lineTo(-3.6, 4)
     ctx.closePath(); ctx.fill(); ctx.stroke()
     ctx.restore()
+  }
+
+  /**
+   * Corner minimap: a zoomed, player-following window (settings.minimapZoom meters tall)
+   * so you can actually see yourself, patrols and nearby loot. Drawn straight into the
+   * HUD's visible canvas every frame. The full-city buffer above is only for the big map.
+   */
+  private drawHudMinimap() {
+    const canvas = this.hudMinimapCanvas
+    if (!canvas || !this.player) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const W = canvas.width, H = canvas.height
+    ctx.clearRect(0, 0, W, H)
+    const win = minimapWindow(this.player.pos.x, this.player.pos.z, this.store.settings.minimapZoom)
+    const toX = (x: number) => ((x - (win.cx - win.spanX / 2)) / win.spanX) * W
+    const toY = (z: number) => (((win.cz + win.spanZ / 2) - z) / win.spanZ) * H
+    const inWin = (x: number, z: number, pad = 8) => {
+      const px = toX(x), py = toY(z)
+      return px > -pad && px < W + pad && py > -pad && py < H + pad
+    }
+    // outside-world shade
+    ctx.fillStyle = 'rgba(28,26,23,0.6)'
+    ctx.fillRect(0, 0, W, H)
+    // zones
+    const zoneColors = ['rgba(201,111,74,0.4)', 'rgba(184,92,62,0.4)', 'rgba(127,154,140,0.4)', 'rgba(201,168,106,0.4)', 'rgba(154,123,95,0.45)']
+    this.world.zones.forEach((z, i) => {
+      ctx.fillStyle = zoneColors[i]
+      ctx.fillRect(0, toY(z.zStart), W, toY(z.zEnd) - toY(z.zStart))
+    })
+    // road
+    ctx.fillStyle = 'rgba(60,58,54,0.85)'
+    ctx.fillRect(toX(-8), 0, Math.max(3, toX(8) - toX(-8)), H)
+    // world side edges (visible when zoomed into a side lane)
+    ctx.strokeStyle = 'rgba(245,239,220,0.35)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(toX(-48), 0); ctx.lineTo(toX(-48), H)
+    ctx.moveTo(toX(48), 0); ctx.lineTo(toX(48), H)
+    ctx.stroke()
+    // checkpoints
+    for (const cp of this.world.checkpoints) {
+      if (!inWin(cp.x, cp.z)) continue
+      ctx.fillStyle = this.activatedCheckpoints.has(cp.id) ? '#4e9b6e' : '#c9482e'
+      ctx.beginPath(); ctx.arc(toX(cp.x), toY(cp.z), 4.2, 0, 7); ctx.fill()
+      ctx.strokeStyle = 'rgba(28,26,23,0.8)'; ctx.lineWidth = 1.2; ctx.stroke()
+    }
+    // boss arena
+    if (inWin(this.world.bossArena.x, this.world.bossArena.z)) {
+      ctx.fillStyle = this.gateOpen ? '#8c1f28' : 'rgba(140,31,40,0.45)'
+      ctx.beginPath(); ctx.arc(toX(this.world.bossArena.x), toY(this.world.bossArena.z), 6, 0, 7); ctx.fill()
+    }
+    // tokens
+    for (const t of this.items.tokenData()) {
+      if (t.taken || !inWin(t.x, t.z)) continue
+      ctx.fillStyle = '#f2c14e'
+      ctx.fillRect(toX(t.x) - 2, toY(t.z) - 2, 4, 4)
+      ctx.strokeStyle = 'rgba(28,26,23,0.7)'; ctx.lineWidth = 1
+      ctx.strokeRect(toX(t.x) - 2, toY(t.z) - 2, 4, 4)
+    }
+    // npcs (journalist sees far, others ~42m)
+    const seeDist = this.archetype === 'journalist' ? 70 : 42
+    for (const n of this.npcs.minimapData()) {
+      if (Math.hypot(n.x - this.player.pos.x, n.z - this.player.pos.z) > seeDist) continue
+      if (!inWin(n.x, n.z)) continue
+      ctx.fillStyle = n.chasing ? '#ff3b30' : '#3a6ea5'
+      ctx.beginPath(); ctx.arc(toX(n.x), toY(n.z), 3, 0, 7); ctx.fill()
+      if (n.chasing) { // chasing patrols pulse a warning ring
+        ctx.strokeStyle = 'rgba(255,59,48,0.6)'; ctx.lineWidth = 1.5
+        ctx.beginPath(); ctx.arc(toX(n.x), toY(n.z), 5.5, 0, 7); ctx.stroke()
+      }
+    }
+    // squadmates
+    for (const [, r] of this.remotePlayers) {
+      if (!inWin(r.target.x, r.target.z)) continue
+      ctx.fillStyle = '#4ecdc4'
+      ctx.beginPath(); ctx.arc(toX(r.target.x), toY(r.target.z), 3.4, 0, 7); ctx.fill()
+      ctx.strokeStyle = 'rgba(28,26,23,0.7)'; ctx.lineWidth = 1; ctx.stroke()
+    }
+    // player: soft pulse ring + bigger arrow (this map is about YOU)
+    const px = toX(this.player.pos.x), py = toY(this.player.pos.z)
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+    ctx.lineWidth = 1.6
+    ctx.beginPath(); ctx.arc(px, py, 7.5, 0, 7); ctx.stroke()
+    ctx.save()
+    ctx.translate(px, py)
+    ctx.rotate(-this.player.ry + Math.PI)
+    ctx.fillStyle = '#ffffff'
+    ctx.strokeStyle = '#1c1a17'
+    ctx.lineWidth = 1.4
+    ctx.beginPath()
+    ctx.moveTo(0, -7); ctx.lineTo(5, 5.5); ctx.lineTo(0, 2.8); ctx.lineTo(-5, 5.5)
+    ctx.closePath(); ctx.fill(); ctx.stroke()
+    ctx.restore()
+    // north tick (window no longer covers the whole city, so orient the walker)
+    ctx.fillStyle = 'rgba(245,239,220,0.85)'
+    ctx.font = 'bold 10px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('▲ N', W / 2, 12)
+    // zoom readout
+    ctx.font = 'bold 9px sans-serif'
+    ctx.textAlign = 'right'
+    ctx.fillStyle = 'rgba(245,239,220,0.55)'
+    const zm = Math.round(win.spanZ)
+    ctx.fillText(zm >= 580 ? 'FULL CITY' : `${zm}m`, W - 4, H - 5)
   }
 
   // ================= match end =================

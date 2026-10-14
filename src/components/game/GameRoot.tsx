@@ -229,7 +229,7 @@ export default function GameRoot() {
           — hidden entirely during photo mode, which gets its own viewfinder overlay */}
       {inMatch && !photoActive && (
         <>
-          <Hud minimapBuffer={minimapBufferRef} />
+          <Hud />
           <Compass />
           <CinematicOverlay />
           <BossBar />
