@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useGameStore, type EnvHud } from '@/lib/game-store'
+import { useGameStore, type EnvHud, type PerfHud } from '@/lib/game-store'
 import { uiActions, ZONE_ACCENTS } from '@/lib/game-store'
 import { ITEM_CONFIG, CAPTURE_MESSAGES } from '@/game/shared/constants'
 import {
   Heart, Zap, Vote, Users, Wifi, WifiOff, Map as MapIcon, Hand, Star,
   Clock, Package, Footprints, Gauge, Siren, Megaphone, Bot as BotIcon,
-  Sun, Moon, Sunrise, Sunset, CloudSun, Cloud, CloudRain, CloudLightning, CloudFog,
+  Sun, Moon, Sunrise, Sunset, CloudSun, Cloud, CloudRain, CloudLightning, CloudFog, Activity,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -180,6 +180,29 @@ function EnvChip({ env }: { env: EnvHud }) {
   )
 }
 
+/** Perf chip — FPS · net estimate · impostor crowd vs full rigs · render resolution (1Hz, change-gated). */
+function PerfChip({ perf }: { perf: PerfHud }) {
+  const kbps = perf.kbps >= 10 ? `${Math.round(perf.kbps)}` : perf.kbps.toFixed(1)
+  return (
+    <div className="w-56 overflow-hidden rounded-xl border-2 border-[#1c1a17]/80 bg-[#f5efdc]/92 shadow-[3px_3px_0_rgba(28,26,23,0.75)] backdrop-blur-sm">
+      <div className="flex items-center gap-1.5 px-2 py-1">
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-[#1c1a17]/70 bg-[#1c1a17]">
+          <Activity className="h-2.5 w-2.5 text-[#4e9b6e]" />
+        </span>
+        <span className="text-[10px] font-black tabular-nums text-[#1c1a17]">{perf.fps} FPS</span>
+        <span className="truncate text-[9px] font-black uppercase tracking-wider text-[#8c1f28]">{kbps}K/S</span>
+        <span className="ml-auto text-[9px] font-black tabular-nums text-[#1c1a17]/60">RES {perf.res}</span>
+      </div>
+      <div className="flex items-center gap-1.5 border-t border-[#1c1a17]/15 bg-[#1c1a17]/5 px-2 py-0.5">
+        <Users className="h-3 w-3 shrink-0 text-[#1c1a17]/70" />
+        <span className="truncate text-[8.5px] font-black uppercase tracking-wide text-[#1c1a17]/75">
+          {perf.crowd} crowd · {perf.rigs} rigs
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export default function Hud() {
   const hud = useGameStore((s) => s.hud)
   const settings = useGameStore((s) => s.settings)
@@ -330,6 +353,9 @@ export default function Hud() {
 
         {/* environment chip — in-game clock + weather (client-side day/night cycle) */}
         <EnvChip env={hud.env} />
+
+        {/* perf chip — FPS · net · crowd/rigs · render res (toggle in Options → Performance) */}
+        {settings.perfHud && <PerfChip perf={hud.perf} />}
 
         {/* season chip (solo queue — persistent 100-protester world with backfill bots) */}
         {season && (

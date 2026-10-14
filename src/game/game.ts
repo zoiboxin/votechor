@@ -9,6 +9,7 @@ import { InputManager } from './input'
 import { ThirdPersonCamera } from './camera'
 import { PlayerController } from './player'
 import { CharacterRig } from './character'
+import { CrowdLod, type CrowdEntry } from './crowd'
 import { NpcSystem, VehicleSystem } from './npcs'
 import { ItemSystem } from './items'
 import { BossClient } from './boss'
@@ -129,6 +130,10 @@ export class Game {
   private carryingBallotId: string | null = null
   private remotePlayers = new Map<string, { rig: import('./character').CharacterRig | null; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; health: number; detained: boolean; archetype: string; lastSeen: number }>()
   private static MAX_RIGS = 24 // rig budget: nearby protesters get full characters, the rest stay as data dots
+  private crowd: CrowdLod | null = null // instanced impostors for the rig-less majority
+  private lastCrowdSync = 0
+  private lastFps = 60
+  private perfRigs = 0
   private rigsRebuiltAt = 0
   private serverNpcRys: Record<string, number> = {}
   private lastTokenPos = { x: 0, z: 0 }
@@ -342,7 +347,10 @@ export class Game {
 
     this.engine.onFixedUpdate = (dt) => this.fixedUpdate(dt)
     this.engine.onRender = (dt) => this.renderUpdate(dt)
-    this.engine.onFps = (fps) => useGameStore.getState().setFps(fps)
+    this.engine.onFps = (fps) => {
+      this.lastFps = fps
+      useGameStore.getState().setFps(fps)
+    }
     this.engine.setQuality(this.store.settings.quality)
     window.addEventListener('resize', () => this.engine.resize())
 
@@ -495,6 +503,11 @@ export class Game {
     this.engine.scene.add(this.player.rig.group)
     this.camRig.yaw = 0 // camera behind player, looking down the road (-z)
 
+    // impostor crowd for rig-less remotes — every mode needs it (solo seasons spawn ~99 bots)
+    if (!this.crowd) this.crowd = new CrowdLod(this.engine.scene)
+    this.crowd.setVisible(true)
+    this.lastCrowdSync = 0
+
     // reset local npc brains
     this.localNpcBrains = createNpcStates(this.world.npcs.map(n => ({ id: n.id, type: n.type, x: n.x, z: n.z, patrol: n.patrol.map(p => ({ ...p })) })))
 
@@ -592,6 +605,9 @@ export class Game {
     this.clearOnboarding()
     this.npcs.bubbles.clear()
     this.playerBubbles.clear()
+    this.crowd?.dispose()
+    this.crowd = null
+    this.perfRigs = 0
     this.lastHunted = false
     this.squad = { code: null, memberIds: new Set() }
     this.lastSquadCode = null
@@ -1539,6 +1555,15 @@ export class Game {
       r.rig.update(dt, r.detained ? 'detained' : r.anim, hSpeed)
     }
 
+    // impostor crowd — cheap silhouettes for rig-less remotes; matrices refreshed at ~10Hz
+    if (this.crowd && this.player) {
+      const nowMs = performance.now()
+      if (nowMs - this.lastCrowdSync >= 100) {
+        this.lastCrowdSync = nowMs
+        this.syncCrowd(nowMs)
+      }
+    }
+
     const playing = store.uiMode === 'playing'
     if (playing) {
       this.player.render(dt)
@@ -1589,6 +1614,19 @@ export class Game {
       if (prev.time !== info.time || prev.phase !== info.phase || prev.weather !== info.weather || prev.wIcon !== info.wIcon) {
         st.patchHud({ env: { ...prev, ...info } })
       }
+      // perf chip — 1Hz, patched only when a value actually changed (HUD re-render cost matters)
+      const perf = {
+        fps: Math.round(this.lastFps),
+        kbps: Math.round((this.net.bytesPerSec / 1024) * 10) / 10,
+        crowd: this.crowd?.visibleCount ?? 0,
+        rigs: this.perfRigs,
+        res: Math.round(this.engine.effectivePixelRatio * 100) / 100,
+      }
+      const prevPerf = st.hud.perf
+      if (perf.fps !== prevPerf.fps || perf.kbps !== prevPerf.kbps || perf.crowd !== prevPerf.crowd ||
+        perf.rigs !== prevPerf.rigs || perf.res !== prevPerf.res) {
+        st.patchHud({ perf })
+      }
     }
 
     // world animation
@@ -1618,6 +1656,32 @@ export class Game {
   }
   private lastZoneIdx = -1
   private envTick = 0 // 1s cadence for the HUD environment chip
+
+  /**
+   * Crowd impostor feed — one entry per remote protester; full-rig entries are flagged
+   * so CrowdLod keeps their slots empty. Interpolated rig positions are not reused here
+   * (data-only remotes carry no rig): their fresh network targets are used instead.
+   * Detained protesters stand idle — cheap, and never reads as a broken pose.
+   */
+  private syncCrowd(nowMs: number) {
+    if (!this.crowd || !this.player) return
+    this.crowd.setFocus(this.player.pos.x, this.player.pos.z)
+    const entries: CrowdEntry[] = []
+    let rigs = 0
+    for (const [id, r] of this.remotePlayers) {
+      const hasRig = r.rig != null
+      if (hasRig) rigs++
+      entries.push({
+        id,
+        x: r.target.x, y: r.target.y, z: r.target.z, ry: r.target.ry,
+        anim: r.detained ? 'idle' : r.anim,
+        archetype: r.archetype,
+        hasRig,
+      })
+    }
+    this.crowd.sync(entries, nowMs)
+    this.perfRigs = rigs
+  }
 
   /** 4s cinematic orbit when the boss activates; freezes input. */
   private updateBossCinematic(dt: number) {
@@ -2154,6 +2218,8 @@ export class Game {
     this.removePhotoKeyHandler()
     this.unsubStore?.()
     this.net.leave()
+    this.crowd?.dispose()
+    this.crowd = null
     this.input?.dispose()
     this.engine?.dispose()
   }

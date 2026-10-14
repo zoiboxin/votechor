@@ -89,6 +89,11 @@ export class NetClient {
   ev: Partial<NetEvents> = {}
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private lastPingSent = 0
+  private bytesSampleAt = 0
+  private bytesPerSecEstimate = 0
+
+  /** Cheap download estimate for the perf HUD: sampled 'game:players' payload × 12Hz broadcast. */
+  get bytesPerSec() { return this.bytesPerSecEstimate }
 
   connect(): Promise<boolean> {
     return new Promise((resolve) => {
@@ -119,7 +124,15 @@ export class NetClient {
         socket.on('disconnect', () => { this.connected = false; this.ev.onDisconnect?.() })
         socket.on('connect_error', () => { /* handled by timeout */ })
         socket.on('game:joined', (ack: JoinAck) => { if (ack.ok) this.playerId = ack.playerId; this.ev.onJoinAck?.(ack) })
-        socket.on('game:players', (p: PlayerNetState[]) => this.ev.onPlayers?.(p))
+        socket.on('game:players', (p: PlayerNetState[]) => {
+          // perf HUD: sample the AOI player-state payload size every ~2s (one stringify — negligible CPU)
+          const now = performance.now()
+          if (now - this.bytesSampleAt >= 2000) {
+            this.bytesSampleAt = now
+            try { this.bytesPerSecEstimate = JSON.stringify(p).length * 12 } catch { /* estimate only */ }
+          }
+          this.ev.onPlayers?.(p)
+        })
         socket.on('game:npcs', (n: NpcNetState[]) => this.ev.onNpcs?.(n))
         socket.on('game:items', (i: ItemNetState[]) => this.ev.onItems?.(i))
         socket.on('game:boss', (b: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) => this.ev.onBoss?.(b, ballots))
@@ -202,6 +215,7 @@ export class NetClient {
     this.socket?.disconnect()
     this.socket = null
     this.connected = false
+    this.bytesPerSecEstimate = 0
     if (this.pingTimer) clearInterval(this.pingTimer)
   }
 }

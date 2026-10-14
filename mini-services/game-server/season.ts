@@ -17,8 +17,10 @@
 //
 // Network: bots are regular PlayerState entries inside the Room, so snapshots,
 // NPC brains, vehicles, checkpoints, detention and the client renderer all work
-// on them with zero special-casing. A per-recipient AOI broadcaster keeps the
-// 12 Hz player snapshot cheap (near bots at full rate, far bots on a sweep).
+// on them with zero special-casing. A per-recipient graded-AOI broadcaster keeps
+// the 12 Hz player snapshot cheap: NEAR (≤150 m) every tick at full fidelity,
+// MID (150–300 m) at 1/3 rate with 1-decimal payloads, FAR (>300 m) on the
+// rotating far-window sweep. Bot wire payloads are cached once per tick.
 import type { Server as SocketIOServer } from 'socket.io'
 import { Room, WORLD, playerNet, type PlayerState } from './room'
 import { ARCHETYPES } from '../../src/game/shared/constants'
@@ -28,8 +30,9 @@ import type { AnimName, PlayerNetState } from '../../src/game/shared/types'
 export const SEASON_CAP = 100 // total occupants (you + 99 others)
 export const SEASON_MAX_HUMANS = 12 // season is "full" for matchmaking at this many real players
 export const SEASON_RETIRE_MS = 90_000 // empty season lingers 90s for quick rejoins, then dissolves
-const BOT_AOI = 150 // bots within this range stream at full rate
-const BOT_FAR_WINDOW = 14 // far bots updated per broadcast tick (rotating sweep ≈ every 0.7s)
+const BOT_AOI = 150 // NEAR band radius: bots within this range stream every tick at full rate
+const BOT_MID_AOI = 300 // MID band outer radius: 150–300 m streams at 1/3 rate (10 cm precision)
+const BOT_FAR_WINDOW = 14 // far bots refreshed per broadcast tick (rotating sweep ≈ every 0.7s)
 const TICK_MS = 100
 const CHURN_MIN_MS = 16_000 // bot churn: one occupant leaves & is replaced
 const CHURN_MAX_MS = 38_000
@@ -175,6 +178,128 @@ export interface SeasonInfo {
   humansMax: number
 }
 
+// ---------- graded AOI bands (pure helpers — unit-testable without sockets) ----------
+
+/** NEAR band: dist² ≤ 150² → included EVERY tick with the round2 payload. */
+export const AOI_NEAR_SQ = BOT_AOI * BOT_AOI
+/** MID band: 150² < dist² ≤ 300² → included at 1/3 rate, 1-decimal payload. */
+export const AOI_MID = BOT_MID_AOI
+export const AOI_MID_SQ = BOT_MID_AOI * BOT_MID_AOI
+
+/** 1-decimal quantization (10 cm) for MID/FAR payloads — plenty at that range. */
+export function round1(v: number): number {
+  return Math.round(v * 10) / 10
+}
+
+/** Minimal shape the AOI selection needs — plain literals work in unit tests. */
+export interface AoiEntity { id: string; x: number; z: number }
+
+/** Per-tick context for selectAoiPayload (payload caches are built once per tick). */
+export interface AoiCtx {
+  tick: number // broadcast tick counter — drives the 3-slot MID rotation
+  farCursor: number // informational: far-window cursor (the window is already resolved)
+  windowIds: ReadonlySet<string> // bot ids refreshed by the FAR sweep this tick
+  near: readonly PlayerNetState[] // per-bot round2 payloads (index-aligned with `bots`)
+  mid: readonly PlayerNetState[] // per-bot round1 payloads (index-aligned with `bots`)
+  humans: readonly PlayerNetState[] // full-detail human entries, prepended to every payload
+}
+
+/**
+ * Per-recipient AOI selection (pure):
+ *  • NEAR (≤150 m): every tick, round2 payload.
+ *  • MID (150–300 m): 1/3 rate via `botIndex % 3 === tick % 3`, round1 payload (~4 Hz each).
+ *  • FAR (>300 m): ONLY via the rotating BOT_FAR_WINDOW sweep, round1 payload.
+ *  • Humans: always full detail (and never duplicated).
+ * Client prunes rigs unseen for 6 s — every band stays far inside that window.
+ */
+export function selectAoiPayload(bots: readonly AoiEntity[], human: AoiEntity, ctx: AoiCtx): PlayerNetState[] {
+  const out: PlayerNetState[] = ctx.humans.slice()
+  const midSlot = ctx.tick % 3
+  for (let i = 0; i < bots.length; i++) {
+    const b = bots[i]
+    const dx = b.x - human.x
+    const dz = b.z - human.z
+    const d2 = dx * dx + dz * dz
+    if (d2 <= AOI_NEAR_SQ) {
+      out.push(ctx.near[i])
+    } else if (d2 <= AOI_MID_SQ) {
+      if (i % 3 === midSlot) out.push(ctx.mid[i])
+    } else if (ctx.windowIds.has(b.id)) {
+      out.push(ctx.mid[i])
+    }
+  }
+  return out
+}
+
+/**
+ * Rotating far-window sweep (semantics unchanged): the ids of the BOT_FAR_WINDOW
+ * bots starting at `cursor`, plus the next cursor. Pure so tests can verify the
+ * ≈ every (bots / BOT_FAR_WINDOW)-tick refresh cadence without sockets.
+ */
+export function computeFarWindow(bots: readonly AoiEntity[], cursor: number): { ids: Set<string>; nextCursor: number } {
+  const ids = new Set<string>()
+  const n = bots.length
+  if (n === 0) return { ids, nextCursor: 0 }
+  for (let i = 0; i < Math.min(BOT_FAR_WINDOW, n); i++) ids.add(bots[(cursor + i) % n].id)
+  return { ids, nextCursor: (cursor + BOT_FAR_WINDOW) % n }
+}
+
+/** 1-decimal wire variant of playerNet for MID/FAR bots — identical fields, 10 cm precision. */
+export function botNet1(p: PlayerState): PlayerNetState {
+  return {
+    id: p.id,
+    name: p.name,
+    archetype: p.archetype,
+    x: round1(p.x),
+    y: round1(p.y),
+    z: round1(p.z),
+    ry: round1(p.ry),
+    anim: p.anim,
+    health: p.health,
+    detained: p.detained,
+    dazed: p.dazed,
+    tokens: p.tokens,
+    carrying: p.carrying,
+  } as PlayerNetState
+}
+
+// ---------- broadcast observability (module-level, folded across all seasons) ----------
+
+const EST_BYTES_PER_ENTRY = 90 // rough wire estimate per player entry — an ESTIMATE, not measured bytes
+export interface BroadcastStats {
+  ticksPerSec: number // broadcast passes / sec across all seasons (1 s sampler)
+  avgEntriesPerTick: number // EMA of payload entries summed over recipients
+  avgTickMs: number // EMA of full broadcast duration
+  estBytesPerSec: number // ESTIMATE: avgEntriesPerTick × ticksPerSec × 90
+}
+export const broadcastStats: BroadcastStats = {
+  ticksPerSec: 0,
+  avgEntriesPerTick: 0,
+  avgTickMs: 0,
+  estBytesPerSec: 0,
+}
+const tickWindow = { count: 0, at: Date.now() }
+
+/** Fold one completed broadcast pass (one season, all recipients) into the stats. */
+function recordBroadcastTick(entriesSent: number, durationMs: number): void {
+  const k = 0.15
+  broadcastStats.avgEntriesPerTick += (entriesSent - broadcastStats.avgEntriesPerTick) * k
+  broadcastStats.avgTickMs += (durationMs - broadcastStats.avgTickMs) * k
+  tickWindow.count++
+}
+
+// 1 Hz sampler: real ticks/sec + wire estimate (decays to 0 when idle). unref'd:
+// never keeps the process (or a test run) alive on its own.
+setInterval(() => {
+  const now = Date.now()
+  const dt = (now - tickWindow.at) / 1000
+  if (dt <= 0) return
+  broadcastStats.ticksPerSec = tickWindow.count / dt
+  broadcastStats.estBytesPerSec = Math.round(broadcastStats.avgEntriesPerTick * broadcastStats.ticksPerSec * EST_BYTES_PER_ENTRY)
+  tickWindow.count = 0
+  tickWindow.at = now
+}, 1000).unref?.()
+
 export class Season {
   readonly room: Room
   readonly id: string
@@ -184,6 +309,11 @@ export class Season {
   private bots = new Map<string, Bot>()
   private usedNames = new Set<string>()
   private farCursor = 0
+  private tickCount = 0 // broadcast tick counter (drives the MID 3-slot rotation)
+  private lastBroadcastAt = 0 // performance.now() of the previous broadcast pass
+  private statRate = 0 // EMA: this season's broadcast ticks/sec
+  private statEntries = 0 // EMA: payload entries summed over recipients per tick
+  private statMs = 0 // EMA: full broadcast duration ms
   private tickTimer: ReturnType<typeof setInterval> | null = null
   private churnAt = Date.now() + rand(18_000, 36_000)
   private marchAt = Date.now() + rand(MARCH_MIN_MS, MARCH_MAX_MS)
@@ -213,6 +343,11 @@ export class Season {
       cap: SEASON_CAP,
       humansMax: SEASON_MAX_HUMANS,
     }
+  }
+
+  /** Per-season broadcast EMAs (cheap observability; also folded into module broadcastStats). */
+  broadcastEma(): { ticksPerSec: number; entriesPerTick: number; tickMs: number } {
+    return { ticksPerSec: this.statRate, entriesPerTick: this.statEntries, tickMs: this.statMs }
   }
 
   dispose() {
@@ -648,27 +783,49 @@ export class Season {
 
   private broadcastPlayers() {
     if (this.disposed) return
+    const started = performance.now()
     const humans: PlayerState[] = this.room.humans()
     if (humans.length === 0) return
     const bots: PlayerState[] = []
     for (const b of this.bots.values()) bots.push(b.p)
     const n = bots.length
-    // rotating far-window: every far bot gets a refresh ≈ every (n / FAR_WINDOW) ticks
-    const windowIds = new Set<string>()
-    if (n > 0) {
-      for (let i = 0; i < Math.min(BOT_FAR_WINDOW, n); i++) windowIds.add(bots[(this.farCursor + i) % n].id)
-      this.farCursor = (this.farCursor + BOT_FAR_WINDOW) % n
+    // Per-tick payload cache: each bot's wire state is built exactly ONCE per tick
+    // (was O(humans × bots) recomputation + allocation at 12 Hz). Near cache keeps
+    // the full round2 fidelity; mid cache quantizes to 1 decimal (10 cm) for the
+    // MID band and the FAR sweep.
+    const nearCache: PlayerNetState[] = new Array(n)
+    const midCache: PlayerNetState[] = new Array(n)
+    for (let i = 0; i < n; i++) {
+      nearCache[i] = playerNet(bots[i])
+      midCache[i] = botNet1(bots[i])
     }
-    const humanPayload = humans.map(playerNet)
+    // rotating far-window sweep — cadence unchanged (≈ every n / BOT_FAR_WINDOW ticks)
+    const { ids: windowIds, nextCursor } = computeFarWindow(bots, this.farCursor)
+    this.farCursor = nextCursor
+    this.tickCount++
+    const ctx: AoiCtx = {
+      tick: this.tickCount,
+      farCursor: this.farCursor,
+      windowIds,
+      near: nearCache,
+      mid: midCache,
+      humans: humans.map(playerNet), // humans: always full detail in every payload
+    }
+    let entriesSent = 0
     for (const h of humans) {
-      const payload: PlayerNetState[] = [...humanPayload]
-      for (const b of bots) {
-        const dx = b.x - h.x
-        const dz = b.z - h.z
-        if (dx * dx + dz * dz <= BOT_AOI * BOT_AOI || windowIds.has(b.id)) payload.push(playerNet(b))
-      }
+      const payload = selectAoiPayload(bots, h, ctx)
+      entriesSent += payload.length
       this.io.to(h.id).emit('game:players', payload)
     }
+    // cheap EMAs on this season + fold into the module-level aggregate for /health
+    const dur = performance.now() - started
+    const gap = this.lastBroadcastAt > 0 ? started - this.lastBroadcastAt : TICK_MS
+    this.lastBroadcastAt = started
+    const k = 0.15
+    this.statRate += (1000 / Math.max(1, gap) - this.statRate) * k
+    this.statEntries += (entriesSent - this.statEntries) * k
+    this.statMs += (dur - this.statMs) * k
+    recordBroadcastTick(entriesSent, dur)
   }
 }
 
@@ -714,6 +871,13 @@ export class SeasonManager {
 
   get(roomId: string): Season | undefined {
     return this.seasons.get(roomId)
+  }
+
+  /** Cheap live snapshot of every season — consumed by the /health endpoint. */
+  list(): SeasonInfo[] {
+    const out: SeasonInfo[] = []
+    for (const s of this.seasons.values()) out.push(s.info())
+    return out
   }
 
   /** Real (socket-backed) players across every season — for the global join cap. */

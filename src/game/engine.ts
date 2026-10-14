@@ -2,7 +2,8 @@
 import * as THREE from 'three'
 import { SkySystem } from './sky'
 
-export type QualityLevel = 'low' | 'medium' | 'high'
+export type QualityLevel = 'auto' | 'low' | 'medium' | 'high'
+export type ResolvedQuality = 'low' | 'medium' | 'high' // concrete tier after 'auto' probes the device
 
 export class Engine {
   renderer: THREE.WebGLRenderer
@@ -11,8 +12,19 @@ export class Engine {
   sun: THREE.DirectionalLight
   hemi: THREE.HemisphereLight
   sky: SkySystem
-  quality: QualityLevel = 'high'
+  quality: QualityLevel = 'auto'
   pixelRatio = 1
+  /** Current render resolution scale — adaptive when quality==='auto' (HUD perf chip reads this). */
+  effectivePixelRatio = 1
+  /** Why the current effective pixel ratio was chosen (auto ladder step or manual tier). */
+  resReason = 'boot'
+  // adaptive-resolution state (auto quality only)
+  private resLadder: number[] = [1]
+  private resIdx = 0
+  private fpsEma = 60
+  private lowStreak = 0
+  private highStreak = 0
+  private lastResStep = 0
   private accum = 0
   private last = performance.now()
   private frames = 0
@@ -59,16 +71,18 @@ export class Engine {
     this.resize()
   }
 
-  setQuality(q: 'low' | 'medium' | 'high' | 'auto') {
-    let level: QualityLevel = q as QualityLevel
+  setQuality(q: QualityLevel) {
+    this.quality = q
+    let level: ResolvedQuality
     if (q === 'auto') {
       const mem = (navigator as unknown as { deviceMemory?: number }).deviceMemory ?? 4
       const cores = navigator.hardwareConcurrency ?? 4
       level = cores >= 8 && mem >= 8 ? 'high' : cores >= 4 ? 'medium' : 'low'
+    } else {
+      level = q
     }
-    this.quality = level
-    this.pixelRatio = level === 'high' ? Math.min(window.devicePixelRatio, 2) : level === 'medium' ? Math.min(window.devicePixelRatio, 1.35) : 1
-    this.renderer.setPixelRatio(this.pixelRatio)
+    const dpr = window.devicePixelRatio
+    this.pixelRatio = level === 'high' ? Math.min(dpr, 2) : level === 'medium' ? Math.min(dpr, 1.35) : 1
     this.renderer.shadowMap.enabled = level !== 'low'
     if (level !== 'low') {
       this.sun.shadow.mapSize.set(level === 'high' ? 2048 : 1024, level === 'high' ? 2048 : 1024)
@@ -76,7 +90,63 @@ export class Engine {
       this.sun.shadow.map = null
     }
     this.sky.setQuality(level)
+    if (q === 'auto') {
+      // Adaptive resolution: start at full 'high' ratio and walk a ladder down/up to hold
+      // ~45-57 fps. renderer.setPixelRatio only fires on actual ladder steps (min 2s apart).
+      const start = Math.min(dpr, 2)
+      this.resLadder = [start, 1.5, 1.25, 1, 0.85, 0.7].filter(
+        (v, i, arr) => v <= start + 1e-6 && (i === 0 || v < arr[i - 1] - 1e-6),
+      )
+      this.resIdx = 0
+      this.fpsEma = 60
+      this.lowStreak = 0
+      this.highStreak = 0
+      this.lastResStep = performance.now()
+      this.effectivePixelRatio = this.resLadder[0]
+      this.resReason = 'auto: full res'
+      this.renderer.setPixelRatio(this.effectivePixelRatio)
+    } else {
+      // manual tiers keep the classic fixed-ratio behavior (controller off)
+      this.effectivePixelRatio = this.pixelRatio
+      this.resReason = `manual ${level}`
+      this.renderer.setPixelRatio(this.pixelRatio)
+    }
     this.resize()
+  }
+
+  /** Every 0.5s fps sample: smooth into a ~2s EMA and step the resolution ladder. */
+  private adaptResolution(fps: number) {
+    if (this.quality !== 'auto' || this.resLadder.length <= 1) return
+    this.fpsEma += (fps - this.fpsEma) * 0.25 // ~2s EMA at 0.5s samples
+    const now = performance.now()
+    const canStep = now - this.lastResStep >= 2000 // anti-oscillation guard
+    if (this.fpsEma < 45) {
+      this.lowStreak++
+      this.highStreak = 0
+      if (this.lowStreak >= 3 && canStep && this.resIdx < this.resLadder.length - 1) {
+        this.resIdx++
+        this.applyResolution(`auto: fps ${Math.round(this.fpsEma)} ↓ res ${this.resLadder[this.resIdx].toFixed(2)}`)
+        this.lowStreak = 0
+      }
+    } else if (this.fpsEma > 57) {
+      this.highStreak++
+      this.lowStreak = 0
+      if (this.highStreak >= 6 && canStep && this.resIdx > 0) {
+        this.resIdx--
+        this.applyResolution(`auto: fps ${Math.round(this.fpsEma)} ↑ res ${this.resLadder[this.resIdx].toFixed(2)}`)
+        this.highStreak = 0
+      }
+    } else {
+      this.lowStreak = 0
+      this.highStreak = 0
+    }
+  }
+
+  private applyResolution(reason: string) {
+    this.effectivePixelRatio = this.resLadder[this.resIdx]
+    this.lastResStep = performance.now()
+    this.resReason = reason
+    this.renderer.setPixelRatio(this.effectivePixelRatio)
   }
 
   resize() {
@@ -120,7 +190,9 @@ export class Engine {
       this.frames++
       this.fpsTime += dt
       if (this.fpsTime >= 0.5) {
-        this.onFps?.(this.frames / this.fpsTime)
+        const fps = this.frames / this.fpsTime
+        this.onFps?.(fps)
+        this.adaptResolution(fps)
         this.frames = 0
         this.fpsTime = 0
       }

@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor, CloudSun } from 'lucide-react'
+import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor, CloudSun, Gauge } from 'lucide-react'
 
 const KEYBIND_LABELS: Record<string, string> = {
   forward: 'Move Forward', back: 'Move Back', left: 'Move Left', right: 'Move Right',
@@ -35,6 +35,7 @@ const DEFAULTS: Settings = {
   minimapZoom: 150,
   timeMode: 'cycle',
   weatherMode: 'auto',
+  perfHud: true,
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 
@@ -157,20 +158,6 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
         <section>
           <SectionTitle icon={Monitor}>Video</SectionTitle>
           <div className="space-y-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Quality</span>
-              <Select value={settings.quality} onValueChange={(v) => update({ quality: v as Settings['quality'] })}>
-                <SelectTrigger className="w-32 rounded-xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] font-black">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="vc-paper border-2 border-[#1c1a17]/70">
-                  <SelectItem value="auto" className="font-bold">Auto</SelectItem>
-                  <SelectItem value="low" className="font-bold">Low — potato</SelectItem>
-                  <SelectItem value="medium" className="font-bold">Medium</SelectItem>
-                  <SelectItem value="high" className="font-bold">High — full parade</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Show FPS Counter</span>
               <Switch checked={settings.showFps} onCheckedChange={(v) => update({ showFps: v })} />
@@ -181,6 +168,37 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
                 <div className="text-[9px] font-semibold text-[#1c1a17]/50">Less particles, more democracy</div>
               </div>
               <Switch checked={settings.reducedEffects} onCheckedChange={(v) => update({ reducedEffects: v })} />
+            </div>
+          </div>
+        </section>
+
+        {/* Performance (quality tier + live perf chip) */}
+        <section>
+          <SectionTitle icon={Gauge}>Performance</SectionTitle>
+          <div className="space-y-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Quality</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Auto tunes render resolution to hold your frame rate</div>
+              </div>
+              <Select value={settings.quality} onValueChange={(v) => update({ quality: v as Settings['quality'] })}>
+                <SelectTrigger className="w-40 rounded-xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] font-black">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="vc-paper border-2 border-[#1c1a17]/70">
+                  <SelectItem value="auto" className="font-bold">Auto (recommended)</SelectItem>
+                  <SelectItem value="high" className="font-bold">High — full parade</SelectItem>
+                  <SelectItem value="medium" className="font-bold">Medium</SelectItem>
+                  <SelectItem value="low" className="font-bold">Low — potato</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Performance HUD</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Live chip: FPS · net · crowd · render res</div>
+              </div>
+              <Switch checked={settings.perfHud ?? true} onCheckedChange={(v) => update({ perfHud: v })} />
             </div>
           </div>
         </section>

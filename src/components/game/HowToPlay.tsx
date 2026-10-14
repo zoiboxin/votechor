@@ -1,7 +1,7 @@
 'use client'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { BookOpen, Keyboard, Crown, ScrollText, Megaphone, Users, Flame, Sparkles, Globe, CloudSun } from 'lucide-react'
+import { BookOpen, Keyboard, Crown, ScrollText, Megaphone, Users, Flame, Sparkles, Globe, CloudSun, Gauge } from 'lucide-react'
 import { BOSS_NAME, BOSS_PHASE_NAMES } from '@/game/shared/constants'
 
 const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
@@ -162,6 +162,14 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
               </p>
               <p className="mt-1 text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
                 Weather wanders on its own — <b>clear, cloudy, overcast, monsoon rain, thunderstorms</b> (watch for lightning!) and thick <b>Lohri fog</b>. Pin any mood in <b>Options → Environment</b>.
+              </p>
+            </div>
+            <div className="rounded-xl border-2 border-[#7f9a8c]/60 bg-[#e9edeb] p-2.5">
+              <div className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-[#4e6e62]">
+                <Gauge className="h-3.5 w-3.5" /> Smooth Frames
+              </div>
+              <p className="text-[9px] font-semibold leading-snug text-[#1c1a17]/75">
+                Quality defaults to <b>Auto</b> — the engine dynamically tunes render resolution to hold your frame rate even in a 100-protester season. Pin High/Medium/Low in <b>Options → Performance</b>, and flip on the live <b>performance chip</b> (FPS · net · crowd) there too.
               </p>
             </div>
             <div className="rounded-xl border-2 border-[#8c1f28]/50 bg-[#f5efdc] p-2.5">

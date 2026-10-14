@@ -1,6 +1,9 @@
 // Season system protocol test — joins two humans into one season, verifies
-// bot backfill / swap-out / movement / AOI snapshots / guards. Run: bun season-test.ts
+// bot backfill / swap-out / movement / graded-AOI snapshots / guards, plus pure
+// AOI-helper unit tests. Run: bun season-test.ts
 import { io, type Socket } from 'socket.io-client'
+import { selectAoiPayload, computeFarWindow, round1, type AoiCtx, type AoiEntity } from './season'
+import type { PlayerNetState } from '../../src/game/shared/types'
 
 const URL = 'http://localhost:3002'
 let pass = 0
@@ -36,6 +39,84 @@ function joinSeason(s: Socket, name: string): Promise<JoinResult> {
 
 async function main() {
   console.log('— Season protocol test —')
+
+  // 0. Pure AOI helper unit tests (no sockets, no server needed)
+  console.log('— AOI helper unit tests —')
+  {
+    const mk = (id: string, x: number, z: number): AoiEntity => ({ id, x, z })
+    const human = mk('hum', 0, 0)
+    const nearBot = mk('bot_near', 3.123, 4.456) // d ≈ 5.4 m → NEAR band
+    const bots: AoiEntity[] = [nearBot]
+    const midBots: AoiEntity[] = []
+    const farBots: AoiEntity[] = []
+    for (let i = 0; i < 15; i++) {
+      const ang = (i / 15) * Math.PI * 2 + 0.7
+      midBots.push(mk(`bot_mid${i}`, 200 * Math.cos(ang), 200 * Math.sin(ang))) // d = 200 m → MID
+    }
+    for (let i = 0; i < 30; i++) {
+      const ang = (i / 30) * Math.PI * 2 + 0.7
+      farBots.push(mk(`bot_far${i}`, 400 * Math.cos(ang), 400 * Math.sin(ang))) // d = 400 m → FAR
+    }
+    bots.push(...midBots, ...farBots)
+    const r2 = (v: number) => Math.round(v * 100) / 100
+    // two per-bot payload caches as broadcastPlayers would build them
+    const near = bots.map((b) => ({ id: b.id, x: r2(b.x), z: r2(b.z) }) as PlayerNetState)
+    const mid = bots.map((b) => ({ id: b.id, x: round1(b.x), z: round1(b.z) }) as PlayerNetState)
+    const humanEntry = { id: 'hum', name: 'Human' } as PlayerNetState
+    const ctxAt = (tick: number, windowIds: ReadonlySet<string>): AoiCtx =>
+      ({ tick, farCursor: 0, windowIds, near, mid, humans: [humanEntry] })
+
+    // (a) near bot: present in EVERY one of 12 consecutive selections, full round2 fidelity
+    let nearCount = 0
+    let nearRound2 = true
+    for (let t = 0; t < 12; t++) {
+      const out = selectAoiPayload(bots, human, ctxAt(t, new Set()))
+      if (out.some((e) => e.id === 'bot_near')) nearCount++
+      const e = out.find((p) => p.id === 'bot_near')!
+      if (e.x !== r2(nearBot.x) || e.z !== r2(nearBot.z)) nearRound2 = false
+    }
+    ok(nearCount === 12, `unit: near bot present in all 12 consecutive selections (${nearCount}/12)`)
+    ok(nearRound2, 'unit: near bot carries the full-detail (round2) payload')
+
+    // (b) mid band: 1/3 rate — every mid bot in 3..5 of 12, exactly 5 of 15 per tick
+    const midCounts = new Map<string, number>()
+    let midPerTickSteady = true
+    for (let t = 0; t < 12; t++) {
+      const out = selectAoiPayload(bots, human, ctxAt(t, new Set()))
+      let midInTick = 0
+      for (const e of out) {
+        if (!e.id.startsWith('bot_mid')) continue
+        midInTick++
+        midCounts.set(e.id, (midCounts.get(e.id) ?? 0) + 1)
+        if (e.x !== round1(bots.find((b) => b.id === e.id)!.x)) midPerTickSteady = false // must be round1
+      }
+      if (midInTick !== 5) midPerTickSteady = false
+    }
+    const counts = [...midCounts.values()]
+    ok(counts.length === 15 && counts.every((c) => c >= 3 && c <= 5),
+      `unit: mid bot selected 3..5 of 12 ticks (15 bots → counts ${Math.min(...counts)}..${Math.max(...counts)})`)
+    ok(midPerTickSteady, 'unit: exactly 1/3 of the mid band per tick, round1 payload')
+
+    // (c) far window: rotates (never the same set twice in a row), 14 ids, cursor sweep
+    const w0 = computeFarWindow(bots, 0)
+    const w1 = computeFarWindow(bots, w0.nextCursor)
+    const w2 = computeFarWindow(bots, w1.nextCursor)
+    ok(w0.ids.size === 14 && w1.ids.size === 14, `unit: far window holds 14 ids (${w0.ids.size}, ${w1.ids.size})`)
+    ok(w0.nextCursor === 14, 'unit: far cursor advances by BOT_FAR_WINDOW per tick')
+    const ser = (s: Set<string>) => [...s].sort().join(',')
+    ok(ser(w0.ids) !== ser(w1.ids) && ser(w1.ids) !== ser(w2.ids), 'unit: far window ids rotate (no consecutive repeat)')
+
+    // far-band gating inside selectAoiPayload: windowed far bot in (round1), others out,
+    // near bot never duplicated even when it sits inside the window
+    const winX = computeFarWindow(bots, 44) // covers bots[44],bots[45],bots[0..11] → far28,far29,near,mid0..mid8
+    const outX = selectAoiPayload(bots, human, ctxAt(0, winX.ids))
+    ok(outX.filter((e) => e.id === 'bot_near').length === 1, 'unit: near bot deduped even when inside the far window')
+    ok(outX.some((e) => e.id === 'bot_far28') && outX.some((e) => e.id === 'bot_far29'), 'unit: windowed far bots are included')
+    ok(!outX.some((e) => e.id === 'bot_far5'), 'unit: non-windowed far bots stay out (>300 m)')
+    const farEntry = outX.find((e) => e.id === 'bot_far28')!
+    ok(farEntry.x === round1(farBots[28].x) && farEntry.z === round1(farBots[28].z), 'unit: far bot carries the round1 payload')
+    ok(outX[0] === humanEntry, 'unit: human entry always first in the payload')
+  }
 
   // 1. First solo join → creates a season of 100
   const A = await connect()
@@ -136,6 +217,28 @@ async function main() {
   ok(seasonUpdates.length >= 2, `season updates streamed after leave (${seasonUpdates.length})`)
   ok(sInfo?.humans === 1, `after B leaves → humans = 1 (got ${sInfo?.humans})`)
   ok(sInfo?.bots === 99, `after B leaves → bots backfilled to 99 (got ${sInfo?.bots})`)
+
+  // 7.5 Live graded-AOI stream (A solo again): snapshot shape + bandwidth budget
+  let liveSnaps = 0
+  let liveMinBots = Infinity
+  let liveSelfMissing = 0
+  let liveEntries = 0
+  const selfId = String(a.ack.playerId ?? '')
+  const liveH = (list: PlayerNet[]) => {
+    liveSnaps++
+    liveMinBots = Math.min(liveMinBots, list.filter((p) => p.id.startsWith('bot_')).length)
+    if (selfId && !list.some((p) => p.id === selfId)) liveSelfMissing++
+    liveEntries += list.length
+  }
+  A.on('game:players', liveH)
+  await sleep(3000)
+  A.off('game:players', liveH)
+  const avgEntries = liveEntries / Math.max(1, liveSnaps)
+  const impliedBps = avgEntries * 90 * 12 // 90 B/entry estimate × 12 Hz (see EST_BYTES_PER_ENTRY)
+  ok(liveSnaps >= 24, `solo stream keeps ~12 Hz cadence (${liveSnaps} snapshots in 3s)`)
+  ok(liveMinBots >= 30, `every snapshot carries ≥30 bot entries (min ${liveMinBots})`)
+  ok(liveSelfMissing === 0, 'own player entry present in every snapshot')
+  ok(impliedBps < 60_000, `implied bandwidth < 60 KB/s (avg ${avgEntries.toFixed(1)} entries → ${(impliedBps / 1024).toFixed(1)} KiB/s est)`)
 
   // 8. A leaves → season survives on bots for a grace window, then dissolves
   A.disconnect()

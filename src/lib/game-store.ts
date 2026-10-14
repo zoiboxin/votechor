@@ -57,6 +57,8 @@ export interface HudState {
   mapZ: number // player world z
   /** live day/night + weather readout for the HUD environment chip */
   env: EnvHud
+  /** live performance readout for the optional HUD chip (patched at 1Hz, only on change) */
+  perf: PerfHud
 }
 
 export interface EnvHud {
@@ -67,6 +69,15 @@ export interface EnvHud {
   wIcon: 'clear' | 'cloudy' | 'overcast' | 'rain' | 'storm' | 'fog'
   /** Date.now() of the last lightning flash — HUD shows a white flash overlay */
   flashAt: number
+}
+
+/** 1Hz perf readout for the optional HUD chip. */
+export interface PerfHud {
+  fps: number
+  kbps: number // estimated player-state download (KiB/s)
+  crowd: number // impostor-crowd silhouettes currently rendered
+  rigs: number // full character rigs active
+  res: number // effective render resolution scale (auto-quality ladder)
 }
 
 export interface BossHud {
@@ -99,6 +110,8 @@ export interface Settings {
   timeMode: 'cycle' | 'dawn' | 'noon' | 'dusk' | 'night'
   /** weather selector — 'auto' runs the living weather state machine */
   weatherMode: 'auto' | 'clear' | 'cloudy' | 'overcast' | 'rain' | 'storm' | 'fog'
+  /** live perf chip (FPS · net · crowd · rigs · render res) on the HUD */
+  perfHud: boolean
 }
 
 // ---- minimap zoom window helpers (shared by the engine renderer + BigMap settings UI) ----
@@ -295,6 +308,7 @@ const defaultHud: HudState = {
   hunted: false,
   mapX: 0, mapZ: 0,
   env: { time: '10:30', phase: 'Morning', weather: 'Clear Skies', icon: 'sun', wIcon: 'clear', flashAt: 0 },
+  perf: { fps: 60, kbps: 0, crowd: 0, rigs: 0, res: 1 },
 }
 
 const defaultBoss: BossHud = {
@@ -309,6 +323,7 @@ const defaultSettings: Settings = {
   minimapZoom: 150,
   timeMode: 'cycle',
   weatherMode: 'auto',
+  perfHud: true,
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 

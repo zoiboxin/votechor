@@ -8,7 +8,7 @@ import {
   WORLD,
   Room,
 } from './room'
-import { SeasonManager } from './season'
+import { SeasonManager, broadcastStats } from './season'
 import type { SeasonInfo } from './season'
 import { TOKENS_NEEDED, ARCHETYPES } from '../../src/game/shared/constants'
 import type { ProjectileNetState } from '../../src/game/shared/types'
@@ -29,9 +29,10 @@ const io = new Server(httpServer, {
   pingInterval: 25000,
 })
 
-// Health endpoint: plain HTTP GET / (no ?EIO=...) → 200 'ok'.
+// Health/metrics endpoint: plain HTTP GET / (no ?EIO=...) → JSON status.
 // engine.io captures the 'request' listeners at attach time, so we re-wrap them:
 // socket.io/engine.io traffic always carries the EIO query param; everything else is health.
+// Kept cheap: per-request work is O(#seasons), no history buffers are iterated.
 {
   const engineListeners = httpServer.listeners('request').slice(0)
   httpServer.removeAllListeners('request')
@@ -39,8 +40,23 @@ const io = new Server(httpServer, {
     const url = req.url ?? '/'
     const isEngineIo = url.includes('EIO=')
     if (!isEngineIo) {
-      res.writeHead(200, { 'Content-Type': 'text/plain' })
-      res.end('ok')
+      const seasons = seasonManager.list().map((s) => ({ id: s.id, name: s.name, humans: s.humans, bots: s.bots }))
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        ok: true,
+        uptime: Math.round(process.uptime()),
+        seasons,
+        totals: {
+          humans: totalPlayers(), // every socket-backed player on the server
+          bots: seasons.reduce((n, s) => n + s.bots, 0), // bots only exist in seasons
+        },
+        broadcast: {
+          ticksPerSec: Math.round(broadcastStats.ticksPerSec * 10) / 10,
+          avgEntriesPerTick: Math.round(broadcastStats.avgEntriesPerTick * 10) / 10,
+          avgTickMs: Math.round(broadcastStats.avgTickMs * 100) / 100,
+          estBytesPerSec: broadcastStats.estBytesPerSec, // ESTIMATE: entries × ~90 B
+        },
+      }))
       return
     }
     for (const l of engineListeners) (l as (r: unknown, s: unknown) => void)(req, res)

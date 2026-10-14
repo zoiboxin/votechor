@@ -3,7 +3,7 @@
 // full day/night cycle and a weather state machine (clear → cloudy → overcast →
 // monsoon rain → thunderstorm → fog). Purely client-side ambience.
 import * as THREE from 'three'
-import type { QualityLevel } from './engine'
+import type { ResolvedQuality } from './engine'
 
 export type WeatherKind = 'clear' | 'cloudy' | 'overcast' | 'rain' | 'storm' | 'fog'
 export type TimeMode = 'cycle' | 'dawn' | 'noon' | 'dusk' | 'night'
@@ -198,14 +198,14 @@ export class SkySystem {
   private fogTintCol = new THREE.Color(0xb9bcc2)
   private tmpDir = new THREE.Vector3()
 
-  private quality: QualityLevel = 'high'
+  private quality: ResolvedQuality = 'high'
   private time = 0
   private flashT = 0      // remaining flash time
   private flashBoost = 0  // 0..1 extra light during a flash
   private nextFlashIn = 0
   private camPos = new THREE.Vector3()
 
-  constructor(scene: THREE.Scene, quality: QualityLevel, hemi: THREE.HemisphereLight, sun: THREE.DirectionalLight) {
+  constructor(scene: THREE.Scene, quality: ResolvedQuality, hemi: THREE.HemisphereLight, sun: THREE.DirectionalLight) {
     this.scene = scene
     this.quality = quality
     this.hemi = hemi
@@ -369,7 +369,7 @@ export class SkySystem {
     return tex
   }
 
-  setQuality(q: QualityLevel) {
+  setQuality(q: ResolvedQuality) {
     this.quality = q
   }
 
