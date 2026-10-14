@@ -564,3 +564,48 @@ Stage Summary:
 - Round 13 shipped: the full Season system — solo queue joins a persistent 100-protester world (99 realistic backfill bots that wander/chat/emote/socialize/flee/march/get detained), bot-for-human substitution both directions, season rollover at 12 humans, 90s empty-season grace, AOI-filtered snapshots + client rig budget (24) so 100 protesters stay performant, season HUD chip + feed, season roster panel, season-aware honors/squads/gifting guards, snap-on-teleport interpolation fix
 - Verified: 21/21 season protocol assertions, smoke + invite regressions clean, live 1-human and 2-human browser sessions with bots visibly alive, zero console/server errors, lint + tsc clean
 - Risks/next: SEASON_MAX_HUMANS=12 is a constant (tune or expose later); bot march/quickmsg rates are probabilistic (protocol test treats them as informational); two concurrent headless WebGL sessions still degrade sockets (documented infra limit — protocol QA via bun scripts, browser QA one session at a time); consider next: bot difficulty personalities (sneaky bots that sneak past police), season persistence across server restarts (in-memory today), minimap rendering of bots vs humans with different colors, MVP bonus XP, or a season history/leaderboard
+
+---
+Task ID: 16
+Agent: Z.ai Code (user-request round 14)
+Task: Day/night cycle + weather system + beautiful sky (user brief: "update add day night so players can experience different weather also make sky more nice")
+
+Work Log:
+- QA ASSESSMENT (round start): all services healthy (Next :3000, game-server :3002); round-13 season system verified stable; zero console errors → project STABLE → went straight to the user-requested atmosphere feature
+- FEATURE — new `src/game/sky.ts` (~620 lines) SkySystem, the atmosphere brain:
+  * SKY DOME: custom ShaderMaterial gradient dome (BackSide sphere r=380, follows camera) with zenith/horizon/below-horizon bands, in-shader sun DISC + tight glow + wide warm haze (uniforms lerped per frame), includes three tonemapping+colorspace chunks so the sky harmonizes with ACESFilmic on the rest of the scene
+  * DAY/NIGHT CYCLE: timeOfDay 0-24h, full cycle in 420s ("Live Cycle" default); sun on a day-angle arc (6:00 sunrise / 18:00 sunset), moon on the anti-path; 7-keyframe palette (deep night → astro twilight → blue hour → sunrise/sunset fire → golden hour → day → noon) lerped by sun elevation driving: sky colors, fog color, hemi sky/ground, sun color, exposure, star alpha, glow/haze strength, cloud lit tint
+  * STARS: 620-point additive field on the upper hemisphere (slow rotation drift), fades in past dusk; MOON: canvas-texture sprite (maria + halo) with its own path + opacity curve
+  * CLOUDS: 11 drifting cloud clusters (3-5 soft radial-gradient sprites each) orbit the camera at r=150-300/h=62-147 in dome-LOCAL space (group already follows camera — double-offset bug caught in review), opacity/darkness/wind speed all weather-driven, tinted per palette + greyed by storm
+  * WEATHER STATE MACHINE: 6 kinds (clear/cloudy/overcast/rain/storm/fog) each with cloudOp/cloudDark/rain/fogMul/sunMult/wind/lightning params; auto mode = markov-ish NEXT_WEATHER roll every 50-125s; every param exponentially approaches target (~4.5s constant) → free smooth transitions; user can pin any kind via settings.weatherMode
+  * RAIN: GPU LineSegments (640/420/240 drops by quality) in a 60m camera-wrapped cylinder — vertex shader does mod()-wrap around uCam + wind slant + per-drop speed/length variance, distance-based alpha; color shifts blue at night
+  * LIGHTNING: storm scheduler fires every 4-20s at full strength (scaled by intensity), 0.42s flickery decay boosts sun(+2.6)/hemi(+2.2)/exposure(+0.5); onLightning callback → HUD white flash overlay + delayed synthesized thunder (260-1210ms)
+  * LIGHTS/FOG: SkySystem now OWNS sun+hemi colors/intensities per frame (sun by day, pale-blue moon light at night with crossfade near the horizon), shadow dir clamped y>=0.24 for stable shadows, fog color/near/far rewritten per frame (weather fogMul × quality base)
+- INTEGRATION:
+  * engine.ts: buildSky() canvas-texture dome REMOVED; Engine constructs SkySystem (gets hemi+sun refs), setQuality propagates, trackSun() now offsets the shadow light along sky.lightDir, dispose() cleans sky
+  * game.ts: renderUpdate drives sky.update(dt, focus) + renderer.toneMappingExposure = sky.exposure + AudioManager.setRain(sky.rainLevel) per frame; settings.timeMode/weatherMode applied per-frame (??-guarded for old localStorage); env chip patched at 1s cadence (only on change); startMatch randomizes start hour 07:00-19:00 + resets weather roll; boot wires sky.onLightning → HUD flashAt stamp + thunder timeout; window.__sky debug handle for QA scripts
+  * audio.ts: new 'thunder' SFX (layered low-pass noise + crack + 70→32Hz sine drop) + setRain(level) looping filtered-noise rain bed (highpass 900 + lowpass 6500, target-at-time fade)
+  * game-store.ts: Settings += timeMode ('cycle'|'dawn'|'noon'|'dusk'|'night') + weatherMode ('auto'|6 kinds); HudState += env {time, phase, weather, icon, wIcon, flashAt} with EnvHud type
+  * Hud.tsx: new EnvChip (top-right stack, cream poster card: time-icon badge + HH:MM + phase / weather icon + label) + full-screen lightning flash motion.div triggered by env.flashAt changes
+  * SettingsPanel.tsx: new ENVIRONMENT section (Time of Day select: Live Cycle/Dawn/High Noon/Dusk/Midnight; Weather select: Auto/Clear/Cloudy/Overcast/Monsoon Rain/Thunderstorm/Lohri Fog) with the standard cream-card styling; DEFAULTS updated both here and in the store
+  * HowToPlay.tsx: new "Sky & Weather" card (cycle + weather + Options pointer)
+- BUGS FOUND & FIXED during QA:
+  * LIGHTNING SCHEDULER (real bug): first strike fired the moment cur.lightning crossed 0.001 (nextFlashIn starts 0) and scheduled the next at 1/0.0011*(0.5-1.9) ≈ 450-1700s — one invisible strike then ~10-28min of silence. Fix: threshold 0.003 + strength-scaled interval (4-20s at full storm, minutes for drizzle rumbles). Verified live: strikes at ~10-20s cadence, flashT cycling, HUD flash div mounting (window.__flashes counter 3+)
+  * Dawn/Dusk label bug: 05:54 showed "DUSK" (morning-side boundary was 6-12h only) → now timeOfDay 2-12 = Dawn/Sunrise, else Dusk — verified "05:54 DAWN" live
+  * Cloud double-offset (caught in self-review before it could render): clouds are children of the camera-following dome group, so positions must be dome-LOCAL — world-space math would have flung them off-screen
+  * agent-browser dead-keyboard mystery during QA: HMR full-reloads (from my own mid-match edits) leave the old engine loop running while the new Game instance never finishes boot → input dead in the NEW match but matchTime still advancing from the OLD loop. Clean reload fixes it; NOT a production bug (documented so future rounds don't chase it). NOTE: Escape while pointer-locked is browser-consumed (first press exits lock, second press pauses — standard FPS behavior)
+- QA VERIFIED (agent-browser, live):
+  * DAY: random start hour works (12:17 MORNING boot); bright azure gradient + sun glow renders, zero shader errors
+  * NIGHT: settings → Midnight → world goes dark, env chip "22:30 NIGHT" + moon icon, building signs glow, faint moonlit road; live cycle observed advancing 12:11 → 23:27 organically during QA (full 24h in ~7 min)
+  * DUSK: "17:53 DUSK" golden-hour warmth on building faces
+  * DAWN: "05:54 DAWN" blue-hour + sunrise-fire horizon (label fix verified)
+  * STORM: settings → Thunderstorm → rain streaks clearly visible slanting across the frame, sky+buildings greyed and dimmed, env chip "THUNDERSTORM" with storm icon; lightning strikes counted 3+ via DOM observer, HUD white flash div mounts, thunder scheduled; cadence probe: nextFlash ~10-14s at full strength
+  * FOG: "Lohri Fog" → visibility collapses to ~55m, distant buildings dissolve into mist, chip shows fog label
+  * PERSISTENCE: time/weather selects persist via localStorage and survive reloads; old settings files hydrate safely (??-defaults)
+  * REGRESSION: W-hold movement exact baseline (z -8 → -9.10); big map M + minimap settings column intact; HUD season chip unaffected; rain audio bed no errors; lint exit 0; tsc clean (project src; pre-existing skills/ error untouched); zero console errors
+- OPS: no server changes; no DB changes; all visuals client-side (multiplayer-safe — each client experiences its own sky)
+
+Stage Summary:
+- Round 14 shipped: the full atmosphere layer — shader sky dome with sun disc/glow/haze, 7-palette day/night cycle (7-min live cycle + pin-able presets), moon + 620 stars, 11 drifting cloud clusters, 6-state weather machine (auto-progression or user-pinned) with GPU rain, flickering lightning + synthesized thunder + looping rain ambience, weather-driven fog/lights/exposure, HUD environment chip (clock + phase + weather) with lightning flash overlay, full Options → Environment controls, HowToPlay card
+- Verified: all 5 phase looks (dawn/day/dusk/night + golden hour) live in browser; rain/storm/fog/clear all visibly distinct; lightning cadence + HUD flash + thunder verified end-to-end; settings persistence; movement/big-map/HUD regressions clean; lint + tsc clean; zero console errors
+- Risks/next: window.__sky debug handle is permanent but dev-only (harmless); cloud sprite count (11 groups) untested on low-end devices — quality tiers only affect rain drops today (could scale clouds too); bots don't react to weather yet (server-side — could make bots seek shelter / march slower in rain); consider next: weather-synced music filter (muffle in rain), photo-mode sky presets, minimap day/night tint, or season weather events ("monsoon bonus XP" server events)

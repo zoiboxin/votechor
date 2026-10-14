@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor } from 'lucide-react'
+import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor, CloudSun } from 'lucide-react'
 
 const KEYBIND_LABELS: Record<string, string> = {
   forward: 'Move Forward', back: 'Move Back', left: 'Move Left', right: 'Move Right',
@@ -33,6 +33,8 @@ const DEFAULTS: Settings = {
   mouseSensitivity: 1, invertY: false, quality: 'auto',
   showFps: false, reducedEffects: false,
   minimapZoom: 150,
+  timeMode: 'cycle',
+  weatherMode: 'auto',
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 
@@ -179,6 +181,57 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
                 <div className="text-[9px] font-semibold text-[#1c1a17]/50">Less particles, more democracy</div>
               </div>
               <Switch checked={settings.reducedEffects} onCheckedChange={(v) => update({ reducedEffects: v })} />
+            </div>
+          </div>
+        </section>
+
+        {/* Environment (day/night + weather) */}
+        <section>
+          <SectionTitle icon={CloudSun}>Environment</SectionTitle>
+          <div className="space-y-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Time of Day</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Cycle runs a full 24h in ~7 real minutes</div>
+              </div>
+              <Select
+                value={settings.timeMode ?? 'cycle'}
+                onValueChange={(v) => update({ timeMode: v as Settings['timeMode'] })}
+              >
+                <SelectTrigger className="w-36 rounded-xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] font-black">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="vc-paper border-2 border-[#1c1a17]/70">
+                  <SelectItem value="cycle" className="font-bold">Live Cycle 🌗</SelectItem>
+                  <SelectItem value="dawn" className="font-bold">Dawn 🌅</SelectItem>
+                  <SelectItem value="noon" className="font-bold">High Noon ☀️</SelectItem>
+                  <SelectItem value="dusk" className="font-bold">Dusk 🌆</SelectItem>
+                  <SelectItem value="night" className="font-bold">Midnight 🌙</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Weather</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Auto lets the skies wander on their own</div>
+              </div>
+              <Select
+                value={settings.weatherMode ?? 'auto'}
+                onValueChange={(v) => update({ weatherMode: v as Settings['weatherMode'] })}
+              >
+                <SelectTrigger className="w-36 rounded-xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] font-black">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="vc-paper border-2 border-[#1c1a17]/70">
+                  <SelectItem value="auto" className="font-bold">Auto 🎲</SelectItem>
+                  <SelectItem value="clear" className="font-bold">Clear Skies</SelectItem>
+                  <SelectItem value="cloudy" className="font-bold">Cloudy</SelectItem>
+                  <SelectItem value="overcast" className="font-bold">Overcast</SelectItem>
+                  <SelectItem value="rain" className="font-bold">Monsoon Rain</SelectItem>
+                  <SelectItem value="storm" className="font-bold">Thunderstorm ⛈️</SelectItem>
+                  <SelectItem value="fog" className="font-bold">Lohri Fog</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </section>

@@ -55,6 +55,18 @@ export interface HudState {
   hunted: boolean // police/security actively chasing the local player
   mapX: number // player world x (0.5m grid) — used by the big-map minimap-window overlay
   mapZ: number // player world z
+  /** live day/night + weather readout for the HUD environment chip */
+  env: EnvHud
+}
+
+export interface EnvHud {
+  time: string // "14:30" in-game clock
+  phase: string // Morning / Golden Hour / Dusk / Night…
+  weather: string // Clear Skies / Monsoon Rain / Thunderstorm…
+  icon: 'sun' | 'sunrise' | 'sunset' | 'moon'
+  wIcon: 'clear' | 'cloudy' | 'overcast' | 'rain' | 'storm' | 'fog'
+  /** Date.now() of the last lightning flash — HUD shows a white flash overlay */
+  flashAt: number
 }
 
 export interface BossHud {
@@ -83,6 +95,10 @@ export interface Settings {
   keybinds: Record<string, string>
   /** How many world-meters the corner minimap shows vertically (80 = close-up, 582 = full city). */
   minimapZoom: number
+  /** day/night selector — 'cycle' runs a real-time clock, others pin the sky */
+  timeMode: 'cycle' | 'dawn' | 'noon' | 'dusk' | 'night'
+  /** weather selector — 'auto' runs the living weather state machine */
+  weatherMode: 'auto' | 'clear' | 'cloudy' | 'overcast' | 'rain' | 'storm' | 'fog'
 }
 
 // ---- minimap zoom window helpers (shared by the engine renderer + BigMap settings UI) ----
@@ -278,6 +294,7 @@ const defaultHud: HudState = {
   spectating: null,
   hunted: false,
   mapX: 0, mapZ: 0,
+  env: { time: '10:30', phase: 'Morning', weather: 'Clear Skies', icon: 'sun', wIcon: 'clear', flashAt: 0 },
 }
 
 const defaultBoss: BossHud = {
@@ -290,6 +307,8 @@ const defaultSettings: Settings = {
   mouseSensitivity: 1, invertY: false, quality: 'auto',
   showFps: false, reducedEffects: false,
   minimapZoom: 150,
+  timeMode: 'cycle',
+  weatherMode: 'auto',
   keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
 }
 

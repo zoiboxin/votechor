@@ -2,6 +2,7 @@
 'use client'
 import * as THREE from 'three'
 import { Engine } from './engine'
+import type { SkySystem } from './sky'
 import { PhysicsWorld } from './physics'
 import { WorldRenderer } from './world'
 import { InputManager } from './input'
@@ -162,7 +163,15 @@ export class Game {
     this.minimapCanvas = minimap
     this.canvasEl = canvas
     this.engine = new Engine(canvas)
+    // lightning → white HUD flash + delayed thunder roll
+    this.engine.sky.onLightning = () => {
+      const st = useGameStore.getState()
+      st.patchHud({ env: { ...st.hud.env, flashAt: Date.now() } })
+      window.setTimeout(() => AudioManager.play('thunder'), 260 + Math.random() * 950)
+    }
     this.physics.setColliders(this.world.colliders)
+    // QA/debug handle — lets test scripts probe the live atmosphere state (window.__sky)
+    if (typeof window !== 'undefined') (window as unknown as { __sky?: SkySystem }).__sky = this.engine.sky
     this.worldRenderer = new WorldRenderer(this.world, 'high')
     this.engine.scene.add(this.worldRenderer.group)
     this.engine.scene.add(this.bossClient.group)
@@ -446,6 +455,12 @@ export class Game {
     this.rallyReadyAt = 0
     this.clearPendingInvite()
     useGameStore.getState().setSquad(null)
+
+    // fresh skies each match: random start hour in 'cycle' mode (07:00–19:00) + reset weather roll
+    this.engine.sky.timeOfDay = 7 + Math.random() * 12
+    this.engine.sky.setWeatherMode('auto')
+    this.engine.sky.setTimeMode(useGameStore.getState().settings.timeMode ?? 'cycle')
+    useGameStore.getState().patchHud({ env: { ...useGameStore.getState().hud.env, flashAt: 0 } })
 
     const profile = store.profile
     this.archetype = profile?.archetype ?? 'student'
@@ -1556,9 +1571,25 @@ export class Game {
       this.camRig.update(dt, focus, 0, 0)
     }
     this.engine.trackSun(focus)
-    const fog = this.engine.scene.fog as THREE.Fog
-    fog.near = 60
-    fog.far = this.engine.quality === 'low' ? 150 : 210
+
+    // ---- atmosphere: day/night cycle + weather (drives fog, lights, exposure, rain) ----
+    const settings = useGameStore.getState().settings
+    const sky = this.engine.sky
+    sky.setTimeMode(settings.timeMode ?? 'cycle')
+    sky.setWeatherMode(settings.weatherMode ?? 'auto')
+    sky.update(dt, focus)
+    this.engine.renderer.toneMappingExposure = sky.exposure
+    AudioManager.setRain(sky.rainLevel)
+    this.envTick += dt
+    if (this.envTick >= 1) {
+      this.envTick = 0
+      const info = sky.envInfo()
+      const st = useGameStore.getState()
+      const prev = st.hud.env
+      if (prev.time !== info.time || prev.phase !== info.phase || prev.weather !== info.weather || prev.wIcon !== info.wIcon) {
+        st.patchHud({ env: { ...prev, ...info } })
+      }
+    }
 
     // world animation
     this.worldRenderer.update(dt, this.worldTime, this.offline ? this.localSearchlightAngles : this.serverNpcRys)
@@ -1586,6 +1617,7 @@ export class Game {
     AudioManager.setCrowdLevel(chased ? 0.9 : Math.max(0.3, 1 - Math.abs(focus.z) / 560))
   }
   private lastZoneIdx = -1
+  private envTick = 0 // 1s cadence for the HUD environment chip
 
   /** 4s cinematic orbit when the boss activates; freezes input. */
   private updateBossCinematic(dt: number) {

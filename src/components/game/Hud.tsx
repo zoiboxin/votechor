@@ -1,12 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useGameStore } from '@/lib/game-store'
+import { useGameStore, type EnvHud } from '@/lib/game-store'
 import { uiActions, ZONE_ACCENTS } from '@/lib/game-store'
 import { ITEM_CONFIG, CAPTURE_MESSAGES } from '@/game/shared/constants'
 import {
   Heart, Zap, Vote, Users, Wifi, WifiOff, Map as MapIcon, Hand, Star,
   Clock, Package, Footprints, Gauge, Siren, Megaphone, Bot as BotIcon,
+  Sun, Moon, Sunrise, Sunset, CloudSun, Cloud, CloudRain, CloudLightning, CloudFog,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -154,6 +155,31 @@ function DazedOverlay() {
   )
 }
 
+const TIME_ICONS = { sun: Sun, sunrise: Sunrise, sunset: Sunset, moon: Moon } as const
+const WEATHER_ICONS = {
+  clear: CloudSun, cloudy: Cloud, overcast: Cloud, rain: CloudRain, storm: CloudLightning, fog: CloudFog,
+} as const
+
+function EnvChip({ env }: { env: EnvHud }) {
+  const TimeIcon = TIME_ICONS[env.icon]
+  const WIcon = WEATHER_ICONS[env.wIcon]
+  return (
+    <div className="pointer-events-auto w-56 overflow-hidden rounded-xl border-2 border-[#1c1a17]/80 bg-[#f5efdc]/92 shadow-[3px_3px_0_rgba(28,26,23,0.75)] backdrop-blur-sm">
+      <div className="flex items-center gap-1.5 px-2 py-1">
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-[#1c1a17]/70 bg-[#1c1a17]">
+          <TimeIcon className="h-2.5 w-2.5 text-[#f2c14e]" />
+        </span>
+        <span className="text-[10px] font-black tabular-nums text-[#1c1a17]">{env.time}</span>
+        <span className="truncate text-[9px] font-black uppercase tracking-wider text-[#8c1f28]">{env.phase}</span>
+      </div>
+      <div className="flex items-center gap-1.5 border-t border-[#1c1a17]/15 bg-[#1c1a17]/5 px-2 py-0.5">
+        <WIcon className="h-3 w-3 shrink-0 text-[#1c1a17]/70" />
+        <span className="truncate text-[8.5px] font-black uppercase tracking-wide text-[#1c1a17]/75">{env.weather}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function Hud() {
   const hud = useGameStore((s) => s.hud)
   const settings = useGameStore((s) => s.settings)
@@ -165,6 +191,16 @@ export default function Hud() {
   const minimapRef = useRef<HTMLCanvasElement>(null)
   const [zoneVisible, setZoneVisible] = useState(true)
   const [now, setNow] = useState(Date.now())
+  const flashAt = useGameStore((s) => s.hud.env.flashAt)
+  const [flash, setFlash] = useState(false)
+
+  // lightning flash overlay — re-fires on every new flashAt stamp
+  useEffect(() => {
+    if (!flashAt) return
+    setFlash(true)
+    const t = setTimeout(() => setFlash(false), 340)
+    return () => clearTimeout(t)
+  }, [flashAt])
 
   // the engine draws the zoomed, player-following minimap straight into the visible strip
   useEffect(() => {
@@ -199,6 +235,20 @@ export default function Hud() {
       {hud.hunted && !hud.detained && !lowHealth && (
         <div className="absolute inset-0 animate-[vc-blink_0.85s_ease-in-out_infinite] shadow-[inset_0_0_74px_rgba(201,47,47,0.42)]" />
       )}
+
+      {/* lightning flash (storm weather) */}
+      <AnimatePresence>
+        {flash && (
+          <motion.div
+            key={`flash-${flashAt}`}
+            initial={{ opacity: 0.78 }}
+            animate={{ opacity: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.34, ease: 'easeOut' }}
+            className="absolute inset-0 z-40 bg-[#e8f0ff]"
+          />
+        )}
+      </AnimatePresence>
 
       {/* WANTED — chase alarm stamp */}
       <AnimatePresence>
@@ -277,6 +327,9 @@ export default function Hud() {
             <span className="text-[10px] font-black tabular-nums text-[#2e6e4e]">{fps} FPS</span>
           )}
         </div>
+
+        {/* environment chip — in-game clock + weather (client-side day/night cycle) */}
+        <EnvChip env={hud.env} />
 
         {/* season chip (solo queue — persistent 100-protester world with backfill bots) */}
         {season && (

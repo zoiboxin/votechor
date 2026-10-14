@@ -1,5 +1,6 @@
 // VoteChor engine core — renderer, scene, sky, lighting, adaptive quality, main loop.
 import * as THREE from 'three'
+import { SkySystem } from './sky'
 
 export type QualityLevel = 'low' | 'medium' | 'high'
 
@@ -9,6 +10,7 @@ export class Engine {
   camera: THREE.PerspectiveCamera
   sun: THREE.DirectionalLight
   hemi: THREE.HemisphereLight
+  sky: SkySystem
   quality: QualityLevel = 'high'
   pixelRatio = 1
   private accum = 0
@@ -35,7 +37,7 @@ export class Engine {
     this.renderer.toneMappingExposure = 1.05
 
     this.scene = new THREE.Scene()
-    this.scene.fog = new THREE.Fog(0xe8d5b0, 60, 210)
+    this.scene.fog = new THREE.Fog(0xe8d5b0, 60, 210) // sky system rewrites color/distance every frame
 
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 420)
 
@@ -53,34 +55,8 @@ export class Engine {
     this.scene.add(this.sun)
     this.scene.add(this.sun.target)
 
-    this.scene.add(this.buildSky())
+    this.sky = new SkySystem(this.scene, 'high', this.hemi, this.sun)
     this.resize()
-  }
-
-  private buildSky(): THREE.Mesh {
-    const geo = new THREE.SphereGeometry(380, 24, 12)
-    const canvas = document.createElement('canvas')
-    canvas.width = 64; canvas.height = 256
-    const ctx = canvas.getContext('2d')!
-    const g = ctx.createLinearGradient(0, 0, 0, 256)
-    g.addColorStop(0, '#7fb2d9')
-    g.addColorStop(0.45, '#f2d9a8')
-    g.addColorStop(0.72, '#f7c98b')
-    g.addColorStop(1, '#e8b184')
-    ctx.fillStyle = g
-    ctx.fillRect(0, 0, 64, 256)
-    // a few clouds
-    ctx.fillStyle = 'rgba(255,255,255,0.55)'
-    for (let i = 0; i < 14; i++) {
-      const y = 30 + Math.random() * 80
-      ctx.beginPath(); ctx.ellipse(Math.random() * 64, y, 10 + Math.random() * 14, 4 + Math.random() * 5, 0, 0, 7); ctx.fill()
-    }
-    const tex = new THREE.CanvasTexture(canvas)
-    tex.colorSpace = THREE.SRGBColorSpace
-    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.renderOrder = -10
-    return mesh
   }
 
   setQuality(q: 'low' | 'medium' | 'high' | 'auto') {
@@ -99,6 +75,7 @@ export class Engine {
       this.sun.shadow.map?.dispose()
       this.sun.shadow.map = null
     }
+    this.sky.setQuality(level)
     this.resize()
   }
 
@@ -109,9 +86,10 @@ export class Engine {
     this.renderer.setSize(w, h, false)
   }
 
-  /** Keep the sun + shadow frustum centered on the player as they travel down the map */
+  /** Keep the shadow-casting light centered on the player; direction comes from the sky (sun by day, moon by night) */
   trackSun(target: THREE.Vector3) {
-    this.sun.position.set(target.x + 55, 90, target.z + 35)
+    const d = this.sky.lightDir
+    this.sun.position.set(target.x + d.x * 110, target.y + d.y * 110, target.z + d.z * 110)
     this.sun.target.position.set(target.x, 0, target.z)
     this.sun.target.updateMatrixWorld()
   }
@@ -154,6 +132,7 @@ export class Engine {
   dispose() {
     this.disposed = true
     this.stop()
+    this.sky.dispose()
     this.renderer.dispose()
   }
 }

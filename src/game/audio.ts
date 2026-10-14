@@ -7,6 +7,7 @@ export type SfxName =
   | 'pickup' | 'token' | 'throw' | 'impact' | 'hit' | 'capture' | 'release'
   | 'heal' | 'revive' | 'checkpoint' | 'uiClick' | 'uiHover' | 'bossHit' | 'stampSlam'
   | 'shockwave' | 'paperRustle' | 'dizzy' | 'victory' | 'defeat' | 'cash' | 'horn' | 'moo' | 'gate'
+  | 'thunder'
 
 export type MusicTheme = 'menu' | 'ambient' | 'chase' | 'boss' | 'victory'
 
@@ -164,6 +165,51 @@ class AudioManagerImpl {
         notes.forEach((n, i) => this.osc('sawtooth', n, t + i * 0.22, 0.34, 0.1 * v))
         break
       }
+      case 'thunder': {
+        // layered rumble: long low-passed noise + deep sine drop + a crack transient
+        this.noise(1.8, t, 0.34 * v, 140, 0.35)
+        this.noise(0.35, t + 0.02, 0.22 * v, 900, 0.5)
+        this.osc('sine', 70, t, 1.6, 0.3 * v, 32)
+        break
+      }
+    }
+  }
+
+  // ---------- weather ambience (looping rain hiss, gain-driven) ----------
+  private rainGain: GainNode | null = null
+  private rainSrc: AudioBufferSourceNode | null = null
+
+  /** level 0..1 — smoothly fades a looping filtered-noise rain bed in/out */
+  setRain(level: number) {
+    if (!this.ctx || !this.master) return
+    if (level > 0.01 && !this.rainSrc) {
+      const len = this.ctx.sampleRate * 2
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
+      const data = buf.getChannelData(0)
+      let last = 0
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1
+        last = (last + 0.35 * white) / 1.35
+        data[i] = (last * 1.8 + white * 0.35)
+      }
+      const src = this.ctx.createBufferSource()
+      src.buffer = buf
+      src.loop = true
+      const hp = this.ctx.createBiquadFilter()
+      hp.type = 'highpass'
+      hp.frequency.value = 900
+      const lp = this.ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.value = 6500
+      const g = this.ctx.createGain()
+      g.gain.value = 0
+      src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(this.master)
+      src.start()
+      this.rainSrc = src
+      this.rainGain = g
+    }
+    if (this.rainGain && this.ctx) {
+      this.rainGain.gain.setTargetAtTime(level * 0.16, this.ctx.currentTime, 1.2)
     }
   }
 
