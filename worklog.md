@@ -748,3 +748,23 @@ Stage Summary:
 - 关键决策：点灯池常驻场景只调 intensity（避免 shader 重编译）；InstancedMesh 让 ~24 盏新灯只有 5 个 draw call；cone/pool 材质开启 fog 融入夜雾
 - 已知边界：eval 注入的 tod 修改偶发 1Hz HUD chip 显示滞后（纯显示，无逻辑影响）；多 decos 区域（zone C x=±16 deco lamps）与程序化灯最短间距 ~6m 可接受
 - 建议下一轮：雨天夜间灯下涟漪反射（简单：pool opacity × (1+rain)）、商店招牌夜间霓虹化、路灯闪烁故障效果（个别灯 random flicker）
+
+---
+Task ID: 18
+Agent: Z.ai Code (main)
+Task: 用户要求扩充自定义系统 — 更多角色（服装/脸型）+ 大量道具（背包/棍棒/标语牌/横幅/靴子/警棍/棒球棍/购物袋等）+ 更专业的外观
+
+Work Log:
+- DATA (src/lib/cosmetics.ts): CosmeticKind = hat|face|outfit|footwear|gear|held；新增 FACE_CATALOG(clean/beard/moustache/warpaint LV4/scar@barrier_jumper)、OUTFIT_CATALOG(classic/kurta LV2/hoodie LV6/highvis@rescuer)、FOOTWEAR_CATALOG(shoes/boots/chappal LV2/glow LV8)、GEAR_CATALOG(none/backpack/jhola/bannerroll LV3/dhol@chai_guardian/umbrella LV7)、HELD_CATALOG(none/sign/banner/flag LV2/bat LV4/lathi LV6/shoppingbag/megaphone@rescuer)；HAT_CATALOG += bandana(free)/hardhat LV5；SKIN_TONES 6 色（语义命名如 Midnight Filter Coffee）；sanitizeCosmetics() 白名单清洗（长度截断+hex 校验）供服务器/档案共用；randomFreeCosmetics() 给 bot 造随机外观；resolveRigCosmetics() 默认值解析；anyItemIsUnlocked() 全目录通用解锁判断
+- RIG (character.ts): RigOptions += face/outfit/footwear/gear/held；共享几何缓存 +36 项；实现 bandana(帽+脑后结)/hardhat(穹顶+帽檐+脊线)、moustache/warpaint(3 条 accent 战纹)/scar、kurta(裙摆+撞色下摆)/hoodie(兜帽+袋鼠兜)/highvis(橙背心+2 反光条)、boots(高筒+深色)/chappal(平底夹脚)/glow(发光鞋+LED 条)、backpack(通用化+前盖,student/journalist 未设槽位时保留签名背包)/jhola(斜挎带+侧袋)/bannerroll(背卷轴+红边)/dhol(桶鼓+双箍+绑带)/umbrella(收拢伞斜挂+弯钩)、banner(杆+宽布纹理口号,双面)/flag(杆+旗布,行走飘动)/bat(锥形棒+柄)/lathi(玩家版)/shoppingbag(左手袋+提手+葱)/megaphone(右手喇叭)；armBlockR/L 取代 signGroup 判断 — 持物手不再甩臂；旗/横幅布料 update() 内程序摆动；uncle 无 face 槽时默认 beard（身份保留）
+- SERVER (mini-services/game-server): PlayerState += cosmetics；addPlayer 接受并存储；playerNet(p, includeCosmetics) — 仅 join ack(playersArray(true)) 与 game:playerjoined 事件携带（10-12Hz AOI 快照不携带，零带宽回归）；join handler sanitizeCosmetics(payload.cosmetics)；playerjoined 广播扩展为 (id, name, archetype, cosmetics)；season bot 创建时 randomFreeCosmetics() — 99 个 bot 全员随机外观
+- CLIENT: types.ts PlayerNetState += cosmetics?；net.ts onPlayerJoined 签名扩展；player.ts 构造器透传 6 槽位；game.ts 本地玩家全量透传 + attachRig 远程 rig 完整外观（含 skinTone → colors.skin）+ pendingCosmetics Map 解决 playerjoined 先于首个 AOI 快照的竞态
+- API (/api/profile): validateCosmeticUnlocks 泛化 — hat 原逻辑保留 + 5 个新槽位走 anyItemIsUnlocked（未知 id 拒绝、锁定的返回 "Locked — Reach level N/Earn medal: X"）
+- UI (CharacterSelect.tsx 重写 + 新 CharacterPreview.tsx): 真实 WebGL 预览 — 直接用游戏内 CharacterRig 渲染在转台基座上（暖键光+冷轮廓光、缓慢自转、可拖拽旋转、look 变化仅重建 rig 不重建 renderer）；6 标签页衣柜（Headgear/Face/Outfit/Footwear/Back Gear/In Hand）+ 已装备绿点指示 + equipped 计数 chip；肤色 6 色板；Specs 开关保留；标语 Paint It（驱动 sign+banner 纹理）；"Surprise Fit" 随机整套（只从已解锁池抽）+ toast；锁项 hover 显示解锁条件；修复潜在 bug：API 是整对象替换而非合并 — UI 现在总是发送完整 cosmetics（旧行为部分发送会丢字段）
+- QA: tsc 0 错误、eslint 0 错误；season-test 37/37、combat-test 33/33（服务器重启后回归全绿）；agent-browser（经 :81 网关）：衣柜页渲染+3D 预览转台+标签切换+装备/锁定交互+Surprise Fit(5 EQUIPPED+toast)+标语输入全部通过；本地玩家进游戏戴装备帽 ✓；solo 赛季 CONNECTED 100 人 · 72 CROWD/24 RIGS；数据探针 99 remotes/98 带 cosmetics（样本: cap+beard+banner、bandana+glasses+jhola+boots…）；rig 子节点数差异证实道具网格已挂载；橙衣持牌 bot 截图确认；**持久化闭环**：装备 bandana+banner+标语 → reload → 状态原样恢复（服务器往返 ✓）；零 console 错误
+- 已知边界: 赛季中途补位的 bot 无 playerjoined 事件 → 无 cosmetics（默认外观，1/99 案例）；:3000 直连 origin 下 socket 走不通 → OFFLINE（QA 环境伪影，真实预览走 :81 网关正常）
+
+Stage Summary:
+- 自定义系统从"6 顶帽子+眼镜+标语"扩展为 **8 角色 × 6 槽位 × 30+ 道具** 的完整衣柜：脸型(5)/服装(4)/鞋(4)/背具(6)/手持(8)/头饰(8)+肤色(6)+眼镜+专属标语，全部有解锁曲线（等级/成就），实时 3D 预览所见即所得，**多人可见**（服务器同步+远程 rig 完整渲染，bot 也全员随机换装），服务器权威验证解锁
+- 关键修复：cosmetics 部分保存丢字段（现全量发送）；远程玩家此前完全看不到彼此外观（服务器根本不转发 cosmetics — 现已入 ack+join 事件）
+- 下一轮建议：戒指/披风等更多槽位、cosmetics 进游戏内商店（代币购买）、bot 皮肤与名字联动（职业 bot 穿职业装）、衣柜页移动端布局优化（3D 预览小屏折叠）

@@ -47,7 +47,11 @@ export class PlayerController {
     name: string,
     spawn: { x: number; z: number },
     private physics: PhysicsWorld,
-    opts?: { hat?: string; glasses?: boolean; signText?: string; cosmetics?: { skinTone?: string } },
+    opts?: {
+      hat?: string; glasses?: boolean; signText?: string
+      face?: string; outfit?: string; footwear?: string; gear?: string; held?: string
+      cosmetics?: { skinTone?: string }
+    },
   ) {
     const arch = archetypeById(archetype)
     this.maxHealth = 100 + arch.stats.healthBonus
@@ -56,7 +60,11 @@ export class PlayerController {
     this.stamina = this.maxStamina
     const colors = { ...arch.colors }
     if (opts?.cosmetics?.skinTone) colors.skin = opts.cosmetics.skinTone
-    this.rig = new CharacterRig({ archetype, name, colors, hat: opts?.hat, glasses: opts?.glasses, signText: opts?.signText })
+    this.rig = new CharacterRig({
+      archetype, name, colors,
+      hat: opts?.hat, glasses: opts?.glasses, signText: opts?.signText,
+      face: opts?.face, outfit: opts?.outfit, footwear: opts?.footwear, gear: opts?.gear, held: opts?.held,
+    })
     this.pos.set(spawn.x, 0, spawn.z)
     this.rig.group.position.copy(this.pos)
   }

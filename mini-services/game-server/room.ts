@@ -170,6 +170,7 @@ export interface PlayerState {
   inviteTimes: number[]
   kudosTimes: number[]
   lastReleaseId: string | null // anti-repeat: avoid releasing to the same point twice in a row
+  cosmetics?: Record<string, string | boolean> // wardrobe — sent on join ack + playerjoined only
 }
 
 export interface ItemState {
@@ -240,7 +241,7 @@ export class Room {
 
   // ---------- players ----------
 
-  addPlayer(socketId: string, name: string, archetype: string, opts?: { bot?: boolean; x?: number; z?: number }): PlayerState {
+  addPlayer(socketId: string, name: string, archetype: string, opts?: { bot?: boolean; x?: number; z?: number; cosmetics?: Record<string, string | boolean> }): PlayerState {
     const arch = archetypeById(archetype)
     const now = Date.now()
     const maxHealth = 100 + arch.stats.healthBonus
@@ -250,6 +251,7 @@ export class Room {
       id: socketId,
       name,
       archetype: arch.id,
+      cosmetics: opts?.cosmetics,
       bot: opts?.bot ?? false,
       x,
       y: 0,
@@ -718,9 +720,9 @@ export class Room {
 
   // ---------- snapshots ----------
 
-  playersArray(): PlayerNetState[] {
+  playersArray(includeCosmetics = false): PlayerNetState[] {
     const out: PlayerNetState[] = []
-    for (const p of this.players.values()) out.push(playerNet(p))
+    for (const p of this.players.values()) out.push(playerNet(p, includeCosmetics))
     return out
   }
 
@@ -796,8 +798,8 @@ export class Room {
 }
 
 /** Wire format for one player/bot — shared by the legacy and AOI broadcast paths. */
-export function playerNet(p: PlayerState): PlayerNetState {
-  return {
+export function playerNet(p: PlayerState, includeCosmetics = false): PlayerNetState {
+  const net: PlayerNetState = {
     id: p.id,
     name: p.name,
     archetype: p.archetype,
@@ -812,6 +814,8 @@ export function playerNet(p: PlayerState): PlayerNetState {
     tokens: p.tokens,
     carrying: p.carrying,
   } as PlayerNetState
+  if (includeCosmetics && p.cosmetics) net.cosmetics = p.cosmetics
+  return net
 }
 
 // ---------- deterministic vehicles (mirrors client VehicleSystem ping-pong) ----------

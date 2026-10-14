@@ -178,7 +178,7 @@ export interface Profile {
   xp: number
   level: number
   dailyStreak?: number
-  cosmetics: { hat?: string; glasses?: boolean; signText?: string; skinTone?: string }
+  cosmetics: { hat?: string; glasses?: boolean; signText?: string; skinTone?: string; face?: string; outfit?: string; footwear?: string; gear?: string; held?: string }
 }
 
 export interface DailyState {

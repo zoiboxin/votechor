@@ -24,6 +24,7 @@
 import type { Server as SocketIOServer } from 'socket.io'
 import { Room, WORLD, playerNet, type PlayerState } from './room'
 import { ARCHETYPES } from '../../src/game/shared/constants'
+import { randomFreeCosmetics } from '../../src/lib/cosmetics'
 import type { AnimName, PlayerNetState } from '../../src/game/shared/types'
 
 // ---------- tuning ----------
@@ -446,7 +447,7 @@ export class Season {
     const name = this.takeName()
     const archetype = pick(ARCHETYPES).id
     const pos = this.spawnPoint(mode)
-    const p = this.room.addPlayer(id, name, archetype, { bot: true, x: pos.x, z: pos.z })
+    const p = this.room.addPlayer(id, name, archetype, { bot: true, x: pos.x, z: pos.z, cosmetics: randomFreeCosmetics() })
     const bot: Bot = {
       p,
       node: nearestNode(pos.x, pos.z),

@@ -108,6 +108,8 @@ export interface PlayerNetState {
   squad?: string
   emote?: string
   tokens?: number
+  /** Wardrobe — included ONLY in the join ack + game:playerjoined (10Hz snapshots omit it). */
+  cosmetics?: Record<string, string | boolean>
 }
 
 export type NpcStateName = 'patrol' | 'suspicious' | 'investigate' | 'chase' | 'capture' | 'return' | 'idle'

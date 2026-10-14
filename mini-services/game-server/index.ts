@@ -11,6 +11,7 @@ import {
 import { SeasonManager, broadcastStats } from './season'
 import type { SeasonInfo } from './season'
 import { TOKENS_NEEDED, ARCHETYPES } from '../../src/game/shared/constants'
+import { sanitizeCosmetics } from '../../src/lib/cosmetics'
 import type { ProjectileNetState } from '../../src/game/shared/types'
 
 const PORT = 3002
@@ -349,7 +350,10 @@ io.on('connection', (socket) => {
 
     socket.join(room.id)
     socketRooms.set(socket.id, room.id)
-    const player = room.addPlayer(socket.id, name, archetype)
+    // wardrobe: sanitize once here — stored on the player, echoed on the join ack
+    // (players list) and re-broadcast to incumbents via game:playerjoined.
+    const cosmetics = sanitizeCosmetics(payload.cosmetics)
+    const player = room.addPlayer(socket.id, name, archetype, { cosmetics })
 
     if (wantsSeason) {
       // One bot steps aside, bots top back up to SEASON_CAP — all BEFORE the ack
@@ -364,7 +368,7 @@ io.on('connection', (socket) => {
       roomId: room.id,
       roomCode: room.code,
       serverTime: Date.now(),
-      players: room.playersArray(),
+      players: room.playersArray(true),
       npcs: room.npcsArray(),
       items: room.itemsArray(),
       checkpoints: [...room.checkpoints],
@@ -374,7 +378,7 @@ io.on('connection', (socket) => {
       matchStartedAt: room.matchStartedAt,
       season: seasonInfo ?? null,
     })
-    socket.to(room.id).emit('game:playerjoined', socket.id, player.name)
+    socket.to(room.id).emit('game:playerjoined', socket.id, player.name, player.archetype, player.cosmetics ?? undefined)
     console.log(`[join] ${player.name}(${socket.id}) → ${room.id} (${room.size}/${ROOM_CAP})`)
   })
 

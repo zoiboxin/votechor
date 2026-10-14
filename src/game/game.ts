@@ -240,7 +240,8 @@ export class Game {
           this.store.notify(`${name} left the protest`, 'info')
         }
       },
-      onPlayerJoined: (playerId, name) => {
+      onPlayerJoined: (playerId, name, _archetype, cosmetics) => {
+        if (cosmetics) this.pendingCosmetics.set(playerId, cosmetics)
         this.deferredRosterAdd(playerId, name)
         if (playerId.startsWith('bot_')) {
           useGameStore.getState().patchSeason({ lastEvent: `${name} joined the season`, lastEventAt: Date.now() })
@@ -510,8 +511,13 @@ export class Game {
     const cosmetics = profile?.cosmetics
     this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
       hat: cosmetics?.hat as string | undefined,
-      glasses: cosmetics?.glasses,
-      signText: cosmetics?.signText,
+      glasses: cosmetics?.glasses as boolean | undefined,
+      signText: cosmetics?.signText as string | undefined,
+      face: cosmetics?.face as string | undefined,
+      outfit: cosmetics?.outfit as string | undefined,
+      footwear: cosmetics?.footwear as string | undefined,
+      gear: cosmetics?.gear as string | undefined,
+      held: cosmetics?.held as string | undefined,
       cosmetics,
     })
     this.player.onFootstep = (running) => AudioManager.play(running ? 'footstepRun' : 'footstep')
@@ -758,8 +764,22 @@ export class Game {
     }
   }
 
-  private attachRig(id: string, r: { rig: import('./character').CharacterRig | null; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; archetype: string }) {
-    const rig = new CharacterRig({ archetype: r.archetype, name: r.name })
+  private attachRig(id: string, r: { rig: import('./character').CharacterRig | null; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; archetype: string; cosmetics?: Record<string, string | boolean> }) {
+    const c = r.cosmetics
+    const skinTone = typeof c?.skinTone === 'string' ? c.skinTone : undefined
+    const rig = new CharacterRig({
+      archetype: r.archetype,
+      name: r.name,
+      hat: typeof c?.hat === 'string' ? c.hat : undefined,
+      glasses: c?.glasses === true,
+      signText: typeof c?.signText === 'string' && c.signText ? c.signText : undefined,
+      face: typeof c?.face === 'string' ? c.face : undefined,
+      outfit: typeof c?.outfit === 'string' ? c.outfit : undefined,
+      footwear: typeof c?.footwear === 'string' ? c.footwear : undefined,
+      gear: typeof c?.gear === 'string' ? c.gear : undefined,
+      held: typeof c?.held === 'string' ? c.held : undefined,
+      ...(skinTone ? { colors: { ...archetypeById(r.archetype).colors, skin: skinTone } } : {}),
+    })
     rig.group.position.set(r.target.x, r.target.y, r.target.z)
     rig.group.rotation.y = r.target.ry
     this.engine.scene.add(rig.group)
@@ -767,9 +787,13 @@ export class Game {
     r.rig = rig
   }
 
+  /** Wardrobe broadcasts race ahead of the first AOI snapshot — stash them here. */
+  private pendingCosmetics = new Map<string, Record<string, string | boolean>>()
+
   private addRemote(p: import('./shared/types').PlayerNetState) {
     // data-only entry — the rig budget pass (ensureRemoteRigs) attaches real characters
-    const r = { rig: null as import('./character').CharacterRig | null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, lastSeen: Date.now() }
+    const cosmetics = p.cosmetics ?? this.pendingCosmetics.get(p.id)
+    const r = { rig: null as import('./character').CharacterRig | null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, cosmetics, lastSeen: Date.now() }
     this.remotePlayers.set(p.id, r)
     return r
   }

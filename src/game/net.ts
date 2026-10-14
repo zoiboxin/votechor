@@ -54,7 +54,7 @@ export type NetEvents = {
   onEmote: (playerId: string, emote: string) => void
   onQuickMsg: (playerId: string, msgId: number) => void
   onPlayerLeft: (playerId: string, name: string) => void
-  onPlayerJoined: (playerId: string, name: string) => void
+  onPlayerJoined: (playerId: string, name: string, archetype?: string, cosmetics?: Record<string, string | boolean>) => void
   onHealth: (playerId: string, health: number, dazed: boolean) => void
   onDamage: (playerId: string, amount: number, kind: string) => void
   onMatchEnd: (payload: MatchEndPayload) => void
@@ -143,7 +143,7 @@ export class NetClient {
         socket.on('game:emote', (playerId: string, emote: string) => this.ev.onEmote?.(playerId, emote))
         socket.on('game:quickmsg', (playerId: string, msgId: number) => this.ev.onQuickMsg?.(playerId, msgId))
         socket.on('game:playerleft', (playerId: string, name: string) => this.ev.onPlayerLeft?.(playerId, name))
-        socket.on('game:playerjoined', (playerId: string, name: string) => this.ev.onPlayerJoined?.(playerId, name))
+        socket.on('game:playerjoined', (playerId: string, name: string, archetype?: string, cosmetics?: Record<string, string | boolean>) => this.ev.onPlayerJoined?.(playerId, name, archetype, cosmetics))
         socket.on('game:health', (playerId: string, health: number, dazed: boolean) => this.ev.onHealth?.(playerId, health, dazed))
         socket.on('game:damage', (playerId: string, amount: number, kind: string) => this.ev.onDamage?.(playerId, amount, kind))
         socket.on('game:matchend', (payload: MatchEndPayload) => this.ev.onMatchEnd?.(payload))

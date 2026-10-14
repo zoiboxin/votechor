@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ACHIEVEMENTS, ARCHETYPES } from '@/game/shared/constants'
-import { COSMETIC_IDS, hatIsUnlocked, unlockedHatIds, cosmeticById, unlockLabel } from '@/lib/cosmetics'
+import { COSMETIC_IDS, hatIsUnlocked, unlockedHatIds, cosmeticById, unlockLabel, WARDROBE_KINDS, catalogByKind, anyItemIsUnlocked, type CosmeticKind } from '@/lib/cosmetics'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -100,6 +100,7 @@ function validateCosmeticUnlocks(
   level: number,
   achievementCodes: Iterable<string>,
 ): string | null {
+  // legacy + current hat slot (COSMETIC_IDS covers the full hat catalog)
   const hat = typeof cosmetics.hat === 'string' ? cosmetics.hat : undefined
   if (hat !== undefined && !COSMETIC_IDS.has(hat)) {
     return 'Unknown cosmetic'
@@ -107,6 +108,19 @@ function validateCosmeticUnlocks(
   if (hat !== undefined && !hatIsUnlocked(hat, level, achievementCodes)) {
     const item = cosmeticById(hat)
     return item ? `Locked — ${unlockLabel(item)}` : 'Unknown cosmetic'
+  }
+  // every wardrobe slot: known id + unlocked (none/clean/classic/shoes defaults always pass)
+  for (const kind of WARDROBE_KINDS) {
+    if (kind === 'hat') continue
+    const raw = cosmetics[kind]
+    if (raw === undefined || raw === null) continue
+    if (typeof raw !== 'string') return `Invalid ${kind}`
+    const known = catalogByKind(kind).some((i) => i.id === raw)
+    if (!known) return `Unknown ${kind}`
+    if (!anyItemIsUnlocked(kind as CosmeticKind, raw, level, achievementCodes)) {
+      const item = catalogByKind(kind).find((i) => i.id === raw)
+      return item ? `Locked — ${unlockLabel(item)}` : `Unknown ${kind}`
+    }
   }
   return null
 }
