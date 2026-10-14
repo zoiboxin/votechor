@@ -38,7 +38,7 @@ export interface ItemSpawn {
   id: string
   type: ItemType
   x: number; y: number; z: number
-  respawn?: number // seconds; token = single-use (no respawn)
+  respawn?: number // seconds; 0 = never respawns (confiscated loot); token = single-use
 }
 
 export type NpcType = 'police' | 'security' | 'guard' | 'searchlight'
@@ -134,6 +134,13 @@ export interface NpcNetState {
 
 export interface ItemNetState { id: string; taken: boolean; takenBy?: string; respawnAt?: number }
 
+/**
+ * Loot dropped when police confiscate a detainee's inventory cards (game:dropped).
+ * Ids are dynamic (`drop_*`) — clients spawn them via ItemSystem.spawnDropped.
+ * expiresAt is server Date.now(); the room broadcasts game:dropGone on expiry/pickup.
+ */
+export interface DroppedItemNetState { id: string; type: ItemType; x: number; y: number; z: number; expiresAt: number }
+
 export interface ProjectileNetState {
   id: string
   type: string
@@ -180,6 +187,9 @@ export interface MatchEndPayload {
   itemsCollected: number
   bossContribution: number
   detentions: number
+  /** vote tokens + item cards police seized on detention (client-computed) */
+  confiscated?: number
+  confiscatedItems?: number
   playersOnline: number
 }
 

@@ -133,7 +133,8 @@ export class ItemSystem {
     if (!it || it.taken) return null
     it.taken = true
     it.group.visible = false
-    it.respawnAt = it.def.type === 'token' ? 0 : worldTime + (it.def.respawn ?? 30)
+    // respawn === 0 means never respawn (confiscated loot piles); tokens likewise
+    it.respawnAt = it.def.type === 'token' || it.def.respawn === 0 ? 0 : worldTime + (it.def.respawn ?? 30)
     this.onLocalPickup?.(it)
     return it
   }
@@ -219,6 +220,16 @@ export class ItemSystem {
     this.items.push(iv)
     this.byId.set(def.id, iv)
     return iv
+  }
+
+  /** Despawn a runtime-dropped item (picked up by anyone, expired, or match reset). */
+  removeDropped(id: string): boolean {
+    const it = this.byId.get(id)
+    if (!it) return false
+    this.group.remove(it.group)
+    this.items = this.items.filter(i => i !== it)
+    this.byId.delete(id)
+    return true
   }
 
   /** Item info for minimap (tokens only) */

@@ -80,6 +80,8 @@ interface MatchStats {
   bossHits: number
   distractions: number
   gifts: number
+  confiscated: number // vote tokens seized by police on detention
+  confiscatedItems: number // inventory cards seized by police on detention
 }
 
 export class Game {
@@ -125,7 +127,7 @@ export class Game {
   private gateOpen = false
   private activatedCheckpoints = new Set<number>()
   private inventory: { uid: string; type: ItemType }[] = []
-  private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0 }
+  private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0 }
   private detainUntil = 0
   private carryingBallot = false
   private carryingBallotId: string | null = null
@@ -192,6 +194,8 @@ export class Game {
     this.worldRenderer = new WorldRenderer(this.world, 'high')
     if (typeof window !== 'undefined') {
       (window as unknown as { __wr?: WorldRenderer }).__wr = this.worldRenderer
+      // QA/debug handle — staged E2E checks (capture flow, pickups) drive the live Game
+      ;(window as unknown as { __game?: Game }).__game = this
     }
     this.engine.scene.add(this.worldRenderer.group)
     this.engine.scene.add(this.bossClient.group)
@@ -204,6 +208,15 @@ export class Game {
 
     this.npcs = new NpcSystem(this.world, this.physics, 'high')
     this.engine.scene.add(this.npcs.group)
+    // offline solo: police captures + melee hits come from the local sim
+    this.npcs.onLocalCapture = () => {
+      if (!this.player || this.player.isDetained || this.player.isDazed || this.matchEnded) return
+      this.onCapture('me', Date.now() + DETENTION_SECONDS * 1000, '', 0)
+    }
+    this.npcs.onLocalHit = (amount) => {
+      if (!this.player || this.player.isDetained || this.player.isDazed) return
+      this.applyDamage(amount, 'police')
+    }
     this.vehicles = new VehicleSystem(this.world)
     this.engine.scene.add(this.vehicles.group)
     this.vehicles.onPlayerHit = (kind, x, z, dmg) => this.handleVehicleHit(kind, x, z, dmg)
@@ -225,8 +238,22 @@ export class Game {
       },
       onItems: (items) => this.items.applyServerState(items, this.worldTime),
       onBoss: (boss, ballots) => this.onServerBoss(boss, ballots),
-      onCapture: (playerId, until, message) => this.onCapture(playerId, until, message),
+      onCapture: (playerId, until, message, lostTokens) => this.onCapture(playerId, until, message, lostTokens),
       onRelease: (playerId, x, z) => this.onRelease(playerId, x, z),
+      onDropped: (drops) => {
+        for (const d of drops) {
+          if (this.items.items.some(i => i.def.id === d.id)) continue
+          this.items.spawnDropped({ id: d.id, type: d.type, x: d.x, y: d.y, z: d.z, respawn: 0 })
+        }
+      },
+      onDropTaken: (itemId, byId, byName) => {
+        // self-pickups already got the standard pickup FX via local prediction
+        this.items.removeDropped(itemId)
+        if (byId !== this.net.playerId && !byId.startsWith('bot_')) {
+          this.store.notify(`${byName} recovered confiscated gear`, 'squad')
+        }
+      },
+      onDropGone: (itemIds) => { for (const id of itemIds) this.items.removeDropped(id) },
       onCheckpoint: (cp, byName, total) => this.onCheckpoint(cp, byName, total),
       onProjectile: (p) => this.items.spawnRemoteProjectile(p.id, p.type, p.x, p.y, p.z, p.vx, p.vy, p.vz),
       onEmote: (playerId, emote) => this.playRemoteEmote(playerId, emote),
@@ -472,7 +499,7 @@ export class Game {
     this.gateOpen = false
     this.activatedCheckpoints.clear()
     this.inventory = []
-    this.stats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0 }
+    this.stats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0 }
     this.carryingBallot = false
     this.carryingBallotId = null
     this.matchTime = 0
@@ -589,7 +616,8 @@ export class Game {
         [2500, 'Tip: follow the compass up top — gold markers are stolen vote tokens', 'info'],
         [9500, 'Tip: press E near tokens & items to grab them · Q throws a distraction', 'squad'],
         [16500, 'Tip: checkpoints save progress, heal you, and free detained squadmates', 'warning'],
-        [23500, 'Tip: 12 tokens unlock the boss gate in the Government District. Good luck!', 'boss'],
+        [23500, 'Warning: get detained and police confiscate ALL your votes & items — your gear drops where you were caught!', 'warning'],
+        [30500, 'Tip: 12 tokens unlock the boss gate in the Government District. Good luck!', 'boss'],
       ]
       for (const [delay, text, kind] of tips) {
         this.onboardingTimers.push(setTimeout(() => {
@@ -834,7 +862,7 @@ export class Game {
     }
   }
 
-  private onCapture(playerId: string, until: number, message: string) {
+  private onCapture(playerId: string, until: number, message: string, lostTokens = 0) {
     if (!this.player) return
     if (playerId === this.net.playerId || this.offline) {
       this.exitPhotoMode(false)
@@ -844,11 +872,73 @@ export class Game {
       this.store.notify(message || randomOf(CAPTURE_MESSAGES), 'capture')
       AudioManager.play('capture')
       this.addShake(0.7)
+
+      // ---- BUSTED: police confiscate all collections & cards ----
+      this.carryingBallot = false
+      this.carryingBallotId = null
+      const droppedTypes = this.inventory.map(i => i.type)
+      this.stats.confiscatedItems += droppedTypes.length
+      // offline: this.tokens is the personal count; online: the server's lostTokens
+      // is authoritative (this.tokens is the GLOBAL team count and must not be used)
+      const lost = this.offline ? Math.max(0, this.tokens) : (lostTokens ?? 0)
+      if (lost > 0) {
+        this.stats.confiscated += lost
+        const voteWord = lost === 1 ? 'vote' : 'votes'
+        if (droppedTypes.length > 0) {
+          this.store.notify(`BUSTED — police confiscated ${lost} ${voteWord} and ${droppedTypes.length} item${droppedTypes.length === 1 ? '' : 's'}! Your gear dropped where you were caught.`, 'capture')
+        } else {
+          this.store.notify(`BUSTED — police confiscated ${lost} ${voteWord}! They are re-hidden back in the city.`, 'capture')
+        }
+        this.fx.popup(`−${lost} VOTES CONFISCATED`, '#e2b714', this.player.pos.x, 2.3, this.player.pos.z)
+      } else if (droppedTypes.length > 0) {
+        this.store.notify(`BUSTED — police dumped your ${droppedTypes.length} item${droppedTypes.length === 1 ? '' : 's'} on the street!`, 'capture')
+      }
+      if (this.offline) {
+        // local sim: re-hide the confiscated votes and scatter the gear right here
+        if (lost > 0) {
+          let toFree = lost
+          for (const it of this.items.items) {
+            if (toFree <= 0) break
+            if (it.def.type !== 'token' || !it.taken) continue
+            it.taken = false
+            it.group.visible = true
+            it.respawnAt = 0
+            toFree--
+          }
+          this.tokens = 0
+        }
+        if (droppedTypes.length > 0) {
+          this.inventory = []
+          this.dropInventoryLocal(droppedTypes, this.player.pos.x, this.player.pos.z)
+        }
+        this.syncHud()
+      } else if (droppedTypes.length > 0) {
+        this.inventory = []
+        this.net.confiscateInventory(droppedTypes)
+        this.syncHud()
+      }
     } else {
       const r = this.remotePlayers.get(playerId)
       if (r) r.detained = true
       // season bots get detained constantly — it is world flavor, not toast-worthy
       if (!playerId.startsWith('bot_')) this.store.notify(`Teammate detained: ${r?.name ?? 'someone'}`, 'squad')
+    }
+  }
+
+  /** Scatter confiscation loot in a ring around a capture spot (offline mode). */
+  private dropInventoryLocal(types: ItemType[], cx: number, cz: number) {
+    const step = (Math.PI * 2) / Math.max(1, types.length)
+    for (let i = 0; i < types.length; i++) {
+      const ang = i * step + Math.random() * 0.6
+      const r = 1.5 * (0.55 + Math.random() * 0.45)
+      this.items.spawnDropped({
+        id: `drop_${Date.now().toString(36)}_${Math.floor(Math.random() * 46656).toString(36)}${i}`,
+        type: types[i],
+        x: cx + Math.cos(ang) * r,
+        y: 0.1,
+        z: cz + Math.sin(ang) * r,
+        respawn: 0, // never respawns — a one-shot loot pile
+      })
     }
   }
 
@@ -1520,8 +1610,8 @@ export class Game {
           if (ev.defeated) { this.doVictory() }
           else if (ev.phaseDone === 5) AudioManager.play('gate')
         }
-        // ballot proximity (grab)
-        if (this.localBoss.phase === 5 && !this.carryingBallot) {
+        // ballot proximity (grab) — frozen in custody like every other interaction
+        if (this.localBoss.phase === 5 && !this.carryingBallot && !this.player.isDetained && !this.player.isDazed) {
           for (const bl of this.localBoss.ballots) {
             if (!bl.taken && Math.hypot(bl.x - this.player.pos.x, bl.z - this.player.pos.z) < 2) {
               bl.taken = true
@@ -1547,8 +1637,8 @@ export class Game {
       }
     }
 
-    // item pickup (proximity + E / auto for tokens)
-    const near = this.items.nearestAvailable(this.player.pos.x, this.player.pos.z, this.player.pos.y)
+    // item pickup (proximity + E / auto for tokens) — never while in custody
+    const near = this.player.isDetained ? null : this.items.nearestAvailable(this.player.pos.x, this.player.pos.z, this.player.pos.y)
     if (near) {
       const isToken = near.def.type === 'token'
       const inRange = true
@@ -1563,10 +1653,10 @@ export class Game {
         } else this.interacting = false
       }
     } else {
-      // revive / heal teammates / deposit ballots
+      // revive / heal teammates / deposit ballots (all server-validated; also frozen in custody)
       let prompt: string | null = null
-      if (this.carryingBallot && this.bossActiveLocal) prompt = 'E — Deposit ballot'
-      if (this.input.state.interact && this.carryingBallot) {
+      if (this.carryingBallot && this.bossActiveLocal && !this.player.isDetained) prompt = 'E — Deposit ballot'
+      if (this.input.state.interact && this.carryingBallot && !this.player.isDetained) {
         if (this.offline && this.localBoss) {
           if (Math.hypot(this.player.pos.x - this.localBoss.x, this.player.pos.z - (this.localBoss.z + 2)) < 3.4 && this.carryingBallot) {
             this.carryingBallot = false; this.localBoss.votes++; AudioManager.play('cash')
@@ -1972,7 +2062,7 @@ export class Game {
       dazed: p.isDazed,
       squad, matchTime: this.matchTime, distance: Math.round(p.distance),
       speedBoostUntil: p.speedBoostUntil, carryingBallot: this.carryingBallot,
-      score: this.stats.tokens * 45 + this.stats.checkpoints * 60,
+      score: Math.max(0, this.stats.tokens - this.stats.confiscated) * 45 + this.stats.checkpoints * 60,
       compass: { yawDeg, markers },
       spectating: p.isDetained ? this.spectateName : null,
       mapX: Math.round(p.pos.x * 2) / 2,
@@ -2202,7 +2292,9 @@ export class Game {
     const detentions = this.stats.detentions
     const stats = {
       victory, position: serverPayload?.position ?? 1,
-      tokens: serverPayload?.tokens ?? this.stats.tokens,
+      // online: the server's end-of-match global count already reflects confiscations;
+      // offline: subtract the votes police seized from the personal tally
+      tokens: serverPayload?.tokens ?? Math.max(0, this.stats.tokens - this.stats.confiscated),
       distance: serverPayload?.distance ?? Math.round(p.distance),
       checkpoints: serverPayload?.checkpoints ?? this.stats.checkpoints,
       rescues: serverPayload?.rescues ?? this.stats.rescues,
@@ -2210,6 +2302,8 @@ export class Game {
       itemsCollected: serverPayload?.itemsCollected ?? this.stats.itemsCollected,
       bossContribution: serverPayload?.bossContribution ?? this.stats.bossHits,
       detentions,
+      confiscated: this.stats.confiscated,
+      confiscatedItems: this.stats.confiscatedItems,
       gifts: this.stats.gifts,
     }
     // XP calculation (client display)

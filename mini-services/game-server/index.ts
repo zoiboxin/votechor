@@ -394,6 +394,13 @@ io.on('connection', (socket) => {
     room?.pickup(socket.id, data.itemId)
   })
 
+  // Detainee reports its inventory cards for confiscation → loot pile at the capture spot
+  socket.on('game:confiscate', (data: { items?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    room?.confiscateInventory(socket.id, data.items)
+  })
+
   socket.on('game:throw', (data: Record<string, unknown> = {}) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined

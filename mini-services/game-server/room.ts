@@ -16,6 +16,7 @@ import {
   grabBallot,
   depositBallot,
   registerBossHit,
+  dropBallotsOf,
   type BossBrain,
 } from '../../src/game/shared/boss-brain'
 import {
@@ -27,11 +28,15 @@ import {
   archetypeById,
   GIFT_TYPES,
   POLICE_ATTACK,
+  INVENTORY_MAX,
+  ITEM_CONFIG,
 } from '../../src/game/shared/constants'
 import type {
   AnimName,
   BossNetState,
+  DroppedItemNetState,
   ItemNetState,
+  ItemType,
   MatchEndPayload,
   NpcNetState,
   PlayerNetState,
@@ -127,6 +132,10 @@ const PICKUP_RADIUS = 3
 const REVIVE_RADIUS = 3
 const GIFT_RADIUS = 4.5
 const ITEM_RESPAWN_MS = 30000
+/** Confiscated loot piles vanish this long after being dropped (squad rescue window). */
+const DROP_TTL_MS = 150000
+/** Ring layout for confiscated loot scattering around the capture spot. */
+const DROP_RING_RADIUS = 1.5
 const VEHICLE_HIT_COOLDOWN_MS = 1200
 const VEHICLE_RADIUS: Record<string, number> = { auto: 1.7, bus: 2.6, cow: 1.4 }
 const VEHICLE_DAMAGE: Record<string, number> = { auto: 35, bus: 40, cow: 8 }
@@ -170,6 +179,7 @@ export interface PlayerState {
   inviteTimes: number[]
   kudosTimes: number[]
   lastReleaseId: string | null // anti-repeat: avoid releasing to the same point twice in a row
+  confiscatedFor: number // detainUntil marker — one inventory confiscation per detention
   cosmetics?: Record<string, string | boolean> // wardrobe — sent on join ack + playerjoined only
 }
 
@@ -177,6 +187,17 @@ export interface ItemState {
   taken: boolean
   takenBy?: string
   respawnAt?: number
+}
+
+/** Ground loot created when police confiscate a detainee's inventory cards. */
+export interface DroppedItem {
+  id: string
+  type: ItemType
+  x: number
+  y: number
+  z: number
+  ownerId: string
+  expiresAt: number
 }
 
 export interface SearchlightAngle {
@@ -192,6 +213,7 @@ export class Room {
   readonly players = new Map<string, PlayerState>()
   npcs: NpcBrainState[]
   itemStates = new Map<string, ItemState>()
+  droppedItems = new Map<string, DroppedItem>()
   boss: BossBrain
   checkpoints = new Set<number>()
   tokens = 0
@@ -276,6 +298,7 @@ export class Room {
       inviteTimes: [],
       kudosTimes: [],
       lastReleaseId: null,
+      confiscatedFor: 0,
     }
     this.players.set(socketId, p)
     this.start()
@@ -368,6 +391,16 @@ export class Room {
     const p = this.players.get(socketId)
     if (!p || p.detained) return false
     if (typeof itemId !== 'string') return false
+
+    // Confiscated loot piles (game:dropped) — dynamic ids, not in itemStates.
+    const drop = this.droppedItems.get(itemId)
+    if (drop) {
+      if (dist2d(p.x, p.z, drop.x, drop.z) > PICKUP_RADIUS) return false
+      this.droppedItems.delete(itemId)
+      this.emitRoom('game:dropTaken', itemId, p.id, p.name)
+      return true
+    }
+
     const def = WORLD.items.find(i => i.id === itemId)
     const st = this.itemStates.get(itemId)
     if (!def || !st || st.taken) return false
@@ -523,7 +556,84 @@ export class Room {
     p.detainUntil = now + DETENTION_SECONDS * 1000 * (p.archetype === 'accidental' ? 0.75 : 1)
     p.carrying = false
     p.anim = 'detained'
-    this.emitRoom('game:capture', p.id, p.detainUntil, randomOf(CAPTURE_MESSAGES))
+
+    // ---- BUSTED penalty: police confiscate everything the detainee was carrying ----
+    // 1. Vote tokens this player recovered go back into the world ("filed as
+    //    evidence" — re-hidden at their original hiding spots so the match stays
+    //    completable). Global + personal counters drop accordingly.
+    const lostTokens = p.tokens
+    p.tokens = 0
+    p.confiscatedFor = p.detainUntil // allow exactly one inventory confiscation per detention
+    if (lostTokens > 0) {
+      this.tokens = Math.max(0, this.tokens - lostTokens)
+      for (const [id, st] of this.itemStates) {
+        if (!st.taken || st.takenBy !== p.id) continue
+        const def = WORLD.items.find(i => i.id === id)
+        if (!def || def.type !== 'token') continue
+        st.taken = false
+        st.takenBy = undefined
+        st.respawnAt = undefined
+      }
+      this.emitRoom('game:tokens', this.tokens)
+      this.emitRoom('game:items', this.itemsArray())
+    }
+    // 2. A carried boss ballot slips out of their hands back onto the arena floor.
+    if (dropBallotsOf(this.boss, p.id)) this.emitBoss()
+
+    // 3. Inventory cards are reported by the detainee's client (inventory lives
+    //    client-side, same trust model as gifting) and dropped as a loot pile at
+    //    the capture spot via game:confiscate → game:dropped.
+
+    // lostTokens is additive — older clients ignore the extra arg.
+    this.emitRoom('game:capture', p.id, p.detainUntil, randomOf(CAPTURE_MESSAGES), lostTokens)
+  }
+
+  /**
+   * Detainee's client reports its inventory cards for confiscation (one shot per
+   * detention). Server validates: player really is detained, not already
+   * confiscated for this detention, type whitelist, cap at INVENTORY_MAX — then
+   * scatters the cards as a ground-loot ring at the authoritative capture spot.
+   */
+  confiscateInventory(socketId: string, items: unknown): boolean {
+    const p = this.players.get(socketId)
+    if (!p || !p.detained) return false
+    if (p.confiscatedFor !== p.detainUntil) return false // already done for this detention
+    if (!Array.isArray(items)) return false
+    const types: ItemType[] = []
+    for (const t of items.slice(0, INVENTORY_MAX)) {
+      const s = String(t)
+      if (s === 'token' || !(s in ITEM_CONFIG)) continue
+      if (!types.includes(s as ItemType)) types.push(s as ItemType)
+    }
+    if (types.length === 0) return false // nothing valid — do not burn the one-shot
+    p.confiscatedFor = 0 // consumed — a second request for the same detention is rejected
+
+    const drops: DroppedItemNetState[] = []
+    const expiresAt = Date.now() + DROP_TTL_MS
+    const step = (Math.PI * 2) / types.length
+    for (let i = 0; i < types.length; i++) {
+      const ang = i * step + Math.random() * 0.6
+      const r = DROP_RING_RADIUS * (0.55 + Math.random() * 0.45)
+      const pos = this.nudgeDrop(p.x + Math.cos(ang) * r, p.z + Math.sin(ang) * r, p.x, p.z)
+      const id = `drop_${Date.now().toString(36)}_${Math.floor(Math.random() * 46656).toString(36)}${i}`
+      const drop: DroppedItem = { id, type: types[i], x: pos.x, y: 0.1, z: pos.z, ownerId: p.id, expiresAt }
+      this.droppedItems.set(id, drop)
+      drops.push({ id, type: drop.type, x: drop.x, y: drop.y, z: drop.z, expiresAt })
+    }
+    this.emitRoom('game:dropped', drops)
+    return true
+  }
+
+  /** Nudge a drop position out of world colliders; fall back to the capture spot. */
+  private nudgeDrop(x: number, z: number, cx: number, cz: number): { x: number; z: number } {
+    if (!releasePointBlocked(x, z, 0.25)) return { x, z }
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      const ang = Math.random() * Math.PI * 2
+      const nx = cx + Math.cos(ang) * (0.4 + attempt * 0.3)
+      const nz = cz + Math.sin(ang) * (0.4 + attempt * 0.3)
+      if (!releasePointBlocked(nx, nz, 0.25)) return { x: nx, z: nz }
+    }
+    return { x: cx, z: cz }
   }
 
   /**
@@ -644,6 +754,15 @@ export class Room {
     }
     if (itemsChanged) this.emitRoom('game:items', this.itemsArray())
 
+    // 9.5 Confiscated loot piles: expire after their TTL (game:dropGone)
+    if (this.droppedItems.size > 0) {
+      const gone: string[] = []
+      for (const [id, drop] of this.droppedItems) {
+        if (now >= drop.expiresAt) { this.droppedItems.delete(id); gone.push(id) }
+      }
+      if (gone.length) this.emitRoom('game:dropGone', gone)
+    }
+
     // 10. NPC snapshots at 10 Hz (searchlights included)
     if (this.players.size > 0) this.emitRoom('game:npcs', this.npcsArray())
 
@@ -700,11 +819,18 @@ export class Room {
     this.boss = createBossBrain(WORLD.bossArena)
     this.itemStates = new Map(WORLD.items.map(i => [i.id, { taken: false } as ItemState]))
     this.vehicleHitAt.clear()
+    if (this.droppedItems.size > 0) {
+      const gone = [...this.droppedItems.keys()]
+      this.droppedItems.clear()
+      this.emitRoom('game:dropGone', gone)
+    }
     for (const p of this.players.values()) {
       if (p.detained) {
         p.detained = false
         p.detainUntil = 0
       }
+      p.confiscatedFor = 0
+      p.tokens = 0
       if (p.dazed) {
         p.dazed = false
         p.dazedUntil = 0

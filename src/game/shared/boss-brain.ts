@@ -2,7 +2,7 @@
 // Server ticks this at 10Hz and broadcasts state; clients render.
 import type { StationState, Telegraph } from './types'
 
-export interface BossBallot { id: string; x: number; z: number; taken: boolean }
+export interface BossBallot { id: string; x: number; z: number; taken: boolean; carrier?: string | null }
 export interface PaperHazard { id: string; x: number; z: number; vx: number; vz: number; life: number }
 
 export interface BossBrain {
@@ -278,7 +278,21 @@ export function grabBallot(b: BossBrain, playerId: string, x: number, z: number)
   const bl = b.ballots.find(x2 => !x2.taken && dist(x2.x, x2.z, x, z) < 3.5)
   if (!bl) return false
   bl.taken = true
+  bl.carrier = playerId
   return true
+}
+
+/** A carried ballot returns to the arena floor (carrier detained/disconnected). */
+export function dropBallotsOf(b: BossBrain, playerId: string): boolean {
+  let dropped = false
+  for (const bl of b.ballots) {
+    if (bl.taken && bl.carrier === playerId) {
+      bl.taken = false
+      bl.carrier = null
+      dropped = true
+    }
+  }
+  return dropped
 }
 
 /** Deposit carried ballot at ballot box (server validates player position). */

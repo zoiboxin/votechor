@@ -2,7 +2,7 @@
 'use client'
 import { io, type Socket } from 'socket.io-client'
 import type {
-  AnimName, BossNetState, ItemNetState, MatchEndPayload, NpcNetState, PlayerNetState,
+  AnimName, BossNetState, DroppedItemNetState, ItemNetState, MatchEndPayload, NpcNetState, PlayerNetState,
 } from './shared/types'
 
 export interface JoinPayload {
@@ -47,8 +47,11 @@ export type NetEvents = {
   onNpcs: (npcs: NpcNetState[]) => void
   onItems: (items: ItemNetState[]) => void
   onBoss: (boss: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) => void
-  onCapture: (playerId: string, until: number, message: string) => void
+  onCapture: (playerId: string, until: number, message: string, lostTokens?: number) => void
   onRelease: (playerId: string, x: number, z: number) => void
+  onDropped: (drops: DroppedItemNetState[]) => void
+  onDropTaken: (itemId: string, byId: string, byName: string) => void
+  onDropGone: (itemIds: string[]) => void
   onCheckpoint: (checkpointId: number, byName: string, total: number) => void
   onProjectile: (p: { id: string; type: string; x: number; y: number; z: number; vx: number; vy: number; vz: number }) => void
   onEmote: (playerId: string, emote: string) => void
@@ -136,8 +139,11 @@ export class NetClient {
         socket.on('game:npcs', (n: NpcNetState[]) => this.ev.onNpcs?.(n))
         socket.on('game:items', (i: ItemNetState[]) => this.ev.onItems?.(i))
         socket.on('game:boss', (b: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) => this.ev.onBoss?.(b, ballots))
-        socket.on('game:capture', (playerId: string, until: number, message: string) => this.ev.onCapture?.(playerId, until, message))
+        socket.on('game:capture', (playerId: string, until: number, message: string, lostTokens?: number) => this.ev.onCapture?.(playerId, until, message, lostTokens))
         socket.on('game:release', (playerId: string, x: number, z: number) => this.ev.onRelease?.(playerId, x, z))
+        socket.on('game:dropped', (drops: DroppedItemNetState[]) => this.ev.onDropped?.(drops))
+        socket.on('game:dropTaken', (itemId: string, byId: string, byName: string) => this.ev.onDropTaken?.(itemId, byId, byName))
+        socket.on('game:dropGone', (itemIds: string[]) => this.ev.onDropGone?.(itemIds))
         socket.on('game:checkpoint', (cp: number, byName: string, total: number) => this.ev.onCheckpoint?.(cp, byName, total))
         socket.on('game:projectile', (p: { id: string; type: string; x: number; y: number; z: number; vx: number; vy: number; vz: number }) => this.ev.onProjectile?.(p))
         socket.on('game:emote', (playerId: string, emote: string) => this.ev.onEmote?.(playerId, emote))
@@ -189,6 +195,8 @@ export class NetClient {
     this.socket?.emit('game:state', { x, y, z, ry, anim, ...extra })
   }
   pickupItem(itemId: string) { this.socket?.emit('game:pickup', { itemId }) }
+  /** Detained: report inventory cards for police confiscation (server drops them as loot). */
+  confiscateInventory(types: string[]) { this.socket?.emit('game:confiscate', { items: types }) }
   throwItem(type: string, x: number, y: number, z: number, vx: number, vy: number, vz: number) {
     this.socket?.emit('game:throw', { type, x, y, z, vx, vy, vz })
   }

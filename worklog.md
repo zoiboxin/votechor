@@ -801,3 +801,34 @@ Stage Summary:
 - 工程要点：住宅 4 draw call（实例化+合并门窗）、大地图底图一次缓存、横街路灯零新增材质、检查点栅栏全域无缝（含缝隙漏洞修复）
 - 已知边界：横街沥青 y 0.008 低于主路 0.01（路口由主路覆盖，无缝）；bot 导航不进 gali（格子 10m+膨胀，玩家专属捷径）；软件 GL 下远端横街在雾中淡出属正常
 - 建议下一轮：住宅屋顶可爬（消防梯/水箱台阶）、横街路口红绿灯+斑马线、gali 里的小型事件（牛挡路/婚礼队伍）、大地图点击地标直接设路点、赛季内动态事件把玩家引向侧街（如"market fire"让 gali 成为撤退路线）
+---
+Task ID: 20
+Agent: Z.ai Code (main)
+Task: 用户要求 — 被警察拘留（detained）时玩家应失去全部收集物（collections）与卡片（cards）。理解 prompt 并专业化实现 GTA 式 BUSTED 没收系统
+
+Work Log:
+- DESIGN（先理解现有系统再设计）: 本作"collections/cards" = 会话内① vote tokens（团队目标计数+个人 p.tokens）② inventory item cards（bottle/chai/firstaid/snack/sign/foam/joke，上限 8）。原行为：拘留仅倒计时+传送释放点，无任何没收。设计原则：**服务器权威**（token 账目在服务器）、**比赛必须可完成**（token 不能凭空消失）、**更有趣的丢失方式**（装备掉在被捕点可被找回 → 小队救援循环）
+- SERVER TOKEN CONFISCATION (mini-services/game-server/room.ts capturePlayer): 拘留瞬间 — p.tokens→0、全局 this.tokens 扣减、**仅该玩家拾取的 token**（itemStates.takenBy 精确过滤）重新藏回世界原点（"警方把证物重新归档回街道"）；game:capture 广播增加第 4 个增量参数 lostTokens（旧客户端自动忽略）；掉落的 boss ballot 归还竞技场地面（boss-brain 新增 dropBallotsOf + BossBallot.carrier 字段，grabBallot 记录 carrier）
+- SERVER DROPPED-ITEM SYSTEM (room.ts + index.ts): 新 DroppedItem 模型 + droppedItems Map；新事件 game:dropped / game:dropTaken(id,byId,byName) / game:dropGone(ids)；confiscateInventory(socketId, items) — 验证 detained + confiscatedFor（detainUntil 标记，一次拘留一发）+ 白名单（token 永不掉落）+ INVENTORY_MAX 上限 + 去重 → 在**服务器权威的被捕坐标**撒 loot ring（半径 1.5m，releasePointBlocked(pad 0.25) 碰撞微调出墙，6 次尝试回退到被捕点）；pickup() 先查 droppedItems（3m 距离验证）再查静态 item；tick 9.5 步 TTL 150s 过期 → game:dropGone；resetMatch 清空掉落+计数并广播
+- CLIENT FLOW (game.ts onCapture): 自捕获时 — ① carryingBallot 清空 ② stats.confiscated/confiscatedItems 记账 ③ BUSTED 通知（分档：有 token 有装备/只有 token/只有装备，带精确数量 + fx popup "−N VOTES CONFISCATED"）④ 在线：net.confiscateInventory(types) 上报（清空本地 inventory 预测）⑤ 离线：本地 re-enable taken tokens（this.tokens 即个人数）+ dropInventoryLocal 本地撒 loot（spawnDropped, respawn:0 一次性）。关键正确性：在线时 this.tokens 是**全局团队计数**，绝不能当个人损失用（严格用服务器 lostTokens）
+- CLIENT NET (net.ts): onCapture 增加 lostTokens 参数；onDropped/onDropTaken/onDropGone 事件；confiscateInventory sender。ItemSystem: removeDropped(id)（移除 mesh+items+byId）；localPickup respawn===0 永不重生语义（loot pile 一次性）
+- 拘留禁交互修复（QA 中发现的真实 bug）：被拘留玩家站在 loot 旁时 E 提示出现且**在押也能拾取**（服务器会拒绝但离线/预测路径不会）→ 拘留中 nearestAvailable 短路为 null、ballot 存取/存入也加 isDetained/isDazed 门
+- SCORE/XP 诚实扣账: HUD score = (stats.tokens − confiscated)×45；EndScreen tokens 在线用服务器终值（已含没收）、离线用 max(0, personal−confiscated)；MatchEndPayload += confiscated/confiscatedItems（客户端计算）
+- UI/文案: HowToPlay 新增红色加粗没收规则（votes re-hidden + gear drops + 小队可找回）；新手 onboarding 增加 23.5s 警告 tip；CAPTURE_MESSAGES 增加两条没收主题幽默文案；EndScreen 新增 "Confiscated" 统计卡（Lock 图标，N votes + M items）
+- OFFLINE 拘留首次可用: npcs.simulateLocal 此前把所有 tickNpc 事件（含 hit）都当 capture 且 onLocalCapture 从未接线（离线从未拘留过）→ 现在按 kind 分流 capture/hit，onLocalHit(amount)→applyDamage('police')（R17 警棍手感链路离线也可触发）
+- QA 工具: game.ts boot 暴露 window.__game QA 句柄（与 __sky/__wr 同模式）
+- 测试 confiscate-test.ts（新，46/46 全绿）：token 没收→全队计数扣减+仅本人 token 复位+lostTokens 增参；旁人 token 不受影响；无 token 捕获零垃圾广播；confiscateInventory 全验证路径（未拘留拒绝/全非法不烧一次性/7 类型去重上限/token 过滤/重复请求拒绝）；掉落拾取（远距拒绝→走进 3m→成功→dropTaken 广播→map 移除）；静态物品拾取回归；TTL 过期（过期移除+新鲜保留+dropGone）；resetMatch 全清；拐角掉落全部可站立（不进 collider）。回归：combat 33/33、season 37/37、smoke ALL、invite ALL（game-server 重启后）
+- agent-browser E2E（离线分阶段 + 在线回归）：
+  * 在线慢速走位尝试自然捕获未果（headless ~0.36m/s + 两次服务器重启中断）→ 诚实改用离线分阶段验证客户端全链路 + 46 条单元测试覆盖服务器权威账目（服务器捕获路径 combat-test LIVE 已有真实覆盖）
+  * 离线分阶段：pickupItem(token+chai) → staged capture → **状态机全对**（tokens 1→0、inventory 清空、A_tok_1 taken=false+visible=true 重现世界、chai drop 生成 1.3m、detained=true）
+  * 视觉确认：DETAINED 全屏遮罩 + "Release in 7s — paperwork is being stamped" + 地上 chai 掉落可见
+  * BUSTED toast 精确文案 "police confiscated 1 vote and 1 item! Your gear dropped where you were caught."、HUD 0/12、拘留中交互提示 null（bug 修复生效）
+  * 释放后 teleport 到掉落点 → E → inventory=["chai"] 恢复、drop 消失 —— **丢失→找回闭环 E2E 通过**
+  * 在线事件句柄分阶段：onDropped 生成 2 掉落 → onDropTaken 移除+通知路径 → onDropGone 移除，全链路 ✓
+  * 在线回归：新服务器 PLAY SOLO → CONNECTED 100 · SEASON #1 · 74 CROWD/24 RIGS · checkpoint 事件流动 · 10 FPS @ RES 0.85；console 零错误；dev.log / gs-dev.log 干净；tsc 0 错误、eslint 0 错误
+
+Stage Summary:
+- 拘留现在有真实代价且不毁比赛：**BUSTED → 警察没收全部 votes 与 items**。votes 回到城市重新可收集（个人与团队计数精确扣减、只复位本人拾取的 token），items 以 loot pile 掉在被捕点（150s TTL、碰撞避墙、任何人可拾、小队救援循环），球票（boss ballot）脱手回竞技场；HUD 分数/结算 XP/EndScreen 诚实扣账
+- 工程要点：服务器权威账目（takenBy 过滤实现精确归还）；一次拘留一发没收（detainUntil 标记）；增量协议参数向后兼容；离线拘留系统首次真正可用（附带修好 simulateLocal 事件分流）
+- 已知边界：在线拾取预测在服务器拒绝时可能短暂幻影（与普通物品同风险，低概率）；浏览器内自然走向警察被 headless 限速阻断（以离线分阶段+单元+combat LIVE 三层覆盖代替，无猜测成分）；没收不清 gateOpen（设计决定：gate 一旦打开不回收）
+- 建议下一轮：detention 期间 HUD 显示"已没收 N votes/M items"清单卡；小队成员拘留时向队友发"捡回装备"导航路标；season bot 也模拟拾取 token 让没收对 bot 生效；没收装备 pile 上加闪烁光柱增强可见性

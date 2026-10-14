@@ -65,18 +65,22 @@ export class NpcSystem {
     const step = 1 / 10
     while (this.simAccum >= step) {
       this.simAccum -= step
-      const events: { kind: string; npcId: string; playerId: string }[] = []
+      const events: import('./shared/npc-brain').NpcEvent[] = []
       for (const v of this.visuals) {
         const r = tickNpc(v.brain, [player], colliders, step, now)
         events.push(...r.events)
         v.prev = { ...v.target }
         v.target = { x: v.brain.x, z: v.brain.z, ry: v.brain.ry }
       }
-      if (events.length && this.onLocalCapture) this.onLocalCapture(events[0].npcId)
+      for (const ev of events) {
+        if (ev.kind === 'capture') this.onLocalCapture?.(ev.npcId)
+        else if (ev.kind === 'hit') this.onLocalHit?.(ev.amount ?? 12)
+      }
     }
   }
 
   onLocalCapture: ((npcId: string) => void) | null = null
+  onLocalHit: ((amount: number) => void) | null = null
   onNoise: ((x: number, z: number) => void) | null = null
 
   distraction(x: number, z: number, duration: number) {

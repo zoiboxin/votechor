@@ -191,6 +191,8 @@ export const CAPTURE_MESSAGES = [
   'The Police Constable would like a word. And a selfie.',
   'Booked under Section 420-D: Being Too Fast During Office Hours.',
   'Detained pending a full inquiry into why you were running so cheerfully.',
+  'Your pockets have been emptied for "evidence processing". Every last vote.',
+  'Confiscation receipt issued: all votes & items seized. Yours, technically. Never returned.',
 ]
 
 export const RANDOM_NOTIFICATIONS = [

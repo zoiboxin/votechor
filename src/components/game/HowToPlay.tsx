@@ -111,6 +111,7 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
           <ul className="space-y-1 text-[10px] font-semibold leading-snug text-[#1c1a17]/80">
             <li>• Police look where they walk. Break line of sight behind buildings, then breathe.</li>
             <li>• Police batons hurt — when an officer raises his lathi (the wind-up), dodge sideways! A double jump works too.</li>
+            <li>• <b className="font-black text-[#8c1f28]">If you get DETAINED, police confiscate ALL your votes &amp; items.</b> The votes are re-hidden in the city and your gear drops right where you were caught — run back (or send a cellmate) to recover it before it vanishes!</li>
             <li>• Searchlights rotate. Watch the rhythm like cricket. Or traffic.</li>
             <li>• Red dots on the minimap are chasing you. Blue dots are merely disappointed in you.</li>
             <li>• The cow on Grand Avenue is not a bug. Give it the respect it demands.</li>
