@@ -33,8 +33,9 @@ import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
-import { GLBAssetManager, type GLBInstance } from './glb'
+import { sharedGLBAssets, type GLBInstance } from './glb'
 import { GLBAnimDriver, GlbLocoFallback } from './anim'
+import { applyAvatarPalette } from './avatar-tint'
 import type { LocoState } from './anim'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
@@ -184,11 +185,8 @@ export class Game {
   private lastArrestAttemptAt = 0 // police-role arrest spam gate (client side)
   private lastPlayerStrikeAt = 0 // police-role baton strike (F) spam gate — distinct from the NPC telegraph above
   // ---- High-Fi GLB player model (Step 2/3/4 integration — auto-fallback to procedural) ----
-  private glbMgr = (() => {
-    const mgr = new GLBAssetManager()
-    mgr.onAssetError = (url, reason) => console.warn(`[glb] ${url}: ${reason}`)
-    return mgr
-  })()
+  // sharedGLBAssets: one process-wide cache shared with the wardrobe preview
+  private glbMgr = sharedGLBAssets
   private hiFiPalette: { shirt: string; pants: string; skin: string; accent: string } | null = null
   private hiFiGender: 'male' | 'female' = 'male'
   private role: 'protector' | 'police' = 'protector' // chosen side (profile.role)
@@ -785,6 +783,7 @@ export class Game {
       this.fx.burst(p.pos.x, p.pos.y + 0.25, p.pos.z, '#f2c14e', 14, 3.6, 0.5)
       this.fx.burst(p.pos.x, p.pos.y + 0.15, p.pos.z, '#ffffff', 8, 2.4, 0.4)
       p.rig.flip() // quick procedural front-flip flourish
+      p.glb?.loco.triggerFlip() // the GLB body mirrors it (held 360° spin, v52)
     }
     this.player.onVault = () => AudioManager.play('vault')
     this.player.onSlide = () => {
@@ -1142,15 +1141,15 @@ export class Game {
     if (this.remotePlayers.get(id) !== r || !r.rig || !this.store.settings.hiFiModel) { r.glb = null; return }
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) { r.glb = null; return }
-    // palette kept for tintGlb (matches the old rigged GLB's mesh names; the textured
-    // avatar's names don't match so it keeps its own textures — intended)
+    // palette: solid replace on the rigged family's mesh names, multiply tint on
+    // the textured avatar's (applyAvatarPalette picks the right map per name)
     const c = r.cosmetics
     const arch = archetypeById(r.archetype)
     const pal = {
       shirt: arch.colors.shirt, pants: arch.colors.pants, accent: arch.colors.accent,
       skin: typeof c?.skinTone === 'string' ? c.skinTone : arch.colors.skin,
     }
-    this.tintGlb(inst, pal)
+    applyAvatarPalette(inst.group, pal)
     inst.group.visible = true
     inst.group.position.set(r.target.x, r.target.y, r.target.z)
     inst.group.rotation.y = r.target.ry
@@ -1192,32 +1191,11 @@ export class Game {
     if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) return
-    this.tintGlb(inst, this.hiFiPalette)
+    applyAvatarPalette(inst.group, this.hiFiPalette)
     inst.group.visible = true
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
     p.attachGlb(inst, driver)
-  }
-
-  /** Tint the GLB instance to the player's archetype/police palette (clones materials per-instance). */
-  private tintGlb(inst: GLBInstance, pal: { shirt: string; pants: string; skin: string; accent: string }) {
-    const map: Record<string, string> = {
-      TorsoMesh: pal.shirt, ArmLMesh: pal.shirt, ArmRMesh: pal.shirt,
-      LegLMesh: pal.pants, LegRMesh: pal.pants,
-      HeadMesh: pal.skin, ArmLHand: pal.skin, ArmRHand: pal.skin,
-      Sash: pal.accent,
-    }
-    inst.group.traverse((o) => {
-      const m = o as THREE.Mesh
-      if (!m.isMesh) return
-      const color = map[m.name]
-      if (!color) return
-      const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial | undefined
-      if (!mat) return
-      const clone = mat.clone()
-      clone.color = new THREE.Color(color)
-      m.material = clone
-    })
   }
 
   /** Live settings toggle — swap between the GLB and procedural rigs mid-match. */
@@ -2639,16 +2617,19 @@ export class Game {
       // plays the SAME networked anim state (no bone streaming — state names only)
       if (r.glb?.driver) {
         const loco: LocoState = r.detained ? 'detained' : r.anim === 'dazed' ? 'hit' : (r.anim as LocoState)
+        // remote airborne state rides on the networked anim name (jump/fall) so the
+        // vertex-shader air pose (legs tuck + arms out) plays for remotes too
+        const airborne = r.anim === 'jump' || r.anim === 'fall'
         r.glb.driver.play(loco, {
-          grounded: true, vy: 0, hSpeed,
+          grounded: !airborne, vy: 0, hSpeed,
           sliding: false, dazed: r.anim === 'dazed', detained: r.detained,
           landTimer: 0, recoverTimer: 0, jumpsUsed: 0,
         })
         r.glb.driver.update(animDt)
         r.glb.inst.group.position.copy(pos)
         r.glb.inst.group.rotation.y = r.rig.group.rotation.y
-        // clip-less models (textured avatar) get the procedural bob/lean/arm-swing layer
-        if (r.glb.driver.playableClips === 0 && r.glb.loco) r.glb.loco.apply(r.glb.inst.group, animDt, hSpeed, true)
+        // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer
+        if (r.glb.driver.playableClips === 0 && r.glb.loco) r.glb.loco.apply(r.glb.inst.group, animDt, hSpeed, !airborne)
       }
     }
 

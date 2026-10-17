@@ -67,6 +67,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const profile = useGameStore((s) => s.profile)
   const setProfile = useGameStore((s) => s.setProfile)
   const notify = useGameStore((s) => s.notify)
+  const hiFiSetting = useGameStore((s) => s.settings.hiFiModel) // preview must mirror the in-game model (v52)
 
   const [archetype, setArchetype] = useState(profile?.archetype ?? 'student')
   const [hat, setHat] = useState(profile?.cosmetics?.hat ?? 'none')
@@ -473,8 +474,13 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
               {/* Preview + build + skin tones */}
               <div className="space-y-3">
                 <div className="vc-dots overflow-hidden rounded-xl border-2 border-[#1c1a17]/50 bg-gradient-to-b from-[#cfe0e8] to-[#efe6c8]">
-                  <CharacterPreview look={look} className="h-[300px] w-full" />
+                  <CharacterPreview look={look} hiFi={hiFiSetting && !police} className="h-[300px] w-full" />
                 </div>
+                {hiFiSetting && !police && (
+                  <p className="rounded-lg border border-[#1c1a17]/25 bg-[#f5efdc]/85 px-2.5 py-1.5 text-[9px] font-bold uppercase leading-relaxed tracking-wide text-[#1c1a17]/70">
+                    Showing your in-game High-Fi model — team colours &amp; skin tone apply live. Hats, hair &amp; gear render on the Classic Rig (Options → Character Model).
+                  </p>
+                )}
                 {/* Build — male / female selection (round 23) */}
                 <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
                   <div className="mb-1.5 flex items-center justify-between">

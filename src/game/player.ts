@@ -434,8 +434,10 @@ export class PlayerController {
       this.glb.driver.update(dt)
       this.glb.inst.group.position.copy(this.pos)
       this.glb.inst.group.rotation.y = this.ry
-      // clip-less models (textured avatar) get the procedural bob/lean/arm-swing layer
-      if (this.glb.driver.playableClips === 0) this.glb.loco.apply(this.glb.inst.group, dt, hSpeed, this.grounded)
+      // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer
+      if (this.glb.driver.playableClips === 0) {
+        this.glb.loco.apply(this.glb.inst.group, dt, hSpeed, this.grounded, { vy: this.vel.y })
+      }
     }
     // procedural backend always updates (it holds the name tag + is the fallback)
     this.rig.update(dt, this.netAnim, hSpeed)

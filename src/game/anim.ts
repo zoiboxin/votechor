@@ -84,81 +84,190 @@ export const CLIP_FALLBACK: Record<LocoState, string[]> = {
  * Procedural locomotion fallback for CLIP-LESS GLB characters (e.g. the textured
  * promptplay avatar whose limbs are fused into one mesh — no skeleton, no clips).
  * GLBAnimDriver resolves no clips for such models, so without this the body would
- * glide frozen in its baked pose. Three cheap layers sell the motion:
- *   1. ARM SWING — a vertex-shader rotation of the arm region (|x| > 0.21, safely
- *      above the shirt hem at 0.209) around the shoulder line (y = 1.547), driven
- *      by a phase/amp uniform pair. Patches AvatarBody + outfit_top so sleeves
- *      follow the skin arms; normals are rotated too so lighting stays coherent.
- *   2. BOB — subtle vertical bounce of the whole group at step frequency.
- *   3. LEAN — slight forward pitch proportional to the swing (YXZ order keeps the
- *      lean local to the facing yaw that player.render / the remote loop set).
+ * glide frozen in its baked pose. Five cheap layers sell the motion (v52):
+ *   1. ARM SWING — a vertex-shader sagittal rotation of the arm region
+ *      (|x| > 0.21, safely above the shirt hem at 0.209) around the shoulder line
+ *      (y = 1.547), driven by a phase/amp uniform pair. Patches AvatarBody +
+ *      outfit_top so sleeves follow the skin arms; normals rotate too.
+ *   2. LEG SWING — same technique on the leg region (y < hip line 0.95 weighted,
+ *      |x| < 0.24..0.30 gate so the low-hanging A-pose hands never join in) around
+ *      the hip line, in OPPOSITE phase to the same-side arm — a real contralateral
+ *      gait. Patches AvatarBody + outfit_bottom + outfit_shoes (per-mesh role —
+ *      the shoe/pant meshes must never receive the arm transform: their vertices
+ *      sit ~1.4 m below the shoulder pivot and would fly across the room).
+ *   3. AIR POSE — a smoothed uAir uniform tucks both legs back (heels up) and
+ *      abducts the arms outward around Z, so jumps read as jumps, plus a vy-driven
+ *      body pitch (lean back rising, lean forward falling) and a held front-flip
+ *      for the double jump (triggerFlip, mirroring the procedural rig flourish).
+ *   4. BOB + LEAN — vertical bounce at step frequency and forward pitch while
+ *      moving (YXZ order keeps these local to the facing yaw set by the caller).
+ *   5. FEEL — damped-spring landing dip on the airborne→grounded transition and a
+ *      slow breathing sway/bob when idle so the character never statues.
  * The arm-region constants mirror scripts/fix-avatar-pose.ts, which baked the
- * T-pose into an A-pose (pivot ±0.215/1.547, hands at ±0.37).
+ * T-pose into an A-pose (pivot ±0.215/1.547, hands at ±0.37); leg constants come
+ * from scripts/measure-avatar.ts (pants |x| ≤ 0.20, waistband top 1.146, feet y 0).
  */
 export class GlbLocoFallback {
   private static readonly ARM_X = 0.21
   private static readonly SHOULDER_Y = 1.547
+  private static readonly HIP_Y = 0.95
   private phase = 0
   private amp = 0
+  private air = 0 // smoothed 0..1 air-pose blend
+  private dip = 0 // landing crouch offset (metres, ≥0)
+  private dipV = 0 // dip spring velocity
+  private prevGrounded = true
+  private flipT = 0 // remaining seconds of the double-jump flip (0 = off)
   private uPhase = { value: 0 }
   private uSwing = { value: 0 }
+  private uAir = { value: 0 }
   private patched = false
 
-  /** Patch the body/outfit materials with the arm-swing vertex transform (idempotent). */
+  /** Patch body/clothing materials with the arm+leg vertex transforms (idempotent). */
   patch(group: THREE.Object3D) {
     if (this.patched) return
     this.patched = true
     const armX = GlbLocoFallback.ARM_X.toFixed(3)
     const shoulderY = GlbLocoFallback.SHOULDER_Y.toFixed(3)
+    const hipY = GlbLocoFallback.HIP_Y.toFixed(3)
+    // per-mesh role: the fused body does arms AND legs; each clothing layer only
+    // follows the region it actually covers (shoes/pants are far below the
+    // shoulder pivot — an arm transform there would fling them across the map)
+    const roleOf = (name: string): 'both' | 'arms' | 'legs' | null => {
+      if (/^AvatarBody$/i.test(name)) return 'both'
+      if (/^outfit_top$/i.test(name)) return 'arms'
+      if (/^outfit_bottom$/i.test(name) || /^outfit_shoes$/i.test(name)) return 'legs'
+      return null
+    }
     group.traverse((o) => {
       const mesh = o as THREE.Mesh
       if (!mesh.isMesh || typeof mesh.name !== 'string') return
-      if (!/^(AvatarBody|outfit_top)$/i.test(mesh.name)) return
+      const role = roleOf(mesh.name)
+      if (!role) return
       const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial | undefined
       if (!mat || !(mat as THREE.Material).isMaterial) return
       const clone = mat.clone() // per-instance uniforms (the cached asset keeps its originals)
+      // CRITICAL: three caches programs by (parameters + onBeforeCompile.toString()).
+      // Every mesh's onBeforeCompile has IDENTICAL source (role is captured at runtime),
+      // so without a per-role cache key ALL patched meshes share ONE program — e.g. the
+      // shoes would run AvatarBody's compiled code and their outer toes (|x| up to 0.26
+      // passes the arm gate) get flung sideways by the arm air-abduction at the shoulder
+      // pivot (measured v52 QA bug: legs splaying into a wide V on every jump).
+      clone.customProgramCacheKey = () => `vc-loco-${role}`
       clone.onBeforeCompile = (shader) => {
         shader.uniforms.uPhase = this.uPhase
         shader.uniforms.uSwing = this.uSwing
+        shader.uniforms.uAir = this.uAir
         shader.vertexShader = shader.vertexShader
-          .replace('#include <common>', '#include <common>\nuniform float uPhase;\nuniform float uSwing;')
-          .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+          .replace('#include <common>', '#include <common>\nuniform float uPhase;\nuniform float uSwing;\nuniform float uAir;')
+        if (role === 'both' || role === 'arms') {
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
 {
-  float sgnN = position.x >= 0.0 ? 1.0 : -1.0;
-  float angN = sgnN * uSwing * sin(uPhase);
-  float cN = cos(angN), sN = sin(angN);
-  objectNormal = vec3(objectNormal.x, objectNormal.y * cN - objectNormal.z * sN, objectNormal.y * sN + objectNormal.z * cN);
+  float awN = smoothstep(${armX}, ${(GlbLocoFallback.ARM_X + 0.05).toFixed(3)}, abs(position.x));
+  if (awN > 0.001) {
+    float sgnN = position.x >= 0.0 ? 1.0 : -1.0;
+    float angN = sgnN * uSwing * sin(uPhase) * awN;
+    float cN = cos(angN), sN = sin(angN);
+    objectNormal = vec3(objectNormal.x, objectNormal.y * cN - objectNormal.z * sN, objectNormal.y * sN + objectNormal.z * cN);
+    float angZN = sgnN * uAir * 0.55 * awN;
+    float czN = cos(angZN), szN = sin(angZN);
+    objectNormal = vec3(objectNormal.x * czN - objectNormal.y * szN, objectNormal.x * szN + objectNormal.y * czN, objectNormal.z);
+  }
 }`)
-          .replace('#include <begin_vertex>', `#include <begin_vertex>
+            .replace('#include <begin_vertex>', `#include <begin_vertex>
 {
   float aw = smoothstep(${armX}, ${(GlbLocoFallback.ARM_X + 0.05).toFixed(3)}, abs(position.x));
   if (aw > 0.001) {
     float sgn = position.x >= 0.0 ? 1.0 : -1.0;
-    float ang = sgn * uSwing * sin(uPhase);
+    float ang = sgn * uSwing * sin(uPhase) * aw;
     float c = cos(ang), s = sin(ang);
     float dy = position.y - ${shoulderY};
     transformed = vec3(position.x, ${shoulderY} + dy * c - position.z * s, dy * s + position.z * c);
+    float angZ = sgn * uAir * 0.55 * aw;
+    float cz = cos(angZ), sz = sin(angZ);
+    float dx2 = transformed.x - sgn * ${armX};
+    float dy2 = transformed.y - ${shoulderY};
+    transformed.x = sgn * ${armX} + dx2 * cz - dy2 * sz;
+    transformed.y = ${shoulderY} + dx2 * sz + dy2 * cz;
   }
 }`)
+        }
+        if (role === 'both' || role === 'legs') {
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+{
+  float lwN = (1.0 - smoothstep(0.92, 1.02, position.y)) * (1.0 - smoothstep(0.24, 0.30, abs(position.x)));
+  if (lwN > 0.001) {
+    float lsgnN = position.x >= 0.0 ? 1.0 : -1.0;
+    float langN = -lsgnN * uSwing * sin(uPhase) * 0.55 * lwN - uAir * 0.65 * lwN;
+    float lcN = cos(langN), lsN = sin(langN);
+    objectNormal = vec3(objectNormal.x, objectNormal.y * lcN - objectNormal.z * lsN, objectNormal.y * lsN + objectNormal.z * lcN);
+  }
+}`)
+            .replace('#include <begin_vertex>', `#include <begin_vertex>
+{
+  float lw = (1.0 - smoothstep(0.92, 1.02, position.y)) * (1.0 - smoothstep(0.24, 0.30, abs(position.x)));
+  if (lw > 0.001) {
+    float lsgn = position.x >= 0.0 ? 1.0 : -1.0;
+    float lang = -lsgn * uSwing * sin(uPhase) * 0.55 * lw - uAir * 0.65 * lw;
+    float lc = cos(lang), ls = sin(lang);
+    float ldy = position.y - ${hipY};
+    transformed = vec3(position.x, ${hipY} + ldy * lc - position.z * ls, ldy * ls + position.z * lc);
+  }
+}`)
+        }
       }
       mesh.material = clone
     })
   }
 
+  /** Double-jump flourish — a held front-flip of the whole model (0.5 s, eased). */
+  triggerFlip() {
+    this.flipT = 0.5
+  }
+
   /**
-   * Advance the fallback and apply bob/lean to the instance group. Call AFTER the
-   * per-frame position/rotation copy so the offsets ride on top (both call sites
-   * re-copy position/rotation.y every frame, so nothing accumulates).
+   * Advance the fallback and apply bob/lean/dip/flip to the instance group. Call
+   * AFTER the per-frame position/rotation copy so the offsets ride on top (both
+   * call sites re-copy position/rotation.y every frame, so nothing accumulates).
+   * `opts.vy` (m/s) shapes the airborne pitch; omit for distant remotes.
    */
-  apply(group: THREE.Group, dt: number, hSpeed: number, grounded: boolean) {
+  apply(group: THREE.Group, dt: number, hSpeed: number, grounded: boolean, opts?: { vy?: number }) {
+    const vy = opts?.vy ?? 0
+    // locomotion amplitude: 0 idle → 1 at a run; a slight air carry keeps the
+    // swing from dead-freezing the instant the feet leave the ground
     const target = grounded ? THREE.MathUtils.clamp((hSpeed - 0.3) / 5.5, 0, 1) : 0.2
     this.amp += (target - this.amp) * Math.min(1, dt * 6)
     this.phase += dt * (1.2 + hSpeed * 1.35)
+    // air blend + uniforms (idle breathing keeps a whisper of sway so no statues)
+    this.air += ((grounded ? 0 : 1) - this.air) * Math.min(1, dt * 7)
     this.uPhase.value = this.phase
-    this.uSwing.value = 0.55 * this.amp
-    group.position.y += grounded ? Math.abs(Math.sin(this.phase)) * 0.045 * this.amp : 0
+    this.uSwing.value = 0.55 * this.amp + 0.032 * (1 - this.amp)
+    this.uAir.value = this.air
+    // landing dip: one-sided damped spring, kicked on the airborne→grounded edge
+    if (grounded && !this.prevGrounded) this.dipV -= 0.55
+    this.prevGrounded = grounded
+    if (this.dip !== 0 || this.dipV !== 0) {
+      this.dipV += (-this.dip * 90 - this.dipV * 9) * dt
+      this.dip = Math.max(0, this.dip + this.dipV * dt)
+      if (this.dip < 0.0005 && this.dipV <= 0) { this.dip = 0; this.dipV = 0 }
+    }
+    // bob: two footfalls per cycle; idle adds a slow breathing bob
+    const bob = Math.abs(Math.sin(this.phase)) * 0.045 * this.amp +
+      Math.abs(Math.sin(this.phase * 0.9)) * 0.006 * (1 - this.amp) * (grounded ? 1 : 0)
+    group.position.y += bob - this.dip
+    // lean while moving + airborne pitch (lean back rising, forward falling)
+    const pitch = 0.1 * this.amp + THREE.MathUtils.clamp(-vy * 0.012, -0.08, 0.1) * this.air
+    // double-jump flip: 0→2π eased over the first 70%, then hold (mirrors rig.flip)
+    let flip = 0
+    if (this.flipT > 0) {
+      this.flipT = Math.max(0, this.flipT - dt)
+      const t = 1 - this.flipT / 0.5
+      flip = t < 0.7 ? (t / 0.7) * Math.PI * 2 : Math.PI * 2
+    }
     group.rotation.order = 'YXZ'
-    group.rotation.x = 0.1 * this.amp
+    group.rotation.x = pitch + flip
   }
 
   dispose() {

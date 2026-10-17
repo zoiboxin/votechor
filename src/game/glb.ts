@@ -165,3 +165,10 @@ export class GLBAssetManager {
     })
   }
 }
+
+/**
+ * Process-wide shared manager — the game (player + remotes) and the wardrobe
+ * preview resolve through the SAME cache, so a 21.5 MB textured avatar is
+ * fetched once per session no matter where it is needed first.
+ */
+export const sharedGLBAssets = new GLBAssetManager()
