@@ -12,6 +12,7 @@
 // characters can share one downloaded asset without re-fetching.
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js'
 
 export interface GLBAsset {
   url: string
@@ -79,7 +80,10 @@ export class GLBAssetManager {
                   meshes++
                   m.castShadow = false
                   m.receiveShadow = false
-                  m.frustumCulled = true
+                  // SkinnedMeshes deform away from their bind-pose bounds — the
+                  // per-geometry bounding sphere would wrongly cull them mid-stride
+                  if ((m as THREE.SkinnedMesh).isSkinnedMesh) m.frustumCulled = false
+                  else m.frustumCulled = true
                   // material arrays stay as-is (three handles multi-primitive);
                   // just guarantee they are valid instances
                   const mats = Array.isArray(m.material) ? m.material : [m.material]
@@ -120,10 +124,22 @@ export class GLBAssetManager {
   /**
    * Clone the cached asset into a fresh instance with its own AnimationMixer.
    * Returns null if the asset hasn't loaded — caller falls back to procedural.
+   *
+   * v54: skinned models MUST clone through SkeletonUtils — plain Object3D.clone()
+   * leaves each cloned SkinnedMesh pointing at the CACHED asset's skeleton, whose
+   * bones stay at the world origin (measured live: hipsWorld (0,0.95,0) while the
+   * instance group sat at the player's (0,0,-8) → the character rendered nowhere).
+   * SkeletonUtils re-binds every cloned SkinnedMesh to the CLONED bones so each
+   * instance animates and moves independently.
    */
   instantiate(asset: GLBAsset): GLBInstance | null {
     try {
-      const group = asset.scene.clone(true)
+      const hasSkin = (() => {
+        let s = false
+        asset.scene.traverse((o) => { if ((o as THREE.SkinnedMesh).isSkinnedMesh) s = true })
+        return s
+      })()
+      const group = (hasSkin ? SkeletonUtils.clone(asset.scene) : asset.scene.clone(true)) as THREE.Group
       const mixer = new THREE.AnimationMixer(group)
       const clips = new Map<string, THREE.AnimationClip>()
       for (const c of asset.animations) if (c && typeof c.name === 'string') clips.set(c.name, c)
@@ -172,3 +188,19 @@ export class GLBAssetManager {
  * fetched once per session no matter where it is needed first.
  */
 export const sharedGLBAssets = new GLBAssetManager()
+
+/**
+ * THE High-Fi player model URL per gender (single source of truth — game.ts,
+ * CharacterPreview and the GameRoot boot preload all resolve through this).
+ * v54: the male slot holds votechor-male-skinned.glb — the SAME textured
+ * promptplay appearance baked (scripts/bake-skinned-male.ts) onto a fitted
+ * 15-joint humanoid skeleton with computed skin weights and the project's 13
+ * authored clips (idle/walk/run/jump/fall/land/slide/hit/detained/recover/
+ * celebrate/throw/heal) + synthesized knee/elbow flexion channels. It is a
+ * genuinely rigged asset: GLTFLoader builds SkinnedMeshes + AnimationClips and
+ * the existing GLBAnimDriver plays real skeletal animation. The original
+ * static votechor-male.glb stays on disk as the bake source / rollback.
+ * The female slot is the project's own clip-driven character puppet.
+ */
+export const hiFiUrlFor = (gender: 'male' | 'female'): string =>
+  gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'

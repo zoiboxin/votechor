@@ -12,8 +12,8 @@ import * as THREE from 'three'
 import { CharacterRig } from '@/game/character'
 import { archetypeById } from '@/game/shared/constants'
 import { policeUniformColors } from '@/lib/cosmetics'
-import { sharedGLBAssets, type GLBInstance } from '@/game/glb'
-import { GlbLocoFallback } from '@/game/anim'
+import { sharedGLBAssets, hiFiUrlFor, type GLBInstance } from '@/game/glb'
+import { GlbLocoFallback, GLBAnimDriver } from '@/game/anim'
 import { applyAvatarPalette, type AvatarPalette } from '@/game/avatar-tint'
 
 export interface PreviewLook {
@@ -46,8 +46,7 @@ function disposeRig(rig: CharacterRig) {
   })
 }
 
-const glbUrlFor = (gender: 'male' | 'female') =>
-  gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
+const glbUrlFor = (gender: 'male' | 'female') => hiFiUrlFor(gender)
 
 /** The preview palette mirrors game.ts startMatch exactly (archetype + skinTone). */
 function paletteFor(look: PreviewLook): AvatarPalette {
@@ -123,8 +122,10 @@ export default function CharacterPreview({ look, className, hiFi = false }: { lo
     scene.add(stage)
 
     let rig: CharacterRig | null = null
-    // High-Fi GLB instance + its locomotion layer (built async from the shared cache)
-    let glb: { inst: GLBInstance; loco: GlbLocoFallback } | null = null
+    // High-Fi GLB instance + its animation layers (built async from the shared cache).
+    // v54: rigged (clipped) models play real skeletal animation through GLBAnimDriver;
+    // clip-less models keep the GlbLocoFallback procedural layer.
+    let glb: { inst: GLBInstance; loco: GlbLocoFallback; driver: GLBAnimDriver | null } | null = null
     let glbKind: 'male' | 'female' | null = null
     let loadSeq = 0 // stale-load guard (gender flips / setting flips mid-download)
 
@@ -200,9 +201,16 @@ export default function CharacterPreview({ look, className, hiFi = false }: { lo
           const loco = new GlbLocoFallback()
           loco.patch(inst.group)
           applyAvatarPalette(inst.group, paletteFor(lookRef.current))
+          // rigged asset → play the authored idle clip (real skeletal animation);
+          // clip-less asset → the procedural idle layer keeps it alive
+          let driver: GLBAnimDriver | null = null
+          if (inst.clips.size > 0) {
+            driver = new GLBAnimDriver(inst.mixer, inst.clips)
+            driver.snap('idle')
+          }
           inst.group.visible = false
           stage.add(inst.group)
-          glb = { inst, loco }
+          glb = { inst, loco, driver }
           glbKind = gender
           showGlb()
           retargetCams()
@@ -298,11 +306,17 @@ export default function CharacterPreview({ look, className, hiFi = false }: { lo
       stage.rotation.y = spin
       const glbOn = !!(glb && isHiFi())
       if (glbOn && glb) {
-        // the same idle layer the match runs (breathing sway + bob) — a living
-        // preview. baseY: 0 = the pedestal top; apply() writes position.y
-        // ABSOLUTELY (v53) so the idle offset can never accumulate into the
-        // slow float-up-and-vanish the incremental += caused here.
-        glb.loco.apply(glb.inst.group, dt, 0, true, { baseY: 0 })
+        if (glb.driver) {
+          // authored skeletal animation (mixer drives the bones, not the group)
+          glb.driver.update(dt)
+          // the double-jump flip rides on top of clip animation when triggered
+          glb.loco.applyFlipOnly(glb.inst.group, dt)
+        } else {
+          // clip-less fallback: procedural idle layer. baseY: 0 = the pedestal
+          // top; apply() writes position.y ABSOLUTELY (v53) so the idle offset
+          // can never accumulate into a float-up drift.
+          glb.loco.apply(glb.inst.group, dt, 0, true, { baseY: 0 })
+        }
       } else {
         rig?.update(dt, 'idle', 0)
       }

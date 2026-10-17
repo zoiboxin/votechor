@@ -434,9 +434,12 @@ export class PlayerController {
       this.glb.driver.update(dt)
       this.glb.inst.group.position.copy(this.pos)
       this.glb.inst.group.rotation.y = this.ry
-      // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer
+      // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer;
+      // rigged models play the authored clips — the double-jump flip rides on top
       if (this.glb.driver.playableClips === 0) {
         this.glb.loco.apply(this.glb.inst.group, dt, hSpeed, this.grounded, { vy: this.vel.y, baseY: this.pos.y })
+      } else {
+        this.glb.loco.applyFlipOnly(this.glb.inst.group, dt)
       }
     }
     // procedural backend always updates (it holds the name tag + is the fallback)

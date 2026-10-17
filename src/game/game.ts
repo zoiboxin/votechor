@@ -33,7 +33,7 @@ import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
-import { sharedGLBAssets, type GLBInstance } from './glb'
+import { sharedGLBAssets, hiFiUrlFor, type GLBInstance } from './glb'
 import { GLBAnimDriver, GlbLocoFallback } from './anim'
 import { applyAvatarPalette } from './avatar-tint'
 import type { LocoState } from './anim'
@@ -1134,7 +1134,7 @@ export class Game {
     if (r.role === 'police') return
     r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
     const gender = r.cosmetics?.gender === 'female' ? 'female' : 'male'
-    const url = gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
+    const url = hiFiUrlFor(gender)
     const asset = await this.glbMgr.load(url)
     if (!asset) { r.glb = null; return }
     // entry may have been pruned / rig budget-evicted / setting flipped mid-load
@@ -1185,7 +1185,7 @@ export class Game {
     if (!p || p.glb || !this.hiFiPalette) return
     // police play on the procedural rig (uniform/hat identity — see attachRemoteGlb)
     if (this.role === 'police') return
-    const url = this.hiFiGender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
+    const url = hiFiUrlFor(this.hiFiGender)
     const asset = await this.glbMgr.load(url)
     if (!asset) return // loader already logged the reason; procedural stays
     if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load

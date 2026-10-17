@@ -234,6 +234,20 @@ export class GlbLocoFallback {
   }
 
   /**
+   * Flip-only layer for RIGGED (clipped) models: apply()/its bob+lean layers are
+   * skipped there (the mixer owns the pose), but the double-jump 360° flip must
+   * still ride on top of the clip animation. No-op unless a flip is active.
+   */
+  applyFlipOnly(group: THREE.Group, dt: number) {
+    if (this.flipT <= 0) return
+    this.flipT = Math.max(0, this.flipT - dt)
+    const t = 1 - this.flipT / 0.5
+    const flip = t < 0.7 ? (t / 0.7) * Math.PI * 2 : Math.PI * 2
+    group.rotation.order = 'YXZ'
+    group.rotation.x = flip
+  }
+
+  /**
    * Advance the fallback and apply bob/lean/dip/flip to the instance group. Call
    * AFTER the per-frame rotation copy.
    *

@@ -237,9 +237,9 @@ export default function GameRoot() {
     // Preloading the saved profile's gender here means the preview's
     // sharedGLBAssets.load() resolves instantly when the customization opens.
     const preloadTimer = setTimeout(() => {
-      void import('@/game/glb').then(({ sharedGLBAssets }) => {
+      void import('@/game/glb').then(({ sharedGLBAssets, hiFiUrlFor }) => {
         const g = useGameStore.getState().profile?.cosmetics?.gender === 'female' ? 'female' : 'male'
-        void sharedGLBAssets.load(g === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb')
+        void sharedGLBAssets.load(hiFiUrlFor(g))
       }).catch(() => { /* cosmetic preload is best-effort */ })
     }, 1500)
 
