@@ -1621,7 +1621,7 @@ export class Game {
     // offline NPC sim + capture (8s spawn grace so players can orient)
     if (this.offline) {
       const pv: NpcPlayerView = {
-        id: 'me', x: this.player.pos.x, z: this.player.pos.z,
+        id: 'me', x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z,
         detained: this.player.isDetained, dazed: this.player.isDazed,
         hidden: this.matchTime < 8 && Math.hypot(this.player.pos.x - this.world.spawn.x, this.player.pos.z - this.world.spawn.z) < 16,
       }

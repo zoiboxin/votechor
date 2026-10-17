@@ -32,6 +32,7 @@ export interface NpcPlayerView {
   z: number
   detained: boolean
   dazed: boolean
+  y?: number // feet height — lets LOS see over/through the prop the target stands on (anti roof-camp)
   hidden?: boolean // inside a hide spot
   bot?: boolean // season bots — police deprioritize them so humans stay the main quarry
   health?: number // server-owned HP — weakened targets (POLICE_ATTACK.weakenedHealth) get grabbed faster
@@ -54,12 +55,19 @@ export function createNpcStates(spawns: { id: string; type: NpcType; x: number; 
   }))
 }
 
-// Segment vs AABB (2D XZ + height check ignored: colliders below eye don't block) — slab method
-export function segmentBlocked(x1: number, z1: number, x2: number, z2: number, colliders: AABB[]): boolean {
+/**
+ * Segment vs AABB (2D XZ) — slab method.
+ * `targetY` = the target's feet height: any collider at/below their feet is the
+ * prop they are STANDING ON (cart roof, bus roof, platform), so it can never
+ * hide them. Without this, camping on top of a tall object (maxY >= 1.6) made
+ * the camper invisible to every police check — an immunity exploit.
+ */
+export function segmentBlocked(x1: number, z1: number, x2: number, z2: number, colliders: AABB[], targetY = 0): boolean {
   const dx = x2 - x1, dz = z2 - z1
   for (const c of colliders) {
     if (c.walkable && c.minY > 1.4) continue // high platforms don't block vision at ground level
     if (c.maxY < 1.6) continue // low barriers don't block sight
+    if (c.maxY <= targetY + 0.06) continue // target stands on/above this — it can't block sight to them
     let tmin = 0, tmax = 1
     let hit = true
     for (let axis = 0; axis < 2; axis++) {
@@ -124,7 +132,7 @@ export function tickNpc(
       let diff = Math.abs(((ang - n.ry + Math.PI * 3) % (Math.PI * 2)) - Math.PI)
       if (diff > (DETECT.fovDeg * Math.PI) / 360) continue
     }
-    if (segmentBlocked(n.x, n.z, p.x, p.z, colliders)) continue
+    if (segmentBlocked(n.x, n.z, p.x, p.z, colliders, p.y ?? 0)) continue
     if (p.hidden && d > 3) continue
     // Bots are scored as if ~2.2× farther away: police prefer real protesters,
     // but a lone bot right under their nose still gets chased (season worlds stay alive).
@@ -206,7 +214,7 @@ export function tickNpc(
         // STRIKE: re-validate — target still in range, not dazed/detained/hidden, LOS not blocked
         n.attackTelegraphUntil = 0
         const strikeOk = d <= POLICE_ATTACK.strikeRange && !target.dazed && !target.detained && !target.hidden &&
-          !segmentBlocked(n.x, n.z, target.x, target.z, colliders)
+          !segmentBlocked(n.x, n.z, target.x, target.z, colliders, target.y ?? 0)
         if (strikeOk) {
           events.push({
             kind: 'hit', npcId: n.id, playerId: target.id,

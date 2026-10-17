@@ -114,8 +114,8 @@ export function buildWorldDef(): WorldDef {
   const stallKinds: DecoKind[] = ['stall', 'cart', 'teaKettle']
   for (let i = 0; i < 6; i++) {
     const x = -10 + i * 4.2, z = -52
-    deco({ kind: stallKinds[i % 3], x, z, ry: Math.PI, variant: i, sign: SHOP_NAMES[(i + 8) % SHOP_NAMES.length], collider: i % 2 === 0 })
-    if (i % 2 === 0) box(x - 1.6, 0, z - 1.6, x + 1.6, 2.4, z + 1.6)
+    deco({ kind: stallKinds[i % 3], x, z, ry: Math.PI, variant: i, sign: SHOP_NAMES[(i + 8) % SHOP_NAMES.length], collider: true })
+    if (i % 2 === 0) box(x - 1.6, 0, z - 1.6, x + 1.6, 2.4, z + 1.6) // odd stalls get their AABB from the solid-world pass
   }
   // Street props (kept off the cross-road band at z -78)
   for (let i = 0; i < 8; i++) {
@@ -663,6 +663,47 @@ export function buildWorldDef(): WorldDef {
 
   // Boss arena (center z=-520)
   landmarks.push({ name: 'BOSS: Vote Collector', x: 0, z: -520 })
+
+  // ================= Task: solid world pass — no more ghost props =================
+  // Every street prop that renders solid now gets an honest AABB collider sized
+  // to its visual footprint (rotation-tolerant squares for rotated props). A
+  // prop whose center is already covered by an existing collider of sufficient
+  // height (the explicit box() calls above) is skipped — no duplicates.
+  // Low props (bench/planter) are step-up-able; the physics step-up handles
+  // them so they read as climbable street furniture instead of walls.
+  const propSolid: Record<string, { hx: number; hz: number; h: number; walkable?: boolean }> = {
+    stall: { hx: 1.7, hz: 1.7, h: 2.4 },
+    cart: { hx: 1.3, hz: 1.3, h: 1.5 },
+    teaKettle: { hx: 0.95, hz: 0.95, h: 1.7 },
+    bench: { hx: 1.15, hz: 1.15, h: 0.5, walkable: true },
+    scooter: { hx: 0.95, hz: 0.95, h: 0.95 },
+    lamp: { hx: 0.2, hz: 0.2, h: 5 },
+    toilet: { hx: 1.3, hz: 1.15, h: 2.4 },
+    planter: { hx: 0.8, hz: 0.8, h: 0.6, walkable: true },
+    flagpole: { hx: 0.16, hz: 0.16, h: 8 },
+  }
+  for (const d of decorations) {
+    if (d.kind === 'crate') {
+      // crate size scales with d.s (visual 1.6*s cube); dedup against explicit boxes
+      const s = d.s ?? 1
+      const hx = 0.9 * s, h = 1.55 * s
+      const covered = colliders.some(c => d.x >= c.minX && d.x <= c.maxX && d.z >= c.minZ && d.z <= c.maxZ && c.maxY >= h - 0.01)
+      if (!covered) box(d.x - hx, 0, d.z - hx, d.x + hx, h, d.z + hx)
+      continue
+    }
+    if (d.kind === 'billboard' || d.kind === 'hoarding') {
+      // two thin posts carry the board (board itself sits above head height).
+      // Skip elevated billboards (flyover deck) — their posts stand on the deck, not the street.
+      if (d.y) continue
+      for (const px of [d.x - 1.6, d.x + 1.6]) box(px - 0.2, 0, d.z - 0.2, px + 0.2, 4, d.z + 0.2)
+      continue
+    }
+    const spec = propSolid[d.kind]
+    if (!spec) continue
+    const covered = colliders.some(c => d.x >= c.minX && d.x <= c.maxX && d.z >= c.minZ && d.z <= c.maxZ && c.maxY >= spec.h - 0.01)
+    if (covered) continue
+    box(d.x - spec.hx, 0, d.z - spec.hz, d.x + spec.hx, spec.h, d.z + spec.hz, spec.walkable === true)
+  }
 
   return {
     bounds: { minX: -120, maxX: 120, minZ: -572, maxZ: 10 },

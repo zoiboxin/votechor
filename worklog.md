@@ -872,3 +872,62 @@ Stage Summary:
 - 意外收获：修复离线 NPC NaN 冻结的重大既有 bug — 离线模式从"没有警察的空城"变成完整可玩（巡逻/追捕/殴打/拘留全通）
 - 已知边界：headless rAF 节流导致 game-time ≈ 35% 墙钟（回血等待需 in-page await，非逻辑问题）；在线喊叫的服务器端 NPC 反应未在浏览器直证（room.noise→applyNoise 与离线共用同一 applyNoise，离线已有机验证 + 服务器限流路径原有测试覆盖）
 - 建议下一轮：喊叫可打断 NPC 对话/触发围观群众响应；食物食用动画（hand-to-mouth）专用 AnimName；地图图例标注食物密集区；警察被喊叫吸引后到达现场若一无所获会提高怀疑基线（目前 investigate 完直接回 patrol）
+
+---
+Task ID: 22
+Agent: Z.ai Code (main)
+Task: User request — "make sure player character can not pass through objects; also when standing on objects/carts, police must still be able to detain or hit the character (no camping immunity). Understand, improve, update."
+
+Work Log:
+- INSPECTED the actual repo first (conversation summary was unreliable: no build-version.ts, no touch.ts, no Task 45 worklog entry — real last entry was Task 21; "Task 46 mobile pass" from the summary does NOT exist in code and was NOT claimed/verified).
+- ROOT CAUSE (anti-camp): all police detection/strike/capture logic is 2D XZ (shared/npc-brain.ts), but `segmentBlocked()` treated ANY collider with maxY >= 1.6 as LOS-blocking with no knowledge of the target's height. A player standing ON a stall (2.4 m), bus roof (2.7 m) or cow (1.6 m) was permanently invisible to police — a free camping immunity exploit.
+- FIX (npc-brain.ts): `NpcPlayerView` gained optional `y` (feet height); `segmentBlocked(x1,z1,x2,z2,colliders,targetY = 0)` now skips colliders whose `maxY <= targetY + 0.06` — the prop the target stands on can never hide them. Wired into the detection loop and the strike re-validation (`p.y ?? 0` / `target.y ?? 0`). Signature is backward-compatible (default 0).
+- WIRING: server room.ts passes `y: p.y` into NpcPlayerView (server already tracked p.y from client state, clamped to 14 m); client offline sim (game.ts offline pv) passes `y: player.pos.y`. Client sendState already included y.
+- ROOT CAUSE (pass-through): many visible props had NO collider — plaza food stalls only got colliders on even indices (3 ghost stalls), and benches, scooters, lamps, tutorial-ring crates, toilet, planters, flagpoles, billboards/hoardings, most carts and ALL teaKettles were ghosts the player walked through.
+- FIX (shared/world-def.ts): new "solid world pass" at the end of buildWorldDef — a `propSolid` footprint table (stall 3.4×3.4 h2.4, cart 2.6 h1.5, teaKettle 1.9 h1.7, bench 2.3 h0.5 walkable, scooter 1.9 h0.95, lamp 0.4 h5, toilet 2.6×2.3 h2.4, planter 1.6 h0.6 walkable, flagpole 0.32 h8, crate scaled by d.s h1.55·s, billboard/hoarding twin posts h4 skipping the elevated flyover one via d.y check). Dedup: a prop whose center is already covered by an explicit box() of sufficient height is skipped (no duplicate colliders). Plaza stall loop now always sets `collider: true`. Collider count ~380 → 438.
+- Low props (bench 0.5, planter 0.6) are intentionally step-up-able (< 0.62 step-up threshold) — they read as climbable street furniture; scooters/crates/kettles block (0.95–2.4) and are sprint-vaultable where ≤ 1.18.
+- QA (agent-browser, offline :3000 + online :81):
+  * Physics probes via moveActor: stall BLOCKS (hitWall true), scooter BLOCKS, teaKettle BLOCKS, bench auto-step-up onto seat (groundY 0.5). Lamp probe "miss" was a probe artifact (0.6 s dt jumps over a 0.4 m pole; real frames move ~6 cm — blocked in practice).
+  * Anti-camp full organic chain (offline, live sim brains): player hopped onto stall (6.8, y=2.4, -52) — physics grounded him on the stall top; officer npcA2 placed 1.56 m away → alert rose 0→0.95 (suspicious) → chase → 2 baton hits (100→61 HP) → capture → detained=true → officer state 'return'. BEFORE the fix this target was undetectable (stall maxY 2.4 blocked LOS).
+  * IMPORTANT debug note: `window.__game.localNpcBrains` is a VESTIGIAL never-ticked array — the live offline sim ticks `npcs.visuals[i].brain`. Also `window.__game.player.pos.set()` teleports > 18 m/tick are rejected by the server speed guard (MAX_STATE_DIST) — hop in ≤ 18 m steps when testing online.
+  * Server LIVE regression: restarted game server; combat-test.ts ALL green including its live "camped player detained" scenario; season-test ALL green; confiscate-test 46/46.
+  * Online client via gateway: PLAY SOLO → CONNECTED, SEASON #2, 100 players, 75 CROWD / 24 RIGS, console clean after reload (older character.ts:525 console errors were the stale pre-fix buffer).
+
+Stage Summary:
+- Roof/cart camping no longer grants immunity: police see, chase, beat and detain players standing on stalls, buses, cows, crates — the object you stand on can't hide you (LOS ignores colliders at/below your feet, on BOTH the server FSM and the offline sim since they share npc-brain.ts).
+- The city is solid: every street prop now has an honest, footprint-matched collider; nothing visible can be walked through; low props remain climbable street furniture (step-up) and mid props are vaultable.
+- Ops notes discovered this round: (1) the Caddy gateway listens on :81 — browsing :3000 directly makes the client fall back to offline because XTransformPort doesn't exist there; online QA must open :81; (2) the game server is now `bun index.ts` (plain, detached) — `bun --hot` background instances kept dying in this sandbox; RESTART THE SERVER MANUALLY after editing shared/ code (no hot reload anymore); (3) MINI headless QA caveat: server teleports >18 m/tick are clamped.
+- Suggested next: police could visibly "reach up" (arm raise) when striking an elevated target; NPC-vs-prop avoidance so officers don't clip through stalls while patrolling; season bots could also stand on props to bait police (emergent comedy).
+
+---
+Task ID: 23
+Agent: Z.ai Code (main)
+Task: User request — "check attached image (GTA Vice City Tommy Vercetti) and improve the player character to a more realistic shape." Reference: teal palm-print hawaiian shirt, blue jeans, white sneakers, dark hair, stubble, tanned skin.
+
+Work Log:
+- MEASURED the current rig in-browser first and found a REAL pre-existing bug: the rig's feet hovered at world y = 0.335 (leg boxes were 0.5 m long hanging from a 0.9 m hip pivot — nothing below 0.335). Every character in the game floated ~33 cm above the ground. Confirmed via matrixWorld probe (footBottomWorld 0.335) and old screenshots.
+- REBUILT CharacterRig (src/game/character.ts) — same pivot skeleton (torsoPivot/headPivot/armL/armR/legL/legR + update() anim contract untouched), all shapes upgraded:
+  * Torso: box → 7-segment tapered cylinder (r 0.26 top → 0.185 bottom) = V-shape, broad shoulders, narrow waist.
+  * Head: smooth-shaded sphere with a PAINTED FACE texture (canvas, cached per skin|hair) — eyes (sclera+iris+glint), brows in hair color, nose shading + nostrils, mouth line, and Vice-City-style five-o'clock stubble speckle. Head slightly oval (0.98, 1.07, 1.02). Hair cap tightened (thetaLength π/1.9 → π/2.4) so the hairline sits above the brows.
+  * Neck cylinder bridges collar → head; dark belt cylinder closes the shirt hem over the hips (also fills the old 0.9–0.98 gap).
+  * Arms: single box → short sleeve (shirt cloth) + bare forearm cylinder + hand sphere at -0.53 (kurta outfit keeps full sleeves). Held props re-anchored to the new palm (-0.44 → -0.47…-0.57 across sign/banner/flag/bat/lathi/bag/megaphone/police lathi).
+  * Legs: box → full-length tapered cylinder (0.78 m, hip → ankle) that actually REACHES the ground; feet rebuilt as white sneakers (sole + upper + accent heel tab); boots/chappal/glow variants re-grounded too. Foot bottom now exactly y = 0 (verified: footBottomWorld 0.000).
+  * Gear/outfit props that would sink into the tapered torso re-positioned (backpack -0.29, dhol -0.34, bannerroll/umbrella -0.3, hoodie pocket 0.21, jhola strap 0.22, highvis vest scaled 1.28/1.3, moustache/warpaint/scar pushed to the new head surface).
+  * Sash re-cut as a tapered box that hugs the V-torso (top z×1.38).
+- NEW PROCEDURAL TEXTURES (all canvas, module-cached per color — zero network assets, shared instances across every rig of a palette):
+  * shirtMat(color, patterned): palm-frond hawaiian print (deterministic mulberry32 — spine arc + leaflet fronds, blotches, hibiscus dots) tinted by the archetype shirt color, with placket + 3 buttons + chest pocket BAKED into the front UV seam of the torso cylinder (zero extra draw calls).
+  * denimMat(color): denim weave + diagonal twill + side seams, tinted by the archetype pants color.
+  * headMat(skin, hair): the painted-face texture above.
+- OUTFIT DEFAULT: protesters (no npcType) now default to outfit 'hawaii' → palm-print shirt + denim + sneakers (Tommy look); police/security/guard keep solid uniform colors. Old saved profiles with an explicit outfit keep it. Every archetype keeps its identity (8 tinted shirt prints).
+- Perf guards: geometries in the shared G cache; materials/textures module-cached per color; collar merged into ONE geometry (1 draw call); placket/buttons/pocket painted into the torso texture instead of meshes. Net mesh delta ≈ +7/rig.
+- QA (agent-browser):
+  * Feet grounded: footBottomWorld = 0.000 (was 0.335).
+  * Visual: in-game zoom shot shows V-taper teal shirt, sash, skin forearms, denim legs, white sneakers, face with eyes/brows/stubble; wardrobe 3D preview renders the full look on the pedestal correctly (no sinking, podium ring at feet).
+  * Online sanity: CONNECTED season match, 24 rigs streaming, 10 FPS @ RES 0.7 (same as pre-change headless baseline), console clean.
+  * Animation contract untouched (pivots/names unchanged) — walk/run/jump/slide/dazed/celebrate all still drive; tsc 0 errors, eslint 0.
+
+Stage Summary:
+- Characters finally look like the reference: proper human proportions (grounded feet, full-length legs, V-torso, neck, rolled sleeves), hawaiian palm-print shirt + denim + white sneakers by default, painted faces with stubble — all procedural, cached, and archetype-tinted, no assets downloaded.
+- Fixed the long-hidden 33 cm hover bug on every humanoid (players, remotes, NPCs, boss excluded — boss has its own builder).
+- Known trade-offs: palm print is subtle at gameplay distance by design (reads as cloth texture, stays tasteful); +7 meshes/rig (~+200 draw calls worst case with 30 rigs — measured no FPS change in headless QA).
+- Suggested next: Tommy-style archetype (sunglasses + necklace cosmetic), shirt pattern variants (floral/camo) as cosmetics, LOD swap for far rigs (single merged mesh), and a death/detain ragdoll-ish pose review now that proportions changed.

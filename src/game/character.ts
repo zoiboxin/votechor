@@ -2,6 +2,7 @@
 // procedural animation (walk/run/jump/slide/dazed/celebrate/emotes).
 // Shared geometry cache for performance; used for players, NPCs, crowd, and the boss.
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { AnimName } from './shared/types'
 import { archetypeById } from './shared/constants'
 
@@ -13,7 +14,7 @@ const G = {
   leg: new THREE.BoxGeometry(0.14, 0.5, 0.15),
   hand: new THREE.SphereGeometry(0.06, 6, 5),
   foot: new THREE.BoxGeometry(0.15, 0.09, 0.26),
-  hair: new THREE.SphereGeometry(0.163, 10, 8, 0, Math.PI * 2, 0, Math.PI / 1.9),
+  hair: new THREE.SphereGeometry(0.163, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2.4),
   cap: new THREE.SphereGeometry(0.17, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
   capBrim: new THREE.BoxGeometry(0.2, 0.02, 0.16),
   glasses: new THREE.BoxGeometry(0.24, 0.05, 0.05),
@@ -63,6 +64,16 @@ const G = {
   megaCone: new THREE.CylinderGeometry(0.028, 0.11, 0.2, 10),
   megaBody: new THREE.CylinderGeometry(0.032, 0.032, 0.14, 8),
   megaHandle: new THREE.TorusGeometry(0.045, 0.014, 5, 9, Math.PI),
+  // ---- realism pass geometry (GTA Vice-City-style proportions) ----
+  torsoTaper: new THREE.CylinderGeometry(0.26, 0.185, 0.56, 7),   // V-taper chest → waist
+  neck: new THREE.CylinderGeometry(0.052, 0.066, 0.12, 6),
+  sleeve: new THREE.BoxGeometry(0.125, 0.25, 0.125),              // short-sleeve upper arm
+  forearm: new THREE.CylinderGeometry(0.048, 0.056, 0.27, 5),     // bare forearm (rolled sleeves)
+  legTaper: new THREE.CylinderGeometry(0.1, 0.072, 0.78, 6),      // full-length thigh → ankle
+  belt: new THREE.CylinderGeometry(0.2, 0.2, 0.09, 7),
+  sneakerSole: new THREE.BoxGeometry(0.165, 0.06, 0.3),
+  sneakerUpper: new THREE.BoxGeometry(0.145, 0.09, 0.25),
+  heelTab: new THREE.BoxGeometry(0.06, 0.05, 0.03),
 }
 
 export interface RigOptions {
@@ -78,7 +89,7 @@ export interface RigOptions {
   isBoss?: boolean
   // ---- wardrobe expansion slots (default when omitted) ----
   face?: string     // 'clean' | 'beard' | 'moustache' | 'warpaint' | 'scar'
-  outfit?: string   // 'classic' | 'kurta' | 'hoodie' | 'highvis'
+  outfit?: string   // 'classic' | 'hawaii' | 'kurta' | 'hoodie' | 'highvis'
   footwear?: string // 'shoes' | 'boots' | 'chappal' | 'glow'
   gear?: string     // 'none' | 'backpack' | 'jhola' | 'bannerroll' | 'dhol' | 'umbrella'
   held?: string     // 'none' | 'sign' | 'banner' | 'flag' | 'bat' | 'lathi' | 'shoppingbag' | 'megaphone'
@@ -87,6 +98,234 @@ export interface RigOptions {
 function mat(color: string, flat = true): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.02, flatShading: flat })
 }
+
+// ---------------------------------------------------------------------------
+// Realism pass — shared procedural textures (cached per color, module level).
+// Zero network assets: palm-print hawaiian shirts, denim jeans, painted faces.
+// All rigs of the same palette share one material/texture instance.
+// ---------------------------------------------------------------------------
+function mulberry(seed: number) {
+  let a = seed >>> 0
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+function shade(hex: string, mul: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  const ch = (v: number) => Math.max(0, Math.min(255, Math.round(v * mul)))
+  return `#${((ch((n >> 16) & 255) << 16) | (ch((n >> 8) & 255) << 8) | ch(n & 255)).toString(16).padStart(6, '0')}`
+}
+
+/** Palm-frond hawaiian print tinted by the shirt color (Tommy Vercetti vibes). */
+function makeShirtCanvas(color: string): HTMLCanvasElement {
+  const W = 256, H = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = W; canvas.height = H
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = color
+  ctx.fillRect(0, 0, W, H)
+  const rnd = mulberry(20241)
+  const dark = shade(color, 0.68)
+  const darker = shade(color, 0.52)
+  const light = shade(color, 1.3)
+  // soft blotches for cloth depth
+  for (let i = 0; i < 26; i++) {
+    ctx.fillStyle = rnd() < 0.5 ? `rgba(0,0,0,0.05)` : `rgba(255,255,255,0.05)`
+    ctx.beginPath()
+    ctx.ellipse(rnd() * W, rnd() * H, 8 + rnd() * 18, 6 + rnd() * 12, rnd() * Math.PI, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  // palm fronds — spine arc + leaflets, scattered deterministic
+  const frond = (fx: number, fy: number, ang: number, len: number) => {
+    ctx.strokeStyle = dark
+    ctx.lineWidth = 1.6
+    ctx.beginPath()
+    ctx.moveTo(fx, fy)
+    const tipX = fx + Math.cos(ang) * len, tipY = fy + Math.sin(ang) * len
+    ctx.quadraticCurveTo(fx + Math.cos(ang - 0.35) * len * 0.6, fy + Math.sin(ang - 0.35) * len * 0.6, tipX, tipY)
+    ctx.stroke()
+    for (let i = 1; i <= 7; i++) {
+      const t = i / 8
+      const px = fx + (tipX - fx) * t, py = fy + (tipY - fy) * t
+      const ll = (1 - Math.abs(t - 0.45) * 1.2) * len * 0.24
+      for (const side of [-1, 1]) {
+        const la = ang + side * 1.15
+        ctx.fillStyle = side < 0 ? dark : darker
+        ctx.beginPath()
+        ctx.ellipse(px + Math.cos(la) * ll * 0.5, py + Math.sin(la) * ll * 0.5, ll * 0.55, ll * 0.16, la, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+  }
+  for (let i = 0; i < 7; i++) {
+    frond(rnd() * W, rnd() * H, rnd() * Math.PI * 2, 26 + rnd() * 22)
+  }
+  // hibiscus dots
+  for (let i = 0; i < 14; i++) {
+    ctx.fillStyle = light
+    ctx.beginPath()
+    ctx.arc(rnd() * W, rnd() * H, 1.4 + rnd() * 1.6, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  // ---- shirt details baked into the texture (cylinder UV: u 0/1 seam = chest front) ----
+  // button placket strip down the front
+  ctx.fillStyle = shade(color, 0.88)
+  ctx.fillRect(0, H * 0.05, W * 0.035, H * 0.9)
+  ctx.fillRect(W * 0.965, H * 0.05, W * 0.035, H * 0.9)
+  // buttons
+  ctx.fillStyle = shade(color, 1.45)
+  for (const v of [0.28, 0.52, 0.76]) {
+    ctx.beginPath(); ctx.arc(W * 0.0175, H * v, 2.1, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(W * 0.9825, H * v, 2.1, 0, Math.PI * 2); ctx.fill()
+  }
+  // chest pocket (character's left breast)
+  ctx.strokeStyle = shade(color, 0.7)
+  ctx.lineWidth = 1.6
+  ctx.strokeRect(W * 0.9, H * 0.3, W * 0.058, H * 0.14)
+  ctx.fillStyle = shade(color, 0.78)
+  ctx.fillRect(W * 0.9, H * 0.3, W * 0.058, 2.4)
+  return canvas
+}
+
+/** Denim weave + side seams tinted by the pants color. */
+function makeDenimCanvas(color: string): HTMLCanvasElement {
+  const W = 128, H = 64
+  const canvas = document.createElement('canvas')
+  canvas.width = W; canvas.height = H
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = color
+  ctx.fillRect(0, 0, W, H)
+  const rnd = mulberry(7788)
+  for (let i = 0; i < 340; i++) {
+    const x = rnd() * W, y = rnd() * H
+    ctx.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)'
+    ctx.fillRect(x, y, 2 + rnd() * 3, 1)
+  }
+  // diagonal twill
+  ctx.strokeStyle = 'rgba(255,255,255,0.045)'
+  ctx.lineWidth = 1
+  for (let x = -H; x < W; x += 5) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + H, H); ctx.stroke()
+  }
+  // side seams at u 0.25 / 0.75 (left/right of the leg cylinder) + hem shading
+  ctx.fillStyle = 'rgba(0,0,0,0.16)'
+  ctx.fillRect(W * 0.245, 0, 2, H); ctx.fillRect(W * 0.745, 0, 2, H)
+  ctx.fillStyle = 'rgba(0,0,0,0.12)'
+  ctx.fillRect(0, 0, W, 3)
+  return canvas
+}
+
+/** Painted face (eyes/brows/nose/mouth/stubble) onto the skin tone. Sphere UV: u 0.25 = face front (+z), v 0 = crown. */
+function makeFaceCanvas(skin: string, hair: string): HTMLCanvasElement {
+  const W = 256, H = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = W; canvas.height = H
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = skin
+  ctx.fillRect(0, 0, W, H)
+  const cx = W * 0.25 // face center on the sphere UV
+  const rnd = mulberry(991)
+  // cheek/nose soft shading
+  ctx.fillStyle = 'rgba(0,0,0,0.07)'
+  ctx.beginPath(); ctx.ellipse(cx, H * 0.47, 7, 12, 0, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = 'rgba(0,0,0,0.1)'
+  ctx.fillRect(cx - 1.6, H * 0.42, 3.2, H * 0.1) // nose bridge shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.14)'
+  ctx.fillRect(cx - 4.5, H * 0.5, 3, 2.4); ctx.fillRect(cx + 1.5, H * 0.5, 3, 2.4) // nostrils
+  // stubble (lower face speckle) — Vice-City five-o'clock shadow
+  ctx.fillStyle = shade(hair, 0.9)
+  for (let i = 0; i < 240; i++) {
+    const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd())
+    const sx = cx + Math.cos(a) * r * 26, sy = H * 0.55 + Math.sin(a) * r * 13
+    if (sy < H * 0.52) continue
+    ctx.globalAlpha = 0.1 + rnd() * 0.14
+    ctx.fillRect(sx, sy, 1.2, 1.2)
+  }
+  ctx.globalAlpha = 1
+  // mouth
+  ctx.strokeStyle = 'rgba(70,30,24,0.75)'
+  ctx.lineWidth = 2.2
+  ctx.beginPath(); ctx.moveTo(cx - 7, H * 0.575); ctx.quadraticCurveTo(cx, H * 0.595, cx + 7, H * 0.575); ctx.stroke()
+  // eyes + brows
+  for (const side of [-1, 1]) {
+    const ex = cx + side * 11.5
+    // brow
+    ctx.strokeStyle = shade(hair, 0.85)
+    ctx.lineWidth = 3
+    ctx.beginPath(); ctx.moveTo(ex - 5.5, H * 0.395); ctx.quadraticCurveTo(ex, H * 0.375, ex + 5.5, H * 0.395); ctx.stroke()
+    // sclera + iris
+    ctx.fillStyle = '#efe9df'
+    ctx.beginPath(); ctx.ellipse(ex, H * 0.445, 4.6, 3, 0, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = '#241d16'
+    ctx.beginPath(); ctx.arc(ex + side * 0.8, H * 0.45, 2.1, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.fillRect(ex + side * 0.2, H * 0.435, 1.2, 1.2) // glint
+  }
+  return canvas
+}
+
+const shirtMatCache = new Map<string, THREE.MeshStandardMaterial>()
+/** Shirt material — patterned (hawaii) or solid; shared across all rigs of a color. */
+function shirtMat(color: string, patterned: boolean): THREE.MeshStandardMaterial {
+  const key = `${color}|${patterned ? 'p' : 's'}`
+  let m = shirtMatCache.get(key)
+  if (!m) {
+    if (!patterned) m = mat(color)
+    else {
+      const tex = new THREE.CanvasTexture(makeShirtCanvas(color))
+      tex.colorSpace = THREE.SRGBColorSpace
+      m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0.02, flatShading: true })
+    }
+    shirtMatCache.set(key, m)
+  }
+  return m
+}
+
+const denimMatCache = new Map<string, THREE.MeshStandardMaterial>()
+function denimMat(color: string): THREE.MeshStandardMaterial {
+  let m = denimMatCache.get(color)
+  if (!m) {
+    const tex = new THREE.CanvasTexture(makeDenimCanvas(color))
+    tex.colorSpace = THREE.SRGBColorSpace
+    m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.88, metalness: 0.02, flatShading: true })
+    denimMatCache.set(color, m)
+  }
+  return m
+}
+
+const headMatCache = new Map<string, THREE.MeshStandardMaterial>()
+/** Smooth-shaded head with a painted face — keyed by skin+hair. */
+function headMat(skin: string, hair: string): THREE.MeshStandardMaterial {
+  const key = `${skin}|${hair}`
+  let m = headMatCache.get(key)
+  if (!m) {
+    const tex = new THREE.CanvasTexture(makeFaceCanvas(skin, hair))
+    tex.colorSpace = THREE.SRGBColorSpace
+    m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.72, metalness: 0.01 })
+    headMatCache.set(key, m)
+  }
+  return m
+}
+
+/** Open-collar geometry (two flaps + back band) merged once — one draw call per rig. */
+const collarGeo = mergeGeometries([
+  new THREE.BoxGeometry(0.11, 0.14, 0.026).rotateZ(0.5).translate(0.062, 0.505, 0.245),
+  new THREE.BoxGeometry(0.11, 0.14, 0.026).rotateZ(-0.5).translate(-0.062, 0.505, 0.245),
+  new THREE.BoxGeometry(0.36, 0.075, 0.03).rotateX(-0.14).translate(0, 0.545, -0.24),
+], false)
+
+/** Sash tapered to hug the V-shape torso (wider at the shoulders, snug at the waist). */
+const sashGeo = (() => {
+  const g = new THREE.BoxGeometry(0.09, 0.54, 0.4)
+  const pos = g.attributes.position
+  for (let i = 0; i < pos.count; i++) if (pos.getY(i) > 0) pos.setZ(i, pos.getZ(i) * 1.38)
+  pos.needsUpdate = true
+  g.computeVertexNormals()
+  return g
+})()
 
 export class CharacterRig {
   group = new THREE.Group()
@@ -120,31 +359,53 @@ export class CharacterRig {
     const colors = opts.colors ?? archetypeById(opts.archetype ?? 'student').colors
     this.scaleMul = opts.scale ?? (opts.archetype ? archetypeById(opts.archetype).stats.scale : 1)
 
-    const shirt = mat(colors.shirt)
-    const pants = mat(colors.pants)
+    // Outfit: protesters default to the palm-print hawaii shirt + denim jeans
+    // (Vice-City Tommy look); police/security/guard keep solid uniform colors.
+    const outfitSlot = opts.outfit ?? (opts.npcType ? 'classic' : 'hawaii')
+    const shirt = shirtMat(colors.shirt, outfitSlot === 'hawaii')
+    const pants = outfitSlot === 'hawaii' ? denimMat(colors.pants) : mat(colors.pants)
     const skin = mat(colors.skin)
     const hair = mat(colors.hair)
+    const trimShirt = shirtMat(colors.shirt, false) // solid shirt color for collar trim
 
     // hierarchy: group -> torsoPivot (contains torso, head, arms) ; legs on group
     this.group.add(this.torsoPivot)
     this.torsoPivot.position.y = 0.98
 
-    const torso = new THREE.Mesh(G.torso, shirt)
+    // V-taper torso (broad shoulders → narrow waist). The hawaii print bakes the
+    // placket, buttons and chest pocket into the texture at the front UV seam.
+    const torso = new THREE.Mesh(G.torsoTaper, shirt)
     torso.position.y = 0.26
     torso.castShadow = true
     this.torsoPivot.add(torso)
 
-    // accent stripe (protest sash)
-    const sash = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.26), mat(colors.accent))
+    if (outfitSlot === 'hawaii') {
+      // open camp collar — merged geometry, one draw call
+      const collar = new THREE.Mesh(collarGeo, trimShirt)
+      this.torsoPivot.add(collar)
+    }
+
+    // neck bridges collar → head; belt closes the shirt hem over the hips
+    const neck = new THREE.Mesh(G.neck, skin)
+    neck.position.y = 0.55
+    this.torsoPivot.add(neck)
+    const belt = new THREE.Mesh(G.belt, mat('#2a241f'))
+    belt.position.y = -0.03
+    belt.castShadow = true
+    this.torsoPivot.add(belt)
+
+    // accent stripe (protest sash) — tapered box hugs the new torso silhouette
+    const sash = new THREE.Mesh(sashGeo, mat(colors.accent))
     sash.position.set(0.06, 0.26, 0.02)
     sash.rotation.z = 0.4
     this.torsoPivot.add(sash)
 
-    // head
+    // head — smooth shaded with painted face (eyes/brows/nose/mouth/stubble)
     this.headPivot.position.y = 0.62
     this.torsoPivot.add(this.headPivot)
-    const head = new THREE.Mesh(G.head, skin)
+    const head = new THREE.Mesh(G.head, headMat(colors.skin, colors.hair))
     head.position.y = 0.1
+    head.scale.set(0.98, 1.07, 1.02)
     head.castShadow = true
     this.headPivot.add(head)
     const hairMesh = new THREE.Mesh(G.hair, hair)
@@ -243,10 +504,10 @@ export class CharacterRig {
       this.headPivot.add(beard)
     } else if (faceSlot === 'moustache') {
       const mo = new THREE.Mesh(G.moustache, hair)
-      mo.position.set(0, 0.075, 0.145)
+      mo.position.set(0, 0.075, 0.152)
       this.headPivot.add(mo)
     } else if (faceSlot === 'warpaint') {
-      const stripes = [new THREE.Vector3(-0.075, 0.1, 0.128), new THREE.Vector3(0.075, 0.1, 0.128), new THREE.Vector3(0, 0.165, 0.13)]
+      const stripes = [new THREE.Vector3(-0.075, 0.1, 0.152), new THREE.Vector3(0.075, 0.1, 0.152), new THREE.Vector3(0, 0.165, 0.155)]
       for (const p of stripes) {
         const st = new THREE.Mesh(G.warpaint, mat(colors.accent))
         st.position.copy(p)
@@ -255,13 +516,12 @@ export class CharacterRig {
       }
     } else if (faceSlot === 'scar') {
       const sc = new THREE.Mesh(G.scar, mat('#a4543c'))
-      sc.position.set(0.085, 0.09, 0.128)
+      sc.position.set(0.085, 0.09, 0.138)
       sc.rotation.z = 0.25
       this.headPivot.add(sc)
     }
 
-    // ---- outfit slot (worn over the archetype colors) ----
-    const outfitSlot = opts.outfit ?? 'classic'
+    // ---- outfit slot extras (base outfit/hawaii decided at the top of the constructor) ----
     if (outfitSlot === 'kurta') {
       const skirt = new THREE.Mesh(G.kurtaSkirt, shirt)
       skirt.position.y = 0.02
@@ -278,68 +538,84 @@ export class CharacterRig {
       hood.castShadow = true
       this.torsoPivot.add(hood)
       const pocket = new THREE.Mesh(G.pocket, shirt)
-      pocket.position.set(0, 0.08, 0.13)
+      pocket.position.set(0, 0.08, 0.21)
       this.torsoPivot.add(pocket)
     } else if (outfitSlot === 'highvis') {
       const vest = new THREE.Mesh(G.vestBody, mat('#f2a541'))
       vest.position.y = 0.27
+      vest.scale.set(1.28, 1, 1.3)
       vest.castShadow = true
       this.torsoPivot.add(vest)
       for (const y of [0.36, 0.19]) {
         const stripe = new THREE.Mesh(G.vestStripe, mat('#e8e6df'))
         stripe.position.y = y
+        stripe.scale.set(1.3, 1, 1.32)
         this.torsoPivot.add(stripe)
       }
     }
 
-    // arms — pivot at shoulder
+    // arms — pivot at shoulder; short sleeve over a bare forearm (rolled-up look).
+    // kurta keeps full sleeves (forearm in shirt cloth).
     this.armL.position.set(0.265, 0.46, 0)
     this.armR.position.set(-0.265, 0.46, 0)
+    const longSleeves = outfitSlot === 'kurta'
     for (const [arm, side] of [[this.armL, 1], [this.armR, -1]] as const) {
-      const upper = new THREE.Mesh(G.arm, shirt)
-      upper.position.y = -0.2
-      upper.castShadow = true
-      arm.add(upper)
+      const sleeve = new THREE.Mesh(G.sleeve, shirt)
+      sleeve.position.y = -0.115
+      sleeve.castShadow = true
+      arm.add(sleeve)
+      const forearm = new THREE.Mesh(G.forearm, longSleeves ? shirt : skin)
+      forearm.position.y = -0.375
+      forearm.castShadow = true
+      arm.add(forearm)
       const hand = new THREE.Mesh(G.hand, skin)
-      hand.position.y = -0.46
+      hand.position.y = -0.53
       arm.add(hand)
       this.torsoPivot.add(arm)
       void side
     }
 
-    // legs — pivot at hip on group (footwear slot swaps the shoe build)
+    // legs — pivot at hip on group (footwear slot swaps the shoe build).
+    // Full-length tapered legs that actually reach the ground (the old rig had
+    // 0.5m legs on a 0.9m hip pivot → the whole character hovered ~0.33m).
     const footwearSlot = opts.footwear ?? 'shoes'
     const buildFoot = (): THREE.Group => {
       const fg = new THREE.Group()
       if (footwearSlot === 'boots') {
-        const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.17), mat('#4a3626'))
-        shaft.position.set(0, -0.46, 0)
+        const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.17), mat('#4a3626'))
+        shaft.position.set(0, -0.79, 0)
         const foot = new THREE.Mesh(G.foot, mat('#3a2a1c'))
-        foot.position.set(0, -0.53, 0.05)
+        foot.position.set(0, -0.855, 0.05)
         fg.add(shaft, foot)
       } else if (footwearSlot === 'chappal') {
         const sole = new THREE.Mesh(G.chappal, mat('#7a4a2c'))
-        sole.position.set(0, -0.54, 0.03)
+        sole.position.set(0, -0.88, 0.03)
         const toe = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.02, 0.03), mat('#5c3820'))
-        toe.position.set(0, -0.51, 0.12)
+        toe.position.set(0, -0.85, 0.12)
         fg.add(sole, toe)
+      } else if (footwearSlot === 'glow') {
+        const foot = new THREE.Mesh(G.foot, new THREE.MeshStandardMaterial({ color: '#2c2f38', emissive: '#39d0ff', emissiveIntensity: 0.9, roughness: 0.6 }))
+        foot.position.set(0, -0.855, 0.04)
+        const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.06), new THREE.MeshStandardMaterial({ color: '#111', emissive: '#39d0ff', emissiveIntensity: 1.2 }))
+        stripe.position.set(0, -0.885, 0.04)
+        fg.add(foot, stripe)
       } else {
-        const foot = new THREE.Mesh(G.foot, footwearSlot === 'glow' ? new THREE.MeshStandardMaterial({ color: '#2c2f38', emissive: '#39d0ff', emissiveIntensity: 0.9, roughness: 0.6 }) : mat('#3a2d22'))
-        foot.position.set(0, -0.52, 0.04)
-        if (footwearSlot === 'glow') {
-          const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.06), new THREE.MeshStandardMaterial({ color: '#111', emissive: '#39d0ff', emissiveIntensity: 1.2 }))
-          stripe.position.set(0, -0.55, 0.04)
-          fg.add(stripe)
-        }
-        fg.add(foot)
+        // white sneaker — sole + upper + accent heel tab (Vice-City default shoe)
+        const sole = new THREE.Mesh(G.sneakerSole, mat('#efeadf', false))
+        sole.position.set(0, -0.87, 0.035)
+        const upper = new THREE.Mesh(G.sneakerUpper, mat('#e6e1d4', false))
+        upper.position.set(0, -0.8, 0.03)
+        const heel = new THREE.Mesh(G.heelTab, mat(colors.accent, false))
+        heel.position.set(0, -0.79, -0.105)
+        fg.add(sole, upper, heel)
       }
       return fg
     }
     this.legL.position.set(0.1, 0.9, 0)
     this.legR.position.set(-0.1, 0.9, 0)
     for (const leg of [this.legL, this.legR]) {
-      const upper = new THREE.Mesh(G.leg, pants)
-      upper.position.y = -0.25
+      const upper = new THREE.Mesh(G.legTaper, pants)
+      upper.position.y = -0.39
       upper.castShadow = true
       leg.add(upper)
       leg.add(buildFoot())
@@ -351,15 +627,15 @@ export class CharacterRig {
     if (gearSlot === 'backpack') {
       const bpColor = opts.archetype === 'student' ? '#c94f34' : opts.archetype === 'journalist' ? '#3d3a30' : colors.accent
       const bp = new THREE.Mesh(G.backpack, mat(bpColor))
-      bp.position.set(0, 0.28, -0.2)
+      bp.position.set(0, 0.28, -0.29)
       bp.castShadow = true
       this.torsoPivot.add(bp)
       const flap = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.03), mat('#2c2c2c'))
-      flap.position.set(0, 0.38, -0.275)
+      flap.position.set(0, 0.38, -0.355)
       this.torsoPivot.add(flap)
     } else if (gearSlot === 'jhola') {
       const strap = new THREE.Mesh(G.strap, mat('#8a6b4a'))
-      strap.position.set(0.08, 0.24, 0.13)
+      strap.position.set(0.08, 0.24, 0.22)
       strap.rotation.z = 0.55
       this.torsoPivot.add(strap)
       const bag = new THREE.Mesh(G.sideBag, mat('#c9b98a'))
@@ -369,40 +645,40 @@ export class CharacterRig {
     } else if (gearSlot === 'bannerroll') {
       const roll = new THREE.Mesh(G.bannerRoll, mat('#e8e2d0'))
       roll.rotation.z = Math.PI / 2.3
-      roll.position.set(0, 0.3, -0.2)
+      roll.position.set(0, 0.3, -0.3)
       roll.castShadow = true
       this.torsoPivot.add(roll)
       const rollEdge = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.02, 8), mat('#8c1f28'))
       rollEdge.rotation.z = Math.PI / 2.3
-      rollEdge.position.set(-0.24, 0.36, -0.2)
+      rollEdge.position.set(-0.24, 0.36, -0.3)
       this.torsoPivot.add(rollEdge)
     } else if (gearSlot === 'dhol') {
       const drum = new THREE.Mesh(G.dhol, mat('#b3854a'))
       drum.rotation.x = Math.PI / 2
-      drum.position.set(0, 0.24, -0.26)
+      drum.position.set(0, 0.24, -0.34)
       drum.castShadow = true
       this.torsoPivot.add(drum)
       for (const dz of [-0.15, 0.15]) {
         const rim = new THREE.Mesh(G.dholRim, mat('#e8e2d0'))
-        rim.position.set(0, 0.24, -0.26 + dz)
+        rim.position.set(0, 0.24, -0.34 + dz)
         this.torsoPivot.add(rim)
       }
       const rope = new THREE.Mesh(G.strap, mat('#d9a428'))
-      rope.position.set(0, 0.24, -0.26)
+      rope.position.set(0, 0.24, -0.34)
       rope.rotation.z = 0.4
       this.torsoPivot.add(rope)
     } else if (gearSlot === 'umbrella') {
       const stick = new THREE.Mesh(G.umbrellaStick, mat('#3a4046'))
       stick.rotation.z = 0.65
-      stick.position.set(-0.02, 0.26, -0.2)
+      stick.position.set(-0.02, 0.26, -0.3)
       this.torsoPivot.add(stick)
       const fold = new THREE.Mesh(G.umbrellaFold, mat(colors.accent))
       fold.rotation.z = 0.65
-      fold.position.set(-0.2, 0.42, -0.2)
+      fold.position.set(-0.2, 0.42, -0.3)
       this.torsoPivot.add(fold)
       const handle = new THREE.Mesh(G.umbrellaHandle, mat('#7a5230'))
       handle.rotation.z = 0.65 - Math.PI
-      handle.position.set(0.16, 0.08, -0.2)
+      handle.position.set(0.16, 0.08, -0.3)
       this.torsoPivot.add(handle)
     }
 
@@ -424,7 +700,7 @@ export class CharacterRig {
       const texMesh2 = texMesh.clone()
       texMesh2.rotation.y = Math.PI
       this.signGroup.add(pole, board, texMesh, texMesh2)
-      this.signGroup.position.y = -0.45
+      this.signGroup.position.y = -0.52
       this.armR.add(this.signGroup)
       this.armR.rotation.x = -0.9
       this.armBlockR = true
@@ -442,7 +718,7 @@ export class CharacterRig {
       backCloth.rotation.y = Math.PI
       backCloth.position.z = -0.005
       this.heldProp.add(backCloth)
-      this.heldProp.position.y = -0.4
+      this.heldProp.position.y = -0.47
       this.armR.add(this.heldProp)
       this.armR.rotation.x = -0.85
       this.armBlockR = true
@@ -458,7 +734,7 @@ export class CharacterRig {
       tip.scale.setScalar(0.5)
       tip.position.y = 0.85
       this.heldProp.add(tip)
-      this.heldProp.position.y = -0.4
+      this.heldProp.position.y = -0.47
       this.armR.add(this.heldProp)
       this.armR.rotation.x = -0.55
       this.armBlockR = true
@@ -472,7 +748,7 @@ export class CharacterRig {
       knob.position.y = 0
       this.heldProp.add(barrel, knob)
       this.heldProp.rotation.x = -0.45
-      this.heldProp.position.y = -0.44
+      this.heldProp.position.y = -0.51
       this.armR.add(this.heldProp)
       this.armBlockR = true
     } else if (heldSlot === 'lathi' && !opts.npcType) {
@@ -482,7 +758,7 @@ export class CharacterRig {
       stick.castShadow = true
       this.heldProp.add(stick)
       this.heldProp.rotation.x = -0.35
-      this.heldProp.position.y = -0.44
+      this.heldProp.position.y = -0.51
       this.armR.add(this.heldProp)
       this.armBlockR = true
     } else if (heldSlot === 'shoppingbag') {
@@ -499,7 +775,7 @@ export class CharacterRig {
       greens.scale.set(0.7, 0.45, 0.7)
       greens.position.set(0.02, -0.02, 0.01)
       this.heldProp.add(greens)
-      this.heldProp.position.y = -0.5
+      this.heldProp.position.y = -0.57
       this.armL.add(this.heldProp)
       this.armBlockL = true
     } else if (heldSlot === 'megaphone') {
@@ -514,7 +790,7 @@ export class CharacterRig {
       handle.position.set(0, -0.04, 0)
       handle.rotation.x = Math.PI / 2
       this.heldProp.add(cone, body, handle)
-      this.heldProp.position.y = -0.48
+      this.heldProp.position.y = -0.55
       this.armR.add(this.heldProp)
       this.armR.rotation.x = -1.35
       this.armBlockR = true
@@ -526,7 +802,7 @@ export class CharacterRig {
       const stick = new THREE.Mesh(G.lathi, mat('#7a5230'))
       stick.position.y = -0.35
       this.lathi.add(stick)
-      this.lathi.position.y = -0.4
+      this.lathi.position.y = -0.47
       this.armR.add(this.lathi)
       this.armBlockR = true
     }

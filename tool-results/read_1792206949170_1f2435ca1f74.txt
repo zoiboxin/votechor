@@ -1,0 +1,840 @@
+     1→     1→// VoteChor procedural character rig — stylized low-poly humanoids with
+     2→     2→// procedural animation (walk/run/jump/slide/dazed/celebrate/emotes).
+     3→     3→// Shared geometry cache for performance; used for players, NPCs, crowd, and the boss.
+     4→     4→import * as THREE from 'three'
+     5→     5→import type { AnimName } from './shared/types'
+     6→     6→import { archetypeById } from './shared/constants'
+     7→     7→
+     8→     8→const G = {
+     9→     9→  head: new THREE.SphereGeometry(0.155, 10, 8),
+    10→    10→  torso: new THREE.BoxGeometry(0.42, 0.52, 0.24),
+    11→    11→  hips: new THREE.BoxGeometry(0.36, 0.16, 0.22),
+    12→    12→  arm: new THREE.BoxGeometry(0.11, 0.46, 0.11),
+    13→    13→  leg: new THREE.BoxGeometry(0.14, 0.5, 0.15),
+    14→    14→  hand: new THREE.SphereGeometry(0.06, 6, 5),
+    15→    15→  foot: new THREE.BoxGeometry(0.15, 0.09, 0.26),
+    16→    16→  hair: new THREE.SphereGeometry(0.163, 10, 8, 0, Math.PI * 2, 0, Math.PI / 1.9),
+    17→    17→  cap: new THREE.SphereGeometry(0.17, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+    18→    18→  capBrim: new THREE.BoxGeometry(0.2, 0.02, 0.16),
+    19→    19→  glasses: new THREE.BoxGeometry(0.24, 0.05, 0.05),
+    20→    20→  signBoard: new THREE.BoxGeometry(0.5, 0.3, 0.02),
+    21→    21→  signPole: new THREE.CylinderGeometry(0.015, 0.015, 0.5, 5),
+    22→    22→  backpack: new THREE.BoxGeometry(0.3, 0.34, 0.14),
+    23→    23→  beard: new THREE.SphereGeometry(0.14, 8, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
+    24→    24→  lathi: new THREE.CylinderGeometry(0.025, 0.035, 0.95, 6),
+    25→    25→  hat: new THREE.CylinderGeometry(0.16, 0.22, 0.12, 10),
+    26→    26→  cone: new THREE.CylinderGeometry(0.02, 0.15, 0.24, 10),
+    27→    27→  coneBand: new THREE.CylinderGeometry(0.105, 0.125, 0.045, 10),
+    28→    28→  crownBand: new THREE.CylinderGeometry(0.155, 0.17, 0.09, 8),
+    29→    29→  crownSpike: new THREE.ConeGeometry(0.045, 0.09, 4),
+    30→    30→  garland: new THREE.TorusGeometry(0.17, 0.04, 6, 14),
+    31→    31→  // ---- wardrobe expansion geometry ----
+    32→    32→  bandana: new THREE.SphereGeometry(0.166, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.6),
+    33→    33→  bandanaKnot: new THREE.BoxGeometry(0.06, 0.05, 0.03),
+    34→    34→  hardhat: new THREE.SphereGeometry(0.175, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+    35→    35→  hardhatBrim: new THREE.CylinderGeometry(0.21, 0.21, 0.02, 12),
+    36→    36→  hardhatRidge: new THREE.BoxGeometry(0.03, 0.05, 0.28),
+    37→    37→  moustache: new THREE.BoxGeometry(0.13, 0.028, 0.03),
+    38→    38→  warpaint: new THREE.BoxGeometry(0.055, 0.018, 0.02),
+    39→    39→  scar: new THREE.BoxGeometry(0.016, 0.09, 0.02),
+    40→    40→  kurtaSkirt: new THREE.CylinderGeometry(0.21, 0.26, 0.3, 8),
+    41→    41→  kurtaHem: new THREE.TorusGeometry(0.255, 0.018, 5, 14),
+    42→    42→  hood: new THREE.SphereGeometry(0.15, 8, 6, 0, Math.PI * 2, Math.PI / 2.6, Math.PI / 2),
+    43→    43→  pocket: new THREE.BoxGeometry(0.24, 0.12, 0.05),
+    44→    44→  vestBody: new THREE.BoxGeometry(0.45, 0.4, 0.27),
+    45→    45→  vestStripe: new THREE.BoxGeometry(0.46, 0.05, 0.28),
+    46→    46→  bootCuff: new THREE.CylinderGeometry(0.075, 0.08, 0.08, 6),
+    47→    47→  chappal: new THREE.BoxGeometry(0.14, 0.04, 0.24),
+    48→    48→  strap: new THREE.BoxGeometry(0.05, 0.5, 0.03),
+    49→    49→  sideBag: new THREE.BoxGeometry(0.2, 0.16, 0.08),
+    50→    50→  bannerRoll: new THREE.CylinderGeometry(0.05, 0.05, 0.56, 8),
+    51→    51→  dhol: new THREE.CylinderGeometry(0.14, 0.16, 0.3, 10),
+    52→    52→  dholRim: new THREE.TorusGeometry(0.15, 0.02, 5, 12),
+    53→    53→  umbrellaStick: new THREE.CylinderGeometry(0.015, 0.015, 0.66, 6),
+    54→    54→  umbrellaFold: new THREE.CylinderGeometry(0.035, 0.015, 0.2, 6),
+    55→    55→  umbrellaHandle: new THREE.TorusGeometry(0.05, 0.014, 5, 10, Math.PI),
+    56→    56→  bannerCloth: new THREE.PlaneGeometry(0.94, 0.24),
+    57→    57→  flagPole: new THREE.CylinderGeometry(0.012, 0.012, 0.85, 5),
+    58→    58→  flagCloth: new THREE.PlaneGeometry(0.3, 0.2),
+    59→    59→  bat: new THREE.CylinderGeometry(0.028, 0.052, 0.6, 7),
+    60→    60→  batKnob: new THREE.CylinderGeometry(0.036, 0.036, 0.03, 7),
+    61→    61→  shoppingBag: new THREE.BoxGeometry(0.2, 0.22, 0.1),
+    62→    62→  bagHandle: new THREE.TorusGeometry(0.05, 0.012, 5, 10, Math.PI),
+    63→    63→  megaCone: new THREE.CylinderGeometry(0.028, 0.11, 0.2, 10),
+    64→    64→  megaBody: new THREE.CylinderGeometry(0.032, 0.032, 0.14, 8),
+    65→    65→  megaHandle: new THREE.TorusGeometry(0.045, 0.014, 5, 9, Math.PI),
+    66→    66→}
+    67→    67→
+    68→    68→export interface RigOptions {
+    69→    69→  archetype?: string
+    70→    70→  colors?: { shirt: string; pants: string; skin: string; hair: string; accent: string }
+    71→    71→  scale?: number
+    72→    72→  name?: string
+    73→    73→  nameColor?: string
+    74→    74→  hat?: string // 'cap' | 'topi' | 'cone' | 'crown' | 'garland' | 'bandana' | 'hardhat' | 'none'
+    75→    75→  glasses?: boolean
+    76→    76→  signText?: string
+    77→    77→  npcType?: 'police' | 'security' | 'guard'
+    78→    78→  isBoss?: boolean
+    79→    79→  // ---- wardrobe expansion slots (default when omitted) ----
+    80→    80→  face?: string     // 'clean' | 'beard' | 'moustache' | 'warpaint' | 'scar'
+    81→    81→  outfit?: string   // 'classic' | 'kurta' | 'hoodie' | 'highvis'
+    82→    82→  footwear?: string // 'shoes' | 'boots' | 'chappal' | 'glow'
+    83→    83→  gear?: string     // 'none' | 'backpack' | 'jhola' | 'bannerroll' | 'dhol' | 'umbrella'
+    84→    84→  held?: string     // 'none' | 'sign' | 'banner' | 'flag' | 'bat' | 'lathi' | 'shoppingbag' | 'megaphone'
+    85→    85→}
+    86→    86→
+    87→    87→function mat(color: string, flat = true): THREE.MeshStandardMaterial {
+    88→    88→  return new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.02, flatShading: flat })
+    89→    89→}
+    90→    90→
+    91→    91→export class CharacterRig {
+    92→    92→  group = new THREE.Group()
+    93→    93→  private torsoPivot = new THREE.Group()
+    94→    94→  private headPivot = new THREE.Group()
+    95→    95→  private armL = new THREE.Group()
+    96→    96→  private armR = new THREE.Group()
+    97→    97→  private legL = new THREE.Group()
+    98→    98→  private legR = new THREE.Group()
+    99→    99→  private signGroup: THREE.Group | null = null
+   100→   100→  private lathi: THREE.Group | null = null
+   101→   101→  private heldProp: THREE.Group | null = null
+   102→   102→  private armBlockR = false
+   103→   103→  private armBlockL = false
+   104→   104→  private flagClothRef: THREE.Mesh | null = null
+   105→   105→  private bannerClothRef: THREE.Mesh | null = null
+   106→   106→  private phase = Math.random() * 10
+   107→   107→  anim: AnimName = 'idle'
+   108→   108→  /** External pose override (e.g. police wind-up telegraph) — wins over the anim arg. */
+   109→   109→  forceAnim: AnimName | null = null
+   110→   110→  /** Double-jump flourish: remaining seconds of a procedural front-flip (0 = off). */
+   111→   111→  private flipTimer = 0
+   112→   112→  private flipDur = 0.45
+   113→   113→  speedRatio = 0
+   114→   114→  private nameSprite: THREE.Sprite | null = null
+   115→   115→  private alertIndicator: THREE.Sprite | null = null
+   116→   116→  private scaleMul: number
+   117→   117→  private baseY = 0
+   118→   118→
+   119→   119→  constructor(opts: RigOptions) {
+   120→   120→    const colors = opts.colors ?? archetypeById(opts.archetype ?? 'student').colors
+   121→   121→    this.scaleMul = opts.scale ?? (opts.archetype ? archetypeById(opts.archetype).stats.scale : 1)
+   122→   122→
+   123→   123→    const shirt = mat(colors.shirt)
+   124→   124→    const pants = mat(colors.pants)
+   125→   125→    const skin = mat(colors.skin)
+   126→   126→    const hair = mat(colors.hair)
+   127→   127→
+   128→   128→    // hierarchy: group -> torsoPivot (contains torso, head, arms) ; legs on group
+   129→   129→    this.group.add(this.torsoPivot)
+   130→   130→    this.torsoPivot.position.y = 0.98
+   131→   131→
+   132→   132→    const torso = new THREE.Mesh(G.torso, shirt)
+   133→   133→    torso.position.y = 0.26
+   134→   134→    torso.castShadow = true
+   135→   135→    this.torsoPivot.add(torso)
+   136→   136→
+   137→   137→    // accent stripe (protest sash)
+   138→   138→    const sash = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.26), mat(colors.accent))
+   139→   139→    sash.position.set(0.06, 0.26, 0.02)
+   140→   140→    sash.rotation.z = 0.4
+   141→   141→    this.torsoPivot.add(sash)
+   142→   142→
+   143→   143→    // head
+   144→   144→    this.headPivot.position.y = 0.62
+   145→   145→    this.torsoPivot.add(this.headPivot)
+   146→   146→    const head = new THREE.Mesh(G.head, skin)
+   147→   147→    head.position.y = 0.1
+   148→   148→    head.castShadow = true
+   149→   149→    this.headPivot.add(head)
+   150→   150→    const hairMesh = new THREE.Mesh(G.hair, hair)
+   151→   151→    hairMesh.position.y = 0.13
+   152→   152→    this.headPivot.add(hairMesh)
+   153→   153→
+   154→   154→    if (opts.hat === 'cap' || opts.npcType) {
+   155→   155→      const cap = new THREE.Mesh(G.cap, opts.npcType ? mat('#1f3a2e') : mat(colors.accent))
+   156→   156→      cap.position.y = 0.17
+   157→   157→      this.headPivot.add(cap)
+   158→   158→      const brim = new THREE.Mesh(G.capBrim, mat('#14251c'))
+   159→   159→      brim.position.set(0, 0.17, 0.16)
+   160→   160→      this.headPivot.add(brim)
+   161→   161→    } else if (opts.hat === 'topi') {
+   162→   162→      const hat = new THREE.Mesh(G.hat, mat('#f0e6d2'))
+   163→   163→      hat.position.y = 0.24
+   164→   164→      this.headPivot.add(hat)
+   165→   165→    } else if (opts.hat === 'cone') {
+   166→   166→      // Traffic Cone of Shame — earned through 10 glorious detentions
+   167→   167→      const cone = new THREE.Mesh(G.cone, mat('#e8641c'))
+   168→   168→      cone.position.y = 0.3
+   169→   169→      cone.castShadow = true
+   170→   170→      this.headPivot.add(cone)
+   171→   171→      const band = new THREE.Mesh(G.coneBand, mat('#f5efdc'))
+   172→   172→      band.position.y = 0.26
+   173→   173→      this.headPivot.add(band)
+   174→   174→      const base = new THREE.Mesh(G.coneBand, mat('#c8500f'))
+   175→   175→      base.position.y = 0.19
+   176→   176→      base.scale.set(1.15, 0.6, 1.15)
+   177→   177→      this.headPivot.add(base)
+   178→   178→    } else if (opts.hat === 'crown') {
+   179→   179→      // Crown of Chaos — gold with jewels, for committee dissolvers
+   180→   180→      const band = new THREE.Mesh(G.crownBand, mat('#d4a017', false))
+   181→   181→      band.material.metalness = 0.55
+   182→   182→      band.material.roughness = 0.35
+   183→   183→      band.position.y = 0.24
+   184→   184→      band.castShadow = true
+   185→   185→      this.headPivot.add(band)
+   186→   186→      for (let i = 0; i < 5; i++) {
+   187→   187→        const a = (i / 5) * Math.PI * 2
+   188→   188→        const spike = new THREE.Mesh(G.crownSpike, mat('#d4a017', false))
+   189→   189→        spike.material.metalness = 0.55
+   190→   190→        spike.material.roughness = 0.35
+   191→   191→        spike.position.set(Math.cos(a) * 0.13, 0.3, Math.sin(a) * 0.13)
+   192→   192→        this.headPivot.add(spike)
+   193→   193→        const jewel = new THREE.Mesh(G.hand, mat(i % 2 ? '#8c1f28' : '#2e6e4e', false))
+   194→   194→        jewel.scale.setScalar(0.55)
+   195→   195→        jewel.position.set(Math.cos(a) * 0.165, 0.24, Math.sin(a) * 0.165)
+   196→   196→        this.headPivot.add(jewel)
+   197→   197→      }
+   198→   198→    } else if (opts.hat === 'bandana') {
+   199→   199→      // Rebel Bandana — snug cap + knot at the back
+   200→   200→      const band = new THREE.Mesh(G.bandana, mat(colors.accent))
+   201→   201→      band.position.y = 0.15
+   202→   202→      this.headPivot.add(band)
+   203→   203→      const knot = new THREE.Mesh(G.bandanaKnot, mat(colors.accent))
+   204→   204→      knot.position.set(0, 0.14, -0.16)
+   205→   205→      this.headPivot.add(knot)
+   206→   206→    } else if (opts.hat === 'hardhat') {
+   207→   207→      // Site Hardhat — yellow dome + brim + ridge
+   208→   208→      const dome = new THREE.Mesh(G.hardhat, mat('#f2c14e'))
+   209→   209→      dome.position.y = 0.14
+   210→   210→      dome.castShadow = true
+   211→   211→      this.headPivot.add(dome)
+   212→   212→      const brim = new THREE.Mesh(G.hardhatBrim, mat('#d9a428'))
+   213→   213→      brim.position.y = 0.15
+   214→   214→      this.headPivot.add(brim)
+   215→   215→      const ridge = new THREE.Mesh(G.hardhatRidge, mat('#d9a428'))
+   216→   216→      ridge.position.y = 0.3
+   217→   217→      this.headPivot.add(ridge)
+   218→   218→    } else if (opts.hat === 'garland') {
+   219→   219→      // Marigold mala around the neck — for squad medics
+   220→   220→      const mala = new THREE.Mesh(G.garland, mat('#f2a541'))
+   221→   221→      mala.position.y = 0.52
+   222→   222→      mala.rotation.x = Math.PI / 2.6
+   223→   223→      mala.scale.set(1.25, 1, 1.1)
+   224→   224→      mala.castShadow = true
+   225→   225→      this.torsoPivot.add(mala)
+   226→   226→      const malaBack = new THREE.Mesh(G.garland, mat('#e8912c'))
+   227→   227→      malaBack.position.y = 0.44
+   228→   228→      malaBack.rotation.x = Math.PI / 2.2
+   229→   229→      malaBack.scale.set(1.2, 1, 0.9)
+   230→   230→      this.torsoPivot.add(malaBack)
+   231→   231→    }
+   232→   232→    if (opts.glasses) {
+   233→   233→      const gl = new THREE.Mesh(G.glasses, mat('#222', false))
+   234→   234→      gl.position.set(0, 0.11, 0.15)
+   235→   235→      this.headPivot.add(gl)
+   236→   236→    }
+   237→   237→
+   238→   238→    // ---- face slot (archetype uncle keeps his iconic beard even on 'clean') ----
+   239→   239→    const faceSlot = opts.face ?? (opts.archetype === 'uncle' ? 'beard' : 'clean')
+   240→   240→    if (faceSlot === 'beard') {
+   241→   241→      const beard = new THREE.Mesh(G.beard, hair)
+   242→   242→      beard.position.set(0, 0.06, 0.03)
+   243→   243→      this.headPivot.add(beard)
+   244→   244→    } else if (faceSlot === 'moustache') {
+   245→   245→      const mo = new THREE.Mesh(G.moustache, hair)
+   246→   246→      mo.position.set(0, 0.075, 0.145)
+   247→   247→      this.headPivot.add(mo)
+   248→   248→    } else if (faceSlot === 'warpaint') {
+   249→   249→      const stripes = [new THREE.Vector3(-0.075, 0.1, 0.128), new THREE.Vector3(0.075, 0.1, 0.128), new THREE.Vector3(0, 0.165, 0.13)]
+   250→   250→      for (const p of stripes) {
+   251→   251→        const st = new THREE.Mesh(G.warpaint, mat(colors.accent))
+   252→   252→        st.position.copy(p)
+   253→   253→        st.rotation.z = p.x === 0 ? 0 : p.x > 0 ? -0.3 : 0.3
+   254→   254→        this.headPivot.add(st)
+   255→   255→      }
+   256→   256→    } else if (faceSlot === 'scar') {
+   257→   257→      const sc = new THREE.Mesh(G.scar, mat('#a4543c'))
+   258→   258→      sc.position.set(0.085, 0.09, 0.128)
+   259→   259→      sc.rotation.z = 0.25
+   260→   260→      this.headPivot.add(sc)
+   261→   261→    }
+   262→   262→
+   263→   263→    // ---- outfit slot (worn over the archetype colors) ----
+   264→   264→    const outfitSlot = opts.outfit ?? 'classic'
+   265→   265→    if (outfitSlot === 'kurta') {
+   266→   266→      const skirt = new THREE.Mesh(G.kurtaSkirt, shirt)
+   267→   267→      skirt.position.y = 0.02
+   268→   268→      skirt.castShadow = true
+   269→   269→      this.torsoPivot.add(skirt)
+   270→   270→      const hem = new THREE.Mesh(G.kurtaHem, mat(colors.accent))
+   271→   271→      hem.rotation.x = Math.PI / 2
+   272→   272→      hem.position.y = -0.13
+   273→   273→      this.torsoPivot.add(hem)
+   274→   274→    } else if (outfitSlot === 'hoodie') {
+   275→   275→      const hood = new THREE.Mesh(G.hood, shirt)
+   276→   276→      hood.position.set(0, 0.56, -0.15)
+   277→   277→      hood.rotation.x = -0.35
+   278→   278→      hood.castShadow = true
+   279→   279→      this.torsoPivot.add(hood)
+   280→   280→      const pocket = new THREE.Mesh(G.pocket, shirt)
+   281→   281→      pocket.position.set(0, 0.08, 0.13)
+   282→   282→      this.torsoPivot.add(pocket)
+   283→   283→    } else if (outfitSlot === 'highvis') {
+   284→   284→      const vest = new THREE.Mesh(G.vestBody, mat('#f2a541'))
+   285→   285→      vest.position.y = 0.27
+   286→   286→      vest.castShadow = true
+   287→   287→      this.torsoPivot.add(vest)
+   288→   288→      for (const y of [0.36, 0.19]) {
+   289→   289→        const stripe = new THREE.Mesh(G.vestStripe, mat('#e8e6df'))
+   290→   290→        stripe.position.y = y
+   291→   291→        this.torsoPivot.add(stripe)
+   292→   292→      }
+   293→   293→    }
+   294→   294→
+   295→   295→    // arms — pivot at shoulder
+   296→   296→    this.armL.position.set(0.265, 0.46, 0)
+   297→   297→    this.armR.position.set(-0.265, 0.46, 0)
+   298→   298→    for (const [arm, side] of [[this.armL, 1], [this.armR, -1]] as const) {
+   299→   299→      const upper = new THREE.Mesh(G.arm, shirt)
+   300→   300→      upper.position.y = -0.2
+   301→   301→      upper.castShadow = true
+   302→   302→      arm.add(upper)
+   303→   303→      const hand = new THREE.Mesh(G.hand, skin)
+   304→   304→      hand.position.y = -0.46
+   305→   305→      arm.add(hand)
+   306→   306→      this.torsoPivot.add(arm)
+   307→   307→      void side
+   308→   308→    }
+   309→   309→
+   310→   310→    // legs — pivot at hip on group (footwear slot swaps the shoe build)
+   311→   311→    const footwearSlot = opts.footwear ?? 'shoes'
+   312→   312→    const buildFoot = (): THREE.Group => {
+   313→   313→      const fg = new THREE.Group()
+   314→   314→      if (footwearSlot === 'boots') {
+   315→   315→        const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.17), mat('#4a3626'))
+   316→   316→        shaft.position.set(0, -0.46, 0)
+   317→   317→        const foot = new THREE.Mesh(G.foot, mat('#3a2a1c'))
+   318→   318→        foot.position.set(0, -0.53, 0.05)
+   319→   319→        fg.add(shaft, foot)
+   320→   320→      } else if (footwearSlot === 'chappal') {
+   321→   321→        const sole = new THREE.Mesh(G.chappal, mat('#7a4a2c'))
+   322→   322→        sole.position.set(0, -0.54, 0.03)
+   323→   323→        const toe = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.02, 0.03), mat('#5c3820'))
+   324→   324→        toe.position.set(0, -0.51, 0.12)
+   325→   325→        fg.add(sole, toe)
+   326→   326→      } else {
+   327→   327→        const foot = new THREE.Mesh(G.foot, footwearSlot === 'glow' ? new THREE.MeshStandardMaterial({ color: '#2c2f38', emissive: '#39d0ff', emissiveIntensity: 0.9, roughness: 0.6 }) : mat('#3a2d22'))
+   328→   328→        foot.position.set(0, -0.52, 0.04)
+   329→   329→        if (footwearSlot === 'glow') {
+   330→   330→          const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.06), new THREE.MeshStandardMaterial({ color: '#111', emissive: '#39d0ff', emissiveIntensity: 1.2 }))
+   331→   331→          stripe.position.set(0, -0.55, 0.04)
+   332→   332→          fg.add(stripe)
+   333→   333→        }
+   334→   334→        fg.add(foot)
+   335→   335→      }
+   336→   336→      return fg
+   337→   337→    }
+   338→   338→    this.legL.position.set(0.1, 0.9, 0)
+   339→   339→    this.legR.position.set(-0.1, 0.9, 0)
+   340→   340→    for (const leg of [this.legL, this.legR]) {
+   341→   341→      const upper = new THREE.Mesh(G.leg, pants)
+   342→   342→      upper.position.y = -0.25
+   343→   343→      upper.castShadow = true
+   344→   344→      leg.add(upper)
+   345→   345→      leg.add(buildFoot())
+   346→   346→      this.group.add(leg)
+   347→   347→    }
+   348→   348→
+   349→   349→    // ---- back gear slot (student/journalist keep their signature backpack when slot untouched) ----
+   350→   350→    const gearSlot = opts.gear ?? ((opts.archetype === 'student' || opts.archetype === 'journalist') ? 'backpack' : 'none')
+   351→   351→    if (gearSlot === 'backpack') {
+   352→   352→      const bpColor = opts.archetype === 'student' ? '#c94f34' : opts.archetype === 'journalist' ? '#3d3a30' : colors.accent
+   353→   353→      const bp = new THREE.Mesh(G.backpack, mat(bpColor))
+   354→   354→      bp.position.set(0, 0.28, -0.2)
+   355→   355→      bp.castShadow = true
+   356→   356→      this.torsoPivot.add(bp)
+   357→   357→      const flap = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.03), mat('#2c2c2c'))
+   358→   358→      flap.position.set(0, 0.38, -0.275)
+   359→   359→      this.torsoPivot.add(flap)
+   360→   360→    } else if (gearSlot === 'jhola') {
+   361→   361→      const strap = new THREE.Mesh(G.strap, mat('#8a6b4a'))
+   362→   362→      strap.position.set(0.08, 0.24, 0.13)
+   363→   363→      strap.rotation.z = 0.55
+   364→   364→      this.torsoPivot.add(strap)
+   365→   365→      const bag = new THREE.Mesh(G.sideBag, mat('#c9b98a'))
+   366→   366→      bag.position.set(-0.26, -0.06, 0.04)
+   367→   367→      bag.castShadow = true
+   368→   368→      this.torsoPivot.add(bag)
+   369→   369→    } else if (gearSlot === 'bannerroll') {
+   370→   370→      const roll = new THREE.Mesh(G.bannerRoll, mat('#e8e2d0'))
+   371→   371→      roll.rotation.z = Math.PI / 2.3
+   372→   372→      roll.position.set(0, 0.3, -0.2)
+   373→   373→      roll.castShadow = true
+   374→   374→      this.torsoPivot.add(roll)
+   375→   375→      const rollEdge = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.02, 8), mat('#8c1f28'))
+   376→   376→      rollEdge.rotation.z = Math.PI / 2.3
+   377→   377→      rollEdge.position.set(-0.24, 0.36, -0.2)
+   378→   378→      this.torsoPivot.add(rollEdge)
+   379→   379→    } else if (gearSlot === 'dhol') {
+   380→   380→      const drum = new THREE.Mesh(G.dhol, mat('#b3854a'))
+   381→   381→      drum.rotation.x = Math.PI / 2
+   382→   382→      drum.position.set(0, 0.24, -0.26)
+   383→   383→      drum.castShadow = true
+   384→   384→      this.torsoPivot.add(drum)
+   385→   385→      for (const dz of [-0.15, 0.15]) {
+   386→   386→        const rim = new THREE.Mesh(G.dholRim, mat('#e8e2d0'))
+   387→   387→        rim.position.set(0, 0.24, -0.26 + dz)
+   388→   388→        this.torsoPivot.add(rim)
+   389→   389→      }
+   390→   390→      const rope = new THREE.Mesh(G.strap, mat('#d9a428'))
+   391→   391→      rope.position.set(0, 0.24, -0.26)
+   392→   392→      rope.rotation.z = 0.4
+   393→   393→      this.torsoPivot.add(rope)
+   394→   394→    } else if (gearSlot === 'umbrella') {
+   395→   395→      const stick = new THREE.Mesh(G.umbrellaStick, mat('#3a4046'))
+   396→   396→      stick.rotation.z = 0.65
+   397→   397→      stick.position.set(-0.02, 0.26, -0.2)
+   398→   398→      this.torsoPivot.add(stick)
+   399→   399→      const fold = new THREE.Mesh(G.umbrellaFold, mat(colors.accent))
+   400→   400→      fold.rotation.z = 0.65
+   401→   401→      fold.position.set(-0.2, 0.42, -0.2)
+   402→   402→      this.torsoPivot.add(fold)
+   403→   403→      const handle = new THREE.Mesh(G.umbrellaHandle, mat('#7a5230'))
+   404→   404→      handle.rotation.z = 0.65 - Math.PI
+   405→   405→      handle.position.set(0.16, 0.08, -0.2)
+   406→   406→      this.torsoPivot.add(handle)
+   407→   407→    }
+   408→   408→
+   409→   409→    // ---- held slot: what the protester carries in their hands ----
+   410→   410→    // Back-compat: profiles that only set signText still raise the classic sign.
+   411→   411→    const heldSlot = opts.held !== undefined && opts.held !== null
+   412→   412→      ? opts.held
+   413→   413→      : (opts.signText ? 'sign' : 'none')
+   414→   414→    const slogan = (opts.signText || '').trim() || 'PROTEST'
+   415→   415→    if ((heldSlot === 'sign' || (!opts.held && opts.signText)) && opts.npcType === undefined) {
+   416→   416→      this.signGroup = new THREE.Group()
+   417→   417→      const pole = new THREE.Mesh(G.signPole, mat('#8a6b4a'))
+   418→   418→      pole.position.y = 0.25
+   419→   419→      const board = new THREE.Mesh(G.signBoard, mat('#f5efdc'))
+   420→   420→      board.position.y = 0.55
+   421→   421→      const text = this.makeTextTexture(slogan)
+   422→   422→      const texMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.28), new THREE.MeshBasicMaterial({ map: text, transparent: true }))
+   423→   423→      texMesh.position.set(0, 0.55, 0.012)
+   424→   424→      const texMesh2 = texMesh.clone()
+   425→   425→      texMesh2.rotation.y = Math.PI
+   426→   426→      this.signGroup.add(pole, board, texMesh, texMesh2)
+   427→   427→      this.signGroup.position.y = -0.45
+   428→   428→      this.armR.add(this.signGroup)
+   429→   429→      this.armR.rotation.x = -0.9
+   430→   430→      this.armBlockR = true
+   431→   431→    } else if (heldSlot === 'sign' && opts.npcType !== undefined) {
+   432→   432→      // NPCs with a sign slot fall through — signs are a protester thing
+   433→   433→    } else if (heldSlot === 'banner') {
+   434→   434→      this.heldProp = new THREE.Group()
+   435→   435→      const pole = new THREE.Mesh(G.flagPole, mat('#8a6b4a'))
+   436→   436→      pole.position.y = 0.42
+   437→   437→      const cloth = new THREE.Mesh(G.bannerCloth, new THREE.MeshStandardMaterial({ map: this.makeTextTextureWide(slogan), side: THREE.DoubleSide, roughness: 0.9 }))
+   438→   438→      cloth.position.set(-0.36, 0.78, 0)
+   439→   439→      cloth.castShadow = true
+   440→   440→      this.heldProp.add(pole, cloth)
+   441→   441→      const backCloth = cloth.clone()
+   442→   442→      backCloth.rotation.y = Math.PI
+   443→   443→      backCloth.position.z = -0.005
+   444→   444→      this.heldProp.add(backCloth)
+   445→   445→      this.heldProp.position.y = -0.4
+   446→   446→      this.armR.add(this.heldProp)
+   447→   447→      this.armR.rotation.x = -0.85
+   448→   448→      this.armBlockR = true
+   449→   449→      this.bannerClothRef = cloth
+   450→   450→    } else if (heldSlot === 'flag') {
+   451→   451→      this.heldProp = new THREE.Group()
+   452→   452→      const pole = new THREE.Mesh(G.flagPole, mat('#8a6b4a'))
+   453→   453→      pole.position.y = 0.42
+   454→   454→      const cloth = new THREE.Mesh(G.flagCloth, new THREE.MeshStandardMaterial({ color: colors.accent, side: THREE.DoubleSide, roughness: 0.9 }))
+   455→   455→      cloth.position.set(0.15, 0.72, 0)
+   456→   456→      this.heldProp.add(pole, cloth)
+   457→   457→      const tip = new THREE.Mesh(G.hand, mat('#f2c14e', false))
+   458→   458→      tip.scale.setScalar(0.5)
+   459→   459→      tip.position.y = 0.85
+   460→   460→      this.heldProp.add(tip)
+   461→   461→      this.heldProp.position.y = -0.4
+   462→   462→      this.armR.add(this.heldProp)
+   463→   463→      this.armR.rotation.x = -0.55
+   464→   464→      this.armBlockR = true
+   465→   465→      this.flagClothRef = cloth
+   466→   466→    } else if (heldSlot === 'bat') {
+   467→   467→      this.heldProp = new THREE.Group()
+   468→   468→      const barrel = new THREE.Mesh(G.bat, mat('#c9a06a'))
+   469→   469→      barrel.position.y = 0.28
+   470→   470→      barrel.castShadow = true
+   471→   471→      const knob = new THREE.Mesh(G.batKnob, mat('#8a6b4a'))
+   472→   472→      knob.position.y = 0
+   473→   473→      this.heldProp.add(barrel, knob)
+   474→   474→      this.heldProp.rotation.x = -0.45
+   475→   475→      this.heldProp.position.y = -0.44
+   476→   476→      this.armR.add(this.heldProp)
+   477→   477→      this.armBlockR = true
+   478→   478→    } else if (heldSlot === 'lathi' && !opts.npcType) {
+   479→   479→      this.heldProp = new THREE.Group()
+   480→   480→      const stick = new THREE.Mesh(G.lathi, mat('#7a5230'))
+   481→   481→      stick.position.y = 0.3
+   482→   482→      stick.castShadow = true
+   483→   483→      this.heldProp.add(stick)
+   484→   484→      this.heldProp.rotation.x = -0.35
+   485→   485→      this.heldProp.position.y = -0.44
+   486→   486→      this.armR.add(this.heldProp)
+   487→   487→      this.armBlockR = true
+   488→   488→    } else if (heldSlot === 'shoppingbag') {
+   489→   489→      this.heldProp = new THREE.Group()
+   490→   490→      const bag = new THREE.Mesh(G.shoppingBag, mat('#e8b6a0'))
+   491→   491→      bag.position.y = -0.1
+   492→   492→      bag.castShadow = true
+   493→   493→      for (const hx of [-0.05, 0.05]) {
+   494→   494→        const h = new THREE.Mesh(G.bagHandle, mat('#a4715a'))
+   495→   495→        h.position.set(hx, 0.02, 0)
+   496→   496→        this.heldProp.add(h)
+   497→   497→      }
+   498→   498→      const greens = new THREE.Mesh(G.hand, mat('#5c8a4e'))
+   499→   499→      greens.scale.set(0.7, 0.45, 0.7)
+   500→   500→      greens.position.set(0.02, -0.02, 0.01)
+   501→   501→      this.heldProp.add(greens)
+   502→   502→      this.heldProp.position.y = -0.5
+   503→   503→      this.armL.add(this.heldProp)
+   504→   504→      this.armBlockL = true
+   505→   505→    } else if (heldSlot === 'megaphone') {
+   506→   506→      this.heldProp = new THREE.Group()
+   507→   507→      const cone = new THREE.Mesh(G.megaCone, mat('#f2a541'))
+   508→   508→      cone.rotation.x = Math.PI / 2 - 0.5
+   509→   509→      cone.position.set(0, 0.06, 0.1)
+   510→   510→      const body = new THREE.Mesh(G.megaBody, mat('#8c1f28'))
+   511→   511→      body.rotation.x = Math.PI / 2 - 0.5
+   512→   512→      body.position.set(0, 0.02, -0.02)
+   513→   513→      const handle = new THREE.Mesh(G.megaHandle, mat('#3a4046'))
+   514→   514→      handle.position.set(0, -0.04, 0)
+   515→   515→      handle.rotation.x = Math.PI / 2
+   516→   516→      this.heldProp.add(cone, body, handle)
+   517→   517→      this.heldProp.position.y = -0.48
+   518→   518→      this.armR.add(this.heldProp)
+   519→   519→      this.armR.rotation.x = -1.35
+   520→   520→      this.armBlockR = true
+   521→   521→    }
+   522→   522→
+   523→   523→    // police lathi (NPCs only — protesters equip the 'lathi' held slot)
+   524→   524→    if (opts.npcType) {
+   525→   525→      this.lathi = new THREE.Group()
+   526→   526→      const stick = new THREE.Mesh(G.lathi, mat('#7a5230'))
+   527→   527→      stick.position.y = -0.35
+   528→   528→      this.lathi.add(stick)
+   529→   529→      this.lathi.position.y = -0.4
+   530→   530→      this.armR.add(this.lathi)
+   531→   531→      this.armBlockR = true
+   532→   532→    }
+   533→   533→
+   534→   534→    // name tag
+   535→   535→    if (opts.name) {
+   536→   536→      const sprite = this.makeNameSprite(opts.name, opts.nameColor ?? '#fff')
+   537→   537→      sprite.position.y = 2.15
+   538→   538→      this.group.add(sprite)
+   539→   539→      this.nameSprite = sprite
+   540→   540→    }
+   541→   541→
+   542→   542→    // alert indicator (for NPCs) — exclamation
+   543→   543→    {
+   544→   544→      const canvas = document.createElement('canvas')
+   545→   545→      canvas.width = 64; canvas.height = 64
+   546→   546→      const ctx = canvas.getContext('2d')!
+   547→   547→      ctx.font = 'bold 52px sans-serif'; ctx.textAlign = 'center'
+   548→   548→      ctx.fillStyle = '#ff3b30'
+   549→   549→      ctx.fillText('!', 32, 50)
+   550→   550→      const tex = new THREE.CanvasTexture(canvas)
+   551→   551→      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }))
+   552→   552→      sp.position.y = 2.5
+   553→   553→      sp.scale.set(0.5, 0.5, 1)
+   554→   554→      sp.visible = false
+   555→   555→      this.group.add(sp)
+   556→   556→      this.alertIndicator = sp
+   557→   557→    }
+   558→   558→
+   559→   559→    this.group.scale.setScalar(this.scaleMul)
+   560→   560→  }
+   561→   561→
+   562→   562→  private makeTextTexture(text: string): THREE.CanvasTexture {
+   563→   563→    const canvas = document.createElement('canvas')
+   564→   564→    canvas.width = 256; canvas.height = 148
+   565→   565→    const ctx = canvas.getContext('2d')!
+   566→   566→    ctx.fillStyle = '#f5efdc'
+   567→   567→    ctx.fillRect(0, 0, 256, 148)
+   568→   568→    ctx.strokeStyle = '#3a2d1a'; ctx.lineWidth = 6
+   569→   569→    ctx.strokeRect(4, 4, 248, 140)
+   570→   570→    ctx.fillStyle = '#8c1f28'
+   571→   571→    ctx.font = 'bold 30px Arial'
+   572→   572→    ctx.textAlign = 'center'
+   573→   573→    const words = text.split(' ')
+   574→   574→    const lines: string[] = []
+   575→   575→    let cur = ''
+   576→   576→    for (const w of words) {
+   577→   577→      if ((cur + ' ' + w).trim().length > 14) { lines.push(cur.trim()); cur = w }
+   578→   578→      else cur += ' ' + w
+   579→   579→    }
+   580→   580→    if (cur.trim()) lines.push(cur.trim())
+   581→   581→    lines.forEach((l, i) => ctx.fillText(l, 128, 62 - (lines.length - 1) * 17 + i * 34))
+   582→   582→    const tex = new THREE.CanvasTexture(canvas)
+   583→   583→    tex.colorSpace = THREE.SRGBColorSpace
+   584→   584→    return tex
+   585→   585→  }
+   586→   586→
+   587→   587→  /** Wide single-line texture for cloth banners. */
+   588→   588→  private makeTextTextureWide(text: string): THREE.CanvasTexture {
+   589→   589→    const canvas = document.createElement('canvas')
+   590→   590→    canvas.width = 512; canvas.height = 128
+   591→   591→    const ctx = canvas.getContext('2d')!
+   592→   592→    ctx.fillStyle = '#b54a32'
+   593→   593→    ctx.fillRect(0, 0, 512, 128)
+   594→   594→    ctx.fillStyle = '#f5efdc'
+   595→   595→    ctx.font = 'bold 56px Arial'
+   596→   596→    ctx.textAlign = 'center'
+   597→   597→    ctx.textBaseline = 'middle'
+   598→   598→    ctx.fillText(text.slice(0, 22).toUpperCase(), 256, 68)
+   599→   599→    const tex = new THREE.CanvasTexture(canvas)
+   600→   600→    tex.colorSpace = THREE.SRGBColorSpace
+   601→   601→    return tex
+   602→   602→  }
+   603→   603→
+   604→   604→  private makeNameSprite(name: string, color: string): THREE.Sprite {
+   605→   605→    const canvas = document.createElement('canvas')
+   606→   606→    canvas.width = 256; canvas.height = 64
+   607→   607→    const ctx = canvas.getContext('2d')!
+   608→   608→    ctx.font = 'bold 30px Arial'
+   609→   609→    ctx.textAlign = 'center'
+   610→   610→    ctx.lineWidth = 6
+   611→   611→    ctx.strokeStyle = 'rgba(0,0,0,0.75)'
+   612→   612→    ctx.strokeText(name, 128, 42)
+   613→   613→    ctx.fillStyle = color
+   614→   614→    ctx.fillText(name, 128, 42)
+   615→   615→    const tex = new THREE.CanvasTexture(canvas)
+   616→   616→    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }))
+   617→   617→    sp.scale.set(1.9, 0.48, 1)
+   618→   618→    return sp
+   619→   619→  }
+   620→   620→
+   621→   621→  setAlert(v: boolean) { if (this.alertIndicator) this.alertIndicator.visible = v }
+   622→   622→
+   623→   623→  /** Procedural double-jump flourish — a quick front-flip of the torso (no assets). */
+   624→   624→  flip() {
+   625→   625→    this.flipTimer = this.flipDur
+   626→   626→  }
+   627→   627→  setNameVisible(v: boolean) { if (this.nameSprite) this.nameSprite.visible = v }
+   628→   628→  /** Rebuild the name sprite with a new color (squadmates get green tags). */
+   629→   629→  setNameColor(name: string, color: string) {
+   630→   630→    if (!this.nameSprite || this.nameSprite.userData.color === color) return
+   631→   631→    this.nameSprite.userData.color = color
+   632→   632→    const rebuilt = this.makeNameSprite(name, color)
+   633→   633→    rebuilt.position.copy(this.nameSprite.position)
+   634→   634→    const group = this.nameSprite.parent
+   635→   635→    if (group) {
+   636→   636→      group.remove(this.nameSprite)
+   637→   637→      group.add(rebuilt)
+   638→   638→    }
+   639→   639→    this.nameSprite = rebuilt
+   640→   640→  }
+   641→   641→
+   642→   642→  update(dt: number, anim: AnimName, moveSpeed: number) {
+   643→   643→    this.anim = anim
+   644→   644→    if (this.forceAnim) anim = this.forceAnim
+   645→   645→    this.speedRatio = Math.min(1, moveSpeed / 9)
+   646→   646→    const p = (this.phase += dt * (anim === 'run' ? 11 : anim === 'walk' ? 7.2 : 1.6))
+   647→   647→    const s = Math.sin(p), c = Math.cos(p)
+   648→   648→    const swing = anim === 'run' ? 1.05 : anim === 'walk' ? 0.62 : 0
+   649→   649→
+   650→   650→    const set = (o: THREE.Object3D, x: number, z = 0) => { o.rotation.x += (x - o.rotation.x) * Math.min(1, dt * 14); if (z !== 0 || o.rotation.z !== 0) o.rotation.z += (0 - o.rotation.z) * Math.min(1, dt * 14) }
+   651→   651→
+   652→   652→    switch (anim) {
+   653→   653→      case 'walk':
+   654→   654→      case 'run': {
+   655→   655→        const lean = anim === 'run' ? 0.22 : 0.08
+   656→   656→        this.torsoPivot.rotation.x += (lean - this.torsoPivot.rotation.x) * Math.min(1, dt * 8)
+   657→   657→        set(this.legL, s * swing)
+   658→   658→        set(this.legR, -s * swing)
+   659→   659→        if (!this.armBlockR) {
+   660→   660→          set(this.armR, s * swing * 0.9)
+   661→   661→        }
+   662→   662→        set(this.armL, this.armBlockL ? 0.15 : -s * swing * 0.9)
+   663→   663→        this.group.position.y = this.baseY + Math.abs(s) * (anim === 'run' ? 0.06 : 0.03)
+   664→   664→        break
+   665→   665→      }
+   666→   666→      case 'jump': {
+   667→   667→        this.torsoPivot.rotation.x += (0.1 - this.torsoPivot.rotation.x) * Math.min(1, dt * 8)
+   668→   668→        set(this.legL, -0.5); set(this.legR, 0.25)
+   669→   669→        set(this.armL, -2.6); set(this.armR, -2.6)
+   670→   670→        // double-jump front-flip flourish (procedural, rides on top of the jump pose)
+   671→   671→        if (this.flipTimer > 0) {
+   672→   672→          this.flipTimer = Math.max(0, this.flipTimer - dt)
+   673→   673→          const t = 1 - this.flipTimer / this.flipDur
+   674→   674→          const eased = t < 0.7 ? (t / 0.7) * (Math.PI * 2) : Math.PI * 2 // flip then hold
+   675→   675→          this.torsoPivot.rotation.x = eased
+   676→   676→        }
+   677→   677→        break
+   678→   678→      }
+   679→   679→      case 'slide': {
+   680→   680→        this.torsoPivot.rotation.x += (-1.15 - this.torsoPivot.rotation.x) * Math.min(1, dt * 10)
+   681→   681→        set(this.legL, 0.4); set(this.legR, -0.15)
+   682→   682→        set(this.armL, -2.9); set(this.armR, -2.7)
+   683→   683→        break
+   684→   684→      }
+   685→   685→      case 'dazed':
+   686→   686→      case 'down': {
+   687→   687→        this.torsoPivot.rotation.x += (-0.55 - this.torsoPivot.rotation.x) * Math.min(1, dt * 6)
+   688→   688→        this.headPivot.rotation.z = Math.sin(p * 2) * 0.25
+   689→   689→        set(this.legL, 0.35); set(this.legR, -0.3)
+   690→   690→        set(this.armL, 0.6); set(this.armR, -0.6)
+   691→   691→        break
+   692→   692→      }
+   693→   693→      case 'detained': {
+   694→   694→        this.torsoPivot.rotation.x += (0.12 - this.torsoPivot.rotation.x) * Math.min(1, dt * 6)
+   695→   695→        set(this.armL, 0.55, 0); set(this.armR, 0.55, 0)
+   696→   696→        this.armL.rotation.z = 0.5; this.armR.rotation.z = -0.5
+   697→   697→        this.headPivot.rotation.x = 0.35
+   698→   698→        break
+   699→   699→      }
+   700→   700→      case 'celebrate': {
+   701→   701→        this.torsoPivot.rotation.x += (0 - this.torsoPivot.rotation.x) * Math.min(1, dt * 8)
+   702→   702→        set(this.armL, -2.9 + s * 0.3); set(this.armR, -2.9 - s * 0.3)
+   703→   703→        this.group.position.y = this.baseY + Math.abs(c) * 0.14
+   704→   704→        this.headPivot.rotation.x = 0
+   705→   705→        break
+   706→   706→      }
+   707→   707→      case 'throw': {
+   708→   708→        set(this.armR, -2.4); set(this.armL, 0.4)
+   709→   709→        this.torsoPivot.rotation.x += (0.15 - this.torsoPivot.rotation.x) * dt * 10
+   710→   710→        break
+   711→   711→      }
+   712→   712→      case 'heal': {
+   713→   713→        set(this.armL, -1.7); set(this.armR, -1.7)
+   714→   714→        this.headPivot.rotation.x = 0.1
+   715→   715→        break
+   716→   716→      }
+   717→   717→      default: { // idle
+   718→   718→        this.torsoPivot.rotation.x += (0.03 - this.torsoPivot.rotation.x) * Math.min(1, dt * 6)
+   719→   719→        this.headPivot.rotation.x = Math.sin(p * 0.5) * 0.04
+   720→   720→        set(this.legL, 0); set(this.legR, 0)
+   721→   721→        if (!this.armBlockL) {
+   722→   722→          set(this.armL, 0.04 + Math.sin(p * 0.8) * 0.03)
+   723→   723→        }
+   724→   724→        if (!this.armBlockR) {
+   725→   725→          set(this.armR, 0.04 - Math.sin(p * 0.8) * 0.03)
+   726→   726→        }
+   727→   727→        this.group.position.y = this.baseY + Math.sin(p * 0.9) * 0.012
+   728→   728→      }
+   729→   729→    }
+   730→   730→
+   731→   731→    // cloth life: flag ripples, banner sways with the stride
+   732→   732→    if (this.flagClothRef) {
+   733→   733→      this.flagClothRef.rotation.y = Math.sin(p * 1.4) * 0.35 + 0.12
+   734→   734→      this.flagClothRef.rotation.z = Math.sin(p * 0.9) * 0.06
+   735→   735→    }
+   736→   736→    if (this.bannerClothRef) {
+   737→   737→      this.bannerClothRef.rotation.z = Math.sin(p * 0.8) * 0.05
+   738→   738→      this.bannerClothRef.rotation.x = Math.sin(p * 1.1) * 0.04
+   739→   739→    }
+   740→   740→  }
+   741→   741→
+   742→   742→  setBaseY(y: number) {
+   743→   743→    this.baseY = y
+   744→   744→  }
+   745→   745→}
+   746→   746→
+   747→   747→/** Build the Great Vote Collector boss — an oversized cartoon bureaucrat. */
+   748→   748→export function buildBoss(): { group: THREE.Group; torsoPivot: THREE.Group; armR: THREE.Group; armL: THREE.Group; headPivot: THREE.Group; stamp: THREE.Group } {
+   749→   749→  const group = new THREE.Group()
+   750→   750→  const suit = mat('#2b2f3a')
+   751→   751→  const skin = mat('#c68a5c')
+   752→   752→  const accent = mat('#b54a32')
+   753→   753→
+   754→   754→  const torsoPivot = new THREE.Group()
+   755→   755→  torsoPivot.position.y = 5.4
+   756→   756→  group.add(torsoPivot)
+   757→   757→  const torso = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.2, 1.6), suit)
+   758→   758→  torso.position.y = 1.2
+   759→   759→  torso.castShadow = true
+   760→   760→  torsoPivot.add(torso)
+   761→   761→  // tie
+   762→   762→  const tie = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2.2, 0.1), accent)
+   763→   763→  tie.position.set(0, 1.1, 0.82)
+   764→   764→  torsoPivot.add(tie)
+   765→   765→  // medals (vote badges)
+   766→   766→  for (let i = 0; i < 3; i++) {
+   767→   767→    const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.06, 12), mat('#f2c14e'))
+   768→   768→    badge.rotation.x = Math.PI / 2
+   769→   769→    badge.position.set(0.7 - i * 0.55, 1.9, 0.84)
+   770→   770→    torsoPivot.add(badge)
+   771→   771→  }
+   772→   772→  // head
+   773→   773→  const headPivot = new THREE.Group()
+   774→   774→  headPivot.position.y = 3.15
+   775→   775→  torsoPivot.add(headPivot)
+   776→   776→  const head = new THREE.Mesh(new THREE.SphereGeometry(0.62, 12, 10), skin)
+   777→   777→  head.position.y = 0.35
+   778→   778→  head.castShadow = true
+   779→   779→  headPivot.add(head)
+   780→   780→  const hairM = new THREE.Mesh(new THREE.SphereGeometry(0.65, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2.4), mat('#4a4a48'))
+   781→   781→  hairM.position.y = 0.42
+   782→   782→  headPivot.add(hairM)
+   783→   783→  // monocle
+   784→   784→  const mono = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.03, 6, 14), mat('#f2c14e'))
+   785→   785→  mono.position.set(0.22, 0.34, 0.56)
+   786→   786→  headPivot.add(mono)
+   787→   787→  // giant collar
+   788→   788→  const collar = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.3, 1.1), mat('#f5f0e0'))
+   789→   789→  collar.position.y = 2.85
+   790→   790→  torsoPivot.add(collar)
+   791→   791→
+   792→   792→  // arms
+   793→   793→  const armL = new THREE.Group(); armL.position.set(1.62, 2.5, 0)
+   794→   794→  const armR = new THREE.Group(); armR.position.set(-1.62, 2.5, 0)
+   795→   795→  for (const arm of [armL, armR]) {
+   796→   796→    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.55, 2.4, 0.55), suit)
+   797→   797→    upper.position.y = -1.1
+   798→   798→    upper.castShadow = true
+   799→   799→    arm.add(upper)
+   800→   800→    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.32, 8, 6), skin)
+   801→   801→    hand.position.y = -2.45
+   802→   802→    arm.add(hand)
+   803→   803→    torsoPivot.add(arm)
+   804→   804→  }
+   805→   805→
+   806→   806→  // GIANT STAMP in right hand
+   807→   807→  const stamp = new THREE.Group()
+   808→   808→  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 2.6, 8), mat('#7a5230'))
+   809→   809→  handle.position.y = 1.3
+   810→   810→  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.25, 0.9, 12), mat('#8c1f28'))
+   811→   811→  base.position.y = -0.45
+   812→   812→  stamp.add(handle, base)
+   813→   813→  stamp.position.y = -2.4
+   814→   814→  stamp.rotation.z = 0.3
+   815→   815→  armR.add(stamp)
+   816→   816→
+   817→   817→  // legs
+   818→   818→  for (const side of [1, -1]) {
+   819→   819→    const leg = new THREE.Group()
+   820→   820→    leg.position.set(0.65 * side, 5.4, 0)
+   821→   821→    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.72, 4.6, 0.72), mat('#33384a'))
+   822→   822→    upper.position.y = -2.3
+   823→   823→    upper.castShadow = true
+   824→   824→    leg.add(upper)
+   825→   825→    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.4, 1.35), mat('#1c1a17'))
+   826→   826→    shoe.position.set(0, -4.75, 0.25)
+   827→   827→    leg.add(shoe)
+   828→   828→    group.add(leg)
+   829→   829→  }
+   830→   830→
+   831→   831→  // ballot shield ring floating around torso
+   832→   832→  const shield = new THREE.Mesh(new THREE.TorusGeometry(3.2, 0.16, 8, 36), mat('#4e9b6e'))
+   833→   833→  shield.rotation.x = Math.PI / 2
+   834→   834→  shield.position.y = 5.6
+   835→   835→  shield.name = 'shield'
+   836→   836→  group.add(shield)
+   837→   837→
+   838→   838→  return { group, torsoPivot, armR, armL, headPivot, stamp }
+   839→   839→}
+   840→   840→

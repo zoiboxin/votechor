@@ -675,7 +675,7 @@ export class Room {
     for (const p of this.players.values()) {
       if (!p.detained && !p.dazed) {
         const grace = now - p.joinedAt < 10000 && dist2d(p.x, p.z, WORLD.spawn.x, WORLD.spawn.z) < 16
-        const view: NpcPlayerView = { id: p.id, x: p.x, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot, health: p.health }
+        const view: NpcPlayerView = { id: p.id, x: p.x, y: p.y, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot, health: p.health }
         views.push(view)
         if (!p.bot) bossViews.push(view)
       }
