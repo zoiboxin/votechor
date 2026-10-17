@@ -1,0 +1,727 @@
+     1→     1→// VoteChor world definition — deterministic procedural city data.
+     2→     2→// PURE data generation (seeded RNG) so browser client and game server build identical worlds.
+     3→     3→//
+     4→     4→// GREATER VOTECHOR CITY (round 19): the old single-road strip grew into a real city —
+     5→     5→// a 240m-wide grid with four east-west cross streets, residential mohallas full of
+     6→     6→// small homes separated by narrow galis (alleys), a bazaar lane, a school, a bus
+     7→     7→// depot, two parks and government quarters. The original 5-zone spine (plaza →
+     8→     8→// market → checkpoint → avenue → parliament) is untouched down the middle.
+     9→     9→import type { AABB, Deco, DecoKind, ItemSpawn, NpcSpawn, VehicleDef, WorldDef, SearchlightDef, CrossRoadDef } from './types'
+    10→    10→
+    11→    11→function mulberry32(seed: number) {
+    12→    12→  let a = seed >>> 0
+    13→    13→  return () => {
+    14→    14→    a |= 0; a = (a + 0x6d2b79f5) | 0
+    15→    15→    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    16→    16→    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    17→    17→    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    18→    18→  }
+    19→    19→}
+    20→    20→
+    21→    21→const SHOP_NAMES = [
+    22→    22→  'Sharma Chai & Snacks', 'Gupta Electronics', 'New Bharat Sarees', 'Verma Mobile Point',
+    23→    23→  'Khan Biryani House', 'Mehta Optics', 'Anand Sweets & Farsan', 'Rajesh Tailors',
+    24→    24→  'Singh Cyber Café', 'Devi General Store', 'Shree Ganesh Medicals', 'Lotus Beauty Parlour',
+    25→    25→  'Jai Hind Book Depot', 'Yahoo Cycle Store', 'Patel Diagnostics', 'Chacha Tiffin Center',
+    26→    26→  'Mumbai Mistri Hardware', 'Sunny Salon & WiFi', 'Golden Bakery', 'Krishna Dairy',
+    27→    27→]
+    28→    28→const SIGN_TEXTS = [
+    29→    29→  'VOTE 4 CHAI', 'DOWN WITH PAPERWORK', 'MY VOTE MY CHAPPAL', 'BRING BACK THE VOTES',
+    30→    30→  'SAVE DEMOCRACY (AND CRICKET)', 'FORM 12B RUINED MY LIFE', 'MONDAY IS THE REAL ENEMY',
+    31→    31→  'I JUST WANT FREE WIFI', 'UNCLE WAS RIGHT', 'STAMP OUT STAMPING', 'CHAI > COMMITTEE',
+    32→    32→  'LESS COMMITTEES MORE CRICKET', 'RETURN OUR VOTES OR RETURN OUR SAMOSAS', 'NO VOTE NO SLEEP',
+    33→    33→  'DEMOCRACY DELAYED IS CHAI DENIED', 'AUNTY APPROVES THIS PROTEST',
+    34→    34→]
+    35→    35→
+    36→    36→const BUILDING_COLORS = ['#c96f4a', '#b85c3e', '#7f9a8c', '#c9a86a', '#9a7b5f', '#8d6e63', '#a3b18a', '#c2b280', '#b07d62', '#7e9bb0']
+    37→    37→const HOME_COLORS = ['#d9b98a', '#cfa477', '#d8c49a', '#c2926a', '#bfae8e', '#d3b193', '#b9a27f', '#c8b093', '#c4a484', '#d6c8a8']
+    38→    38→
+    39→    39→// East-west cross streets — exported so the minimap and renderer pave the same
+    40→    40→// asphalt without duplicating layout numbers.
+    41→    41→export const CROSS_ROADS: CrossRoadDef[] = [
+    42→    42→  { z: -78, halfW: 4.8 },   // Plaza Cross Road (between the plaza and the market)
+    43→    43→  { z: -198, halfW: 5 },    // Market Exit Cross Road (checkpoint 2 sits on this junction)
+    44→    44→  { z: -286, halfW: 4 },    // Avenue Cross Road
+    45→    45→  { z: -452, halfW: 5 },    // Colony Cross Road (government district)
+    46→    46→]
+    47→    47→
+    48→    48→let idc = 0
+    49→    49→const nid = (p: string) => `${p}_${(idc++).toString(36)}`
+    50→    50→
+    51→    51→export function buildWorldDef(): WorldDef {
+    52→    52→  idc = 0
+    53→    53→  const rnd = mulberry32(20240614)
+    54→    54→  const colliders: AABB[] = []
+    55→    55→  const decorations: Deco[] = []
+    56→    56→  const items: ItemSpawn[] = []
+    57→    57→  const npcs: NpcSpawn[] = []
+    58→    58→  const searchlights: SearchlightDef[] = []
+    59→    59→  const vehicles: VehicleDef[] = []
+    60→    60→  const landmarks: { name: string; x: number; z: number }[] = []
+    61→    61→
+    62→    62→  const box = (minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number, walkable = false) => {
+    63→    63→    const c: AABB = { minX, minY, minZ, maxX, maxY, maxZ }
+    64→    64→    if (walkable) c.walkable = true
+    65→    65→    colliders.push(c)
+    66→    66→    return c
+    67→    67→  }
+    68→    68→  const deco = (d: Deco) => { decorations.push(d); return d }
+    69→    69→
+    70→    70→  // east-west street band test — random props must not spawn on the asphalt
+    71→    71→  const inCrossRoad = (z: number, pad = 1.6) => CROSS_ROADS.some(r => Math.abs(z - r.z) < r.halfW + pad)
+    72→    72→
+    73→    73→  // small home (mohalla house) — instanced in the renderer, AABB collider here.
+    74→    74→  // variant: 0 pitched roof, 1 flat roof. ry: 0 or π only (keeps the AABB honest).
+    75→    75→  const home = (x: number, z: number, w: number, d: number, h: number, variant = 0, ry = 0) => {
+    76→    76→    deco({ kind: 'home', x, z, w, d, h, variant, ry, color: HOME_COLORS[Math.floor(rnd() * HOME_COLORS.length)] })
+    77→    77→    box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
+    78→    78→  }
+    79→    79→  // compound / courtyard wall — 1.1m tall (sprint-vaultable) unless h given
+    80→    80→  const wall = (x1: number, z1: number, x2: number, z2: number, h = 1.1) => {
+    81→    81→    const minX = Math.min(x1, x2), maxX = Math.max(x1, x2)
+    82→    82→    const minZ = Math.min(z1, z2), maxZ = Math.max(z1, z2)
+    83→    83→    deco({ kind: 'wall', x: (minX + maxX) / 2, z: (minZ + maxZ) / 2, w: Math.max(0.4, maxX - minX), d: Math.max(0.4, maxZ - minZ), h })
+    84→    84→    box(minX, 0, minZ, maxX, h, maxZ)
+    85→    85→  }
+    86→    86→  const clothesline = (x: number, z: number, len: number, ry = 0) => deco({ kind: 'clothesline', x, z, w: len, ry })
+    87→    87→
+    88→    88→  // Invisible world walls
+    89→    89→  box(-124, 0, 10, 124, 14, 12)        // back wall (spawn side)
+    90→    90→  box(-124, 0, -576, 124, 14, -572)    // far wall (parliament end)
+    91→    91→  box(-124, 0, -576, -120, 14, 12)     // left wall
+    92→    92→  box(120, 0, -576, 124, 14, 12)       // right wall
+    93→    93→
+    94→    94→  // ================= ZONE A — PROTEST GATHERING PLAZA (z 0 .. -80) =================
+    95→    95→  const plazaBuilding = (x: number, z: number, i: number) => {
+    96→    96→    const w = 10 + rnd() * 8
+    97→    97→    const d = 8 + rnd() * 6
+    98→    98→    const h = 8 + rnd() * 8
+    99→    99→    const color = BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)]
+   100→   100→    deco({ kind: 'building', x, z, w, d, h, color, variant: Math.floor(rnd() * 3), sign: SHOP_NAMES[i % SHOP_NAMES.length] })
+   101→   101→    box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
+   102→   102→  }
+   103→   103→  for (let i = 0; i < 5; i++) { plazaBuilding(-22 - rnd() * 14, -6 - i * 15, i) }
+   104→   104→  for (let i = 0; i < 5; i++) { plazaBuilding(22 + rnd() * 14, -8 - i * 15, i + 5) }
+   105→   105→
+   106→   106→  // Fountain center
+   107→   107→  deco({ kind: 'fountain', x: 0, z: -34, collider: true })
+   108→   108→  box(-4.4, 0, -38.4, 4.4, 1.1, -29.6)
+   109→   109→  landmarks.push({ name: 'Protest Fountain', x: 0, z: -34 })
+   110→   110→  // Stage
+   111→   111→  deco({ kind: 'stage', x: -16, z: -18, ry: 0.5 })
+   112→   112→  box(-20, 0, -22, -12, 1.2, -14, true)
+   113→   113→  // Food stalls row
+   114→   114→  const stallKinds: DecoKind[] = ['stall', 'cart', 'teaKettle']
+   115→   115→  for (let i = 0; i < 6; i++) {
+   116→   116→    const x = -10 + i * 4.2, z = -52
+   117→   117→    deco({ kind: stallKinds[i % 3], x, z, ry: Math.PI, variant: i, sign: SHOP_NAMES[(i + 8) % SHOP_NAMES.length], collider: i % 2 === 0 })
+   118→   118→    if (i % 2 === 0) box(x - 1.6, 0, z - 1.6, x + 1.6, 2.4, z + 1.6)
+   119→   119→  }
+   120→   120→  // Street props (kept off the cross-road band at z -78)
+   121→   121→  for (let i = 0; i < 8; i++) {
+   122→   122→    const x = -26 + rnd() * 52, z = -4 - rnd() * 66
+   123→   123→    if (Math.abs(x) < 9) continue
+   124→   124→    deco({ kind: 'tree', x, z, s: 0.8 + rnd() * 0.6, variant: Math.floor(rnd() * 2) })
+   125→   125→    box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+   126→   126→  }
+   127→   127→  for (let i = 0; i < 6; i++) deco({ kind: 'bench', x: -14 + i * 5.6, z: -12, ry: Math.PI })
+   128→   128→  for (let i = 0; i < 5; i++) deco({ kind: 'scooter', x: -30 + rnd() * 8, z: -30 - i * 9, ry: 0.3 + rnd() * 0.4 })
+   129→   129→  for (let i = 0; i < 4; i++) deco({ kind: 'lamp', x: i % 2 ? 9 : -9, z: -10 - i * 20 })
+   130→   130→  // Tutorial ring (train area)
+   131→   131→  for (let i = 0; i < 8; i++) {
+   132→   132→    const a = (i / 8) * Math.PI * 2
+   133→   133→    deco({ kind: 'crate', x: 16 + Math.cos(a) * 6, z: -64 + Math.sin(a) * 6, ry: a, s: 0.9 })
+   134→   134→  }
+   135→   135→  box(10, 0, -70, 22, 1.1, -58) // tutorial platform to jump on
+   136→   136→  landmarks.push({ name: 'Training Ring', x: 16, z: -64 })
+   137→   137→  // Crowd of ambient protesters in plaza
+   138→   138→  for (let i = 0; i < 24; i++) {
+   139→   139→    const x = -20 + rnd() * 40, z = -6 - rnd() * 60
+   140→   140→    if (Math.abs(x) < 5 && z > -20) continue
+   141→   141→    if (inCrossRoad(z)) continue
+   142→   142→    deco({ kind: 'crowd', x, z, ry: rnd() * Math.PI * 2, variant: Math.floor(rnd() * 6), sign: rnd() < 0.55 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined })
+   143→   143→  }
+   144→   144→  for (let i = 0; i < 3; i++) deco({ kind: 'billboard', x: i % 2 ? 14 : -14, z: -20 - i * 18, ry: i % 2 ? -0.6 : 0.6, sign: SIGN_TEXTS[(i * 5) % SIGN_TEXTS.length] })
+   145→   145→  deco({ kind: 'toilet', x: 30, z: -70 })
+   146→   146→
+   147→   147→  // Plaza items
+   148→   148→  items.push(
+   149→   149→    { id: 'A_tok_1', type: 'token', x: -26, y: 1, z: -44 },
+   150→   150→    { id: 'A_tok_2', type: 'token', x: 24, y: 1.15, z: -64 }, // on tutorial platform
+   151→   151→    { id: 'A_chai_1', type: 'chai', x: -8.6, y: 1, z: -52 },
+   152→   152→    { id: 'A_chai_2', type: 'chai', x: 6.5, y: 1, z: -46 },
+   153→   153→    { id: 'A_bot_1', type: 'bottle', x: 4, y: 1, z: -22 },
+   154→   154→    { id: 'A_bot_2', type: 'bottle', x: -4, y: 1, z: -60 },
+   155→   155→    { id: 'A_sign_1', type: 'sign', x: 12, y: 1, z: -30 },
+   156→   156→    { id: 'A_aid_1', type: 'firstaid', x: 30, y: 1, z: -16 },
+   157→   157→    { id: 'A_joke_1', type: 'joke', x: 16, y: 1.15, z: -62 },
+   158→   158→    { id: 'A_chai_3', type: 'chai', x: -6, y: 1, z: -66 },
+   159→   159→    { id: 'A_snack_3', type: 'snack', x: 6, y: 1, z: -60 },
+   160→   160→  )
+   161→   161→
+   162→   162→  // Plaza NPCs (light) — patrol the SIDES of the plaza; the center road stays a fair tutorial run
+   163→   163→  npcs.push(
+   164→   164→    { id: 'npcA1', type: 'police', x: -20, z: -40, patrol: [[-20, -38], [-28, -42], [-28, -58], [-18, -56]], zone: 0 },
+   165→   165→    { id: 'npcA2', type: 'police', x: 20, z: -30, patrol: [[20, -28], [26, -34], [26, -50], [16, -48]], zone: 0 },
+   166→   166→  )
+   167→   167→
+   168→   168→  // ================= ZONE B — BUSY MARKET STREETS (z -80 .. -200) =================
+   169→   169→  // Narrow road: buildings closer, dense stalls. Rows stop short of the Market
+   170→   170→  // Exit cross road (z -198) so the junction stays open.
+   171→   171→  for (let i = 0; i < 8; i++) {
+   172→   172→    const w = 8 + rnd() * 6, d = 7 + rnd() * 5, h = 7 + rnd() * 9
+   173→   173→    const x = -(11 + w / 2 + rnd() * 4), z = -86 - i * 13
+   174→   174→    deco({ kind: 'building', x, z, w, d, h, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 1, sign: SHOP_NAMES[(i + 3) % SHOP_NAMES.length] })
+   175→   175→    box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
+   176→   176→  }
+   177→   177→  for (let i = 0; i < 8; i++) {
+   178→   178→    const w = 8 + rnd() * 6, d = 7 + rnd() * 5, h = 7 + rnd() * 9
+   179→   179→    const x = 11 + w / 2 + rnd() * 4, z = -88 - i * 13
+   180→   180→    deco({ kind: 'building', x, z, w, d, h, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 2, sign: SHOP_NAMES[(i + 11) % SHOP_NAMES.length] })
+   181→   181→    box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
+   182→   182→  }
+   183→   183→  // Dense market stalls along road edges
+   184→   184→  for (let i = 0; i < 12; i++) {
+   185→   185→    const side = i % 2 ? 1 : -1
+   186→   186→    const x = side * (7.5 + (i % 3) * 1.6), z = -86 - i * 8.4
+   187→   187→    deco({ kind: 'stall', x, z, ry: side > 0 ? Math.PI / 2 : -Math.PI / 2, variant: i % 4, sign: SHOP_NAMES[(i * 3 + 2) % SHOP_NAMES.length] })
+   188→   188→    box(x - 1.7, 0, z - 1.7, x + 1.7, 2.4, z + 1.7)
+   189→   189→  }
+   190→   190→  // Overhead banners across the market street
+   191→   191→  for (let i = 0; i < 5; i++) deco({ kind: 'banner', x: 0, z: -96 - i * 24, ry: 0, sign: SIGN_TEXTS[(i * 3 + 1) % SIGN_TEXTS.length] })
+   192→   192→  // Carts and scooters blocking lanes
+   193→   193→  for (let i = 0; i < 8; i++) {
+   194→   194→    const x = -4 + rnd() * 8, z = -92 - i * 13 - rnd() * 4
+   195→   195→    if (i % 3 === 0) { deco({ kind: 'cart', x, z, ry: rnd() * 3, collider: true }); box(x - 1.2, 0, z - 1.2, x + 1.2, 1.5, z + 1.2) }
+   196→   196→    else deco({ kind: 'scooter', x: x > 0 ? x + 3 : x - 3, z, ry: rnd() * 6.28 })
+   197→   197→  }
+   198→   198→  for (let i = 0; i < 10; i++) {
+   199→   199→    const x = -20 + rnd() * 40, z = -84 - rnd() * 104
+   200→   200→    if (Math.abs(x) < 9.5) continue
+   201→   201→    if (inCrossRoad(z)) continue
+   202→   202→    deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.3 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined })
+   203→   203→  }
+   204→   204→  for (let i = 0; i < 6; i++) { const x = i % 2 ? 10.5 : -10.5, z = -90 - i * 18; deco({ kind: 'lamp', x, z }) }
+   205→   205→  landmarks.push({ name: 'Chowk Market', x: 0, z: -140 })
+   206→   206→
+   207→   207→  items.push(
+   208→   208→    { id: 'B_tok_1', type: 'token', x: -13, y: 1, z: -104 },
+   209→   209→    { id: 'B_tok_2', type: 'token', x: 14.5, y: 1, z: -152 },
+   210→   210→    { id: 'B_tok_3', type: 'token', x: 0, y: 1, z: -186 },
+   211→   211→    { id: 'B_chai_1', type: 'chai', x: 8.9, y: 1, z: -120 },
+   212→   212→    { id: 'B_chai_2', type: 'chai', x: -9.3, y: 1, z: -164 },
+   213→   213→    { id: 'B_bot_1', type: 'bottle', x: 3, y: 1, z: -96 },
+   214→   214→    { id: 'B_bot_2', type: 'bottle', x: -5, y: 1, z: -132 },
+   215→   215→    { id: 'B_bot_3', type: 'bottle', x: 6, y: 1, z: -172 },
+   216→   216→    { id: 'B_sign_1', type: 'sign', x: -6, y: 1, z: -110 },
+   217→   217→    { id: 'B_snack_1', type: 'snack', x: 12, y: 1, z: -136 },
+   218→   218→    { id: 'B_snack_2', type: 'snack', x: -15, y: 1, z: -178 },
+   219→   219→    { id: 'B_aid_1', type: 'firstaid', x: -13, y: 1, z: -146 },
+   220→   220→    { id: 'B_joke_1', type: 'joke', x: 15, y: 1, z: -192 },
+   221→   221→    { id: 'B_snack_3', type: 'snack', x: 2, y: 1, z: -116 },
+   222→   222→    { id: 'B_aid_2', type: 'firstaid', x: -2, y: 1, z: -148 },
+   223→   223→    { id: 'B_chai_3', type: 'chai', x: 3, y: 1, z: -180 },
+   224→   224→    { id: 'B_joke_2', type: 'joke', x: -2, y: 1, z: -104 },
+   225→   225→  )
+   226→   226→
+   227→   227→  npcs.push(
+   228→   228→    { id: 'npcB1', type: 'police', x: -4, z: -100, patrol: [[-4, -100], [4, -112], [-4, -124], [4, -136]], zone: 1 },
+   229→   229→    { id: 'npcB2', type: 'police', x: 5, z: -130, patrol: [[5, -130], [-5, -142], [5, -154], [-5, -166]], zone: 1 },
+   230→   230→    { id: 'npcB3', type: 'police', x: -12, z: -150, patrol: [[-12, -150], [-12, -176], [12, -180], [12, -152]], zone: 1 },
+   231→   231→    { id: 'npcB4', type: 'police', x: 0, z: -176, patrol: [[0, -176], [8, -186], [-8, -194], [0, -166]], zone: 1 },
+   232→   232→  )
+   233→   233→
+   234→   234→  // ================= SIDE CITY — WEST, BAND 0 (z -10 .. -72, x -114 .. -42) =================
+   235→   235→  // Purani Gali upper rows + a dusty maidan (open ground) behind the plaza.
+   236→   236→  {
+   237→   237→    for (let r = 0; r < 2; r++) {
+   238→   238→      const zRow = -14 - r * 10
+   239→   239→      for (let k = 0; k < 7; k++) {
+   240→   240→        const w = 6 + rnd() * 1.6
+   241→   241→        const x = -110 + k * 9.4 + rnd() * 1.2
+   242→   242→        home(x, zRow, w, 6.4, 3.4 + rnd() * 1.6, k % 3 === 1 ? 1 : 0)
+   243→   243→      }
+   244→   244→    }
+   245→   245→    // maidan — open ground with neem trees, benches and a chai cart
+   246→   246→    for (let i = 0; i < 6; i++) {
+   247→   247→      const x = -108 + i * 12 + rnd() * 4, z = -38 - (i % 3) * 9
+   248→   248→      deco({ kind: 'tree', x, z, s: 0.9 + rnd() * 0.5, variant: i % 2 })
+   249→   249→      box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+   250→   250→    }
+   251→   251→    for (let i = 0; i < 3; i++) deco({ kind: 'bench', x: -96 + i * 14, z: -46, ry: rnd() * 3 })
+   252→   252→    deco({ kind: 'teaKettle', x: -66, z: -56, ry: 0.8 })
+   253→   253→    deco({ kind: 'cart', x: -88, z: -60, ry: -0.4 })
+   254→   254→    for (let i = 0; i < 4; i++) deco({ kind: 'scooter', x: -106 + i * 15, z: -64 - rnd() * 3, ry: rnd() * 6.28 })
+   255→   255→    for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: -100 + i * 16 + rnd() * 5, z: -36 - rnd() * 24, ry: rnd() * 6.28, variant: i % 6 })
+   256→   256→    // low wall with a gate gap facing the plaza margin
+   257→   257→    wall(-42, -34, -42, -50); wall(-42, -56, -42, -70)
+   258→   258→    clothesline(-90, -22, 8)
+   259→   259→    clothesline(-60, -30, 7, Math.PI / 2)
+   260→   260→  }
+   261→   261→
+   262→   262→  // ================= SIDE CITY — WEST, BAND 1 (z -86 .. -190) — PURANI GALI MOHALLA ====
+   263→   263→  {
+   264→   264→    landmarks.push({ name: 'Purani Gali', x: -78, z: -120 })
+   265→   265→    const rowPitch = 9.7
+   266→   266→    for (let r = 0; r < 8; r++) {
+   267→   267→      const zRow = -88 - r * rowPitch
+   268→   268→      for (let k = 0; k < 8; k++) {
+   269→   269→        // two north-south galis cut through the block at k 2 and k 5
+   270→   270→        if (k === 2 || k === 5) continue
+   271→   271→        const w = 6 + rnd() * 1.8
+   272→   272→        const x = -111 + k * 9.3 + rnd()
+   273→   273→        home(x, zRow, w, 6.5, 3.2 + rnd() * 1.8, (r + k) % 3 === 2 ? 1 : 0, k % 2 ? Math.PI : 0)
+   274→   274→      }
+   275→   275→      // clotheslines strung across the row galis + alley clutter
+   276→   276→      if (r % 2 === 0) clothesline(-102.5, zRow + rowPitch / 2 - 3.25, 6)
+   277→   277→      if (r % 2 === 1) clothesline(-75.5, zRow + rowPitch / 2 - 3.25, 7)
+   278→   278→      if (r % 3 === 1) { deco({ kind: 'crate', x: -49, z: zRow + 4.8, ry: rnd(), s: 0.8 }); box(-50, 0, zRow + 3.8, -48, 1.3, zRow + 5.8) }
+   279→   279→      if (r % 4 === 2) deco({ kind: 'scooter', x: -66.5, z: zRow + rowPitch / 2, ry: rnd() * 6.28 })
+   280→   280→      if (r === 5) { deco({ kind: 'cart', x: -89.5, z: zRow + rowPitch / 2, ry: 1.2, collider: true }); box(-90.7, 0, zRow + 3.6, -88.3, 1.5, zRow + 6) }
+   281→   281→    }
+   282→   282→    // courtyard compound mid-block: walls with a narrow entrance
+   283→   283→    wall(-96, -115.8, -80, -115.8); wall(-96, -115.8, -96, -128.6); wall(-80, -115.8, -80, -123)
+   284→   284→    home(-88, -122, 7, 6, 3.6, 0)
+   285→   285→    deco({ kind: 'planter', x: -94, z: -124 })
+   286→   286→    deco({ kind: 'planter', x: -82, z: -124 })
+   287→   287→    // south garden (bageecha) between the last row and the checkpoint zone
+   288→   288→    for (let i = 0; i < 5; i++) {
+   289→   289→      const x = -108 + i * 16 + rnd() * 5, z = -168 - rnd() * 14
+   290→   290→      deco({ kind: 'tree', x, z, s: 1 + rnd() * 0.5, variant: i % 2 })
+   291→   291→      box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+   292→   292→    }
+   293→   293→    deco({ kind: 'bench', x: -92, z: -174, ry: 0.4 })
+   294→   294→    deco({ kind: 'bench', x: -64, z: -178, ry: -1.2 })
+   295→   295→    deco({ kind: 'teaKettle', x: -52, z: -166, ry: -0.6 })
+   296→   296→    for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: -108 + i * 18 + rnd() * 6, z: -164 - rnd() * 20, ry: rnd() * 6.28, variant: (i + 2) % 6, sign: rnd() < 0.4 ? SIGN_TEXTS[i * 3 % SIGN_TEXTS.length] : undefined })
+   297→   297→    // lamps lighting the two long galis
+   298→   298→    deco({ kind: 'lamp', x: -66.5, z: -102, ry: Math.PI / 2 })
+   299→   299→    deco({ kind: 'lamp', x: -93.5, z: -140, ry: -Math.PI / 2 })
+   300→   300→    items.push(
+   301→   301→      { id: 'S1_tok', type: 'token', x: -66.5, y: 1, z: -121 },   // hidden in the N-S gali
+   302→   302→      { id: 'S1_chai', type: 'chai', x: -76, y: 1, z: -176 },
+   303→   303→      { id: 'S1_bot', type: 'bottle', x: -88.9, y: 1, z: -93 },
+   304→   304→      { id: 'S1_aid', type: 'firstaid', x: -92.4, y: 1, z: -146.4 },
+   305→   305→      { id: 'S1_joke', type: 'joke', x: -48, y: 1, z: -170 },
+   306→   306→    )
+   307→   307→    npcs.push({ id: 'npcS1', type: 'police', x: -66, z: -92, patrol: [[-66, -92], [-92, -94], [-94, -120], [-66, -118]], zone: 1 })
+   308→   308→  }
+   309→   309→
+   310→   310→  // ================= SIDE CITY — EAST, BAND 0+1 (z -10 .. -190) — NAYA BAZAAR ========
+   311→   311→  {
+   312→   312→    landmarks.push({ name: 'Naya Bazaar', x: 78, z: -104 })
+   313→   313→    // shop row A facing the Plaza Cross Road
+   314→   314→    for (let k = 0; k < 5; k++) {
+   315→   315→      const w = 8 + rnd() * 3, d = 7 + rnd() * 2, h = 5 + rnd() * 2.5
+   316→   316→      const x = 50 + k * 12.6 + rnd()
+   317→   317→      deco({ kind: 'building', x, z: -91, w, d, h, color: BUILDING_COLORS[(k + 2) % BUILDING_COLORS.length], variant: 2, sign: SHOP_NAMES[(k + 5) % SHOP_NAMES.length] })
+   318→   318→      box(x - w / 2, 0, -94.5, x + w / 2, h, -87.5)
+   319→   319→    }
+   320→   320→    // shop row B across the bazaar lane
+   321→   321→    for (let k = 0; k < 5; k++) {
+   322→   322→      const w = 8 + rnd() * 3, d = 7 + rnd() * 2, h = 5 + rnd() * 3
+   323→   323→      const x = 52 + k * 12.4 + rnd()
+   324→   324→      deco({ kind: 'building', x, z: -112, w, d, h, color: BUILDING_COLORS[(k + 6) % BUILDING_COLORS.length], variant: 1, sign: SHOP_NAMES[(k + 13) % SHOP_NAMES.length] })
+   325→   325→      box(x - w / 2, 0, -115.5, x + w / 2, h, -108.5)
+   326→   326→    }
+   327→   327→    // back alley behind row B: crates, scooters, clotheslines — the shortcut gali
+   328→   328→    for (let i = 0; i < 5; i++) {
+   329→   329→      const x = 48 + i * 14 + rnd() * 4, z = -121.5
+   330→   330→      deco({ kind: 'crate', x, z, ry: rnd(), s: 0.9 + rnd() * 0.4 })
+   331→   331→      box(x - 0.9, 0, z - 0.9, x + 0.9, 1.5, z + 0.9)
+   332→   332→    }
+   333→   333→    deco({ kind: 'scooter', x: 58, z: -119, ry: 0.4 })
+   334→   334→    deco({ kind: 'scooter', x: 86, z: -123, ry: 2.2 })
+   335→   335→    clothesline(70, -122, 9)
+   336→   336→    // homes row closing the block, then the school
+   337→   337→    for (let k = 0; k < 6; k++) {
+   338→   338→      const x = 48 + k * 11 + rnd(), z = -131
+   339→   339→      home(x, z, 6.4 + rnd(), 6.2, 3.3 + rnd() * 1.4, k % 2)
+   340→   340→    }
+   341→   341→    // Saraswati school with a front yard wall + gate
+   342→   342→    deco({ kind: 'building', x: 78, z: -150, w: 26, d: 9, h: 6, color: '#c9a86a', variant: 0, sign: 'SARASWATI PUBLIC SCHOOL' })
+   343→   343→    box(65, 0, -154.5, 91, 6, -145.5)
+   344→   344→    wall(64, -141, 68, -141); wall(88, -141, 92, -141) // yard wall, gate in the middle
+   345→   345→    deco({ kind: 'flagpole', x: 78, z: -143.5, variant: 1 })
+   346→   346→    // playground
+   347→   347→    for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 66 + i * 7 + rnd() * 3, z: -158 - rnd() * 10, ry: rnd() * 6.28, variant: i % 6, sign: rnd() < 0.3 ? SIGN_TEXTS[(i + 7) % SIGN_TEXTS.length] : undefined })
+   348→   348→    deco({ kind: 'bench', x: 62, z: -166, ry: 1.5 })
+   349→   349→    deco({ kind: 'tree', x: 92, z: -166, s: 1.1, variant: 0 })
+   350→   350→    box(91.6, 0, -166.4, 92.4, 3, -165.6)
+   351→   351→    // homes rows facing the Market Exit cross road
+   352→   352→    for (let k = 0; k < 6; k++) home(50 + k * 11 + rnd(), -178, 6.5 + rnd(), 6.4, 3.4 + rnd() * 1.5, k % 3 === 0 ? 1 : 0)
+   353→   353→    for (let k = 0; k < 5; k++) home(55 + k * 12 + rnd(), -187.5, 6.5 + rnd(), 6.2, 3.2 + rnd() * 1.6, (k + 1) % 3)
+   354→   354→    clothesline(74, -182.6, 8)
+   355→   355→    items.push(
+   356→   356→      { id: 'S2_tok', type: 'token', x: 58, y: 1, z: -121 },      // behind the bazaar shops
+   357→   357→      { id: 'S2_snack', type: 'snack', x: 84, y: 1, z: -164 },
+   358→   358→      { id: 'S2_bot', type: 'bottle', x: 70, y: 1, z: -182.6 },
+   359→   359→      { id: 'S2_chai', type: 'chai', x: 76, y: 1, z: -137 },
+   360→   360→    )
+   361→   361→    npcs.push({ id: 'npcS2', type: 'police', x: 52, z: -100, patrol: [[52, -100], [104, -102], [104, -118], [52, -116]], zone: 1 })
+   362→   362→  }
+   363→   363→
+   364→   364→  // ================= ZONE C — SECURITY CHECKPOINT (z -200 .. -280) =================
+   365→   365→  // Fence corridors funneling through barricade maze, watchtowers + searchlights.
+   366→   366→  // Round 19: every fence line now runs the FULL city width so the outer mohalla
+   367→   367→  // blocks can't be used to walk around the checkpoint.
+   368→   368→  // Fence walls (with gaps)
+   369→   369→  const fence = (x1: number, z1: number, x2: number, z2: number) => {
+   370→   370→    const minX = Math.min(x1, x2), maxX = Math.max(x1, x2), minZ = Math.min(z1, z2), maxZ = Math.max(z1, z2)
+   371→   371→    deco({ kind: 'barrier', x: (x1 + x2) / 2, z: (z1 + z2) / 2, w: Math.max(2, maxX - minX), d: Math.max(2, maxZ - minZ) })
+   372→   372→    box(minX, 0, minZ, maxX, 1.15, maxZ)
+   373→   373→  }
+   374→   374→  fence(-122, -206, -12, -207.6); fence(12, -206, 122, -207.6)
+   375→   375→  fence(-122, -222, -26, -223.6); fence(26, -222, 122, -223.6)
+   376→   376→  fence(-12, -222, -6, -223.6); fence(6, -222, 12, -223.6)
+   377→   377→  fence(-122, -238, -18, -239.6); fence(18, -238, 122, -239.6)
+   378→   378→  fence(-6, -238, 18, -239.6)
+   379→   379→  fence(-122, -254, -8, -255.6); fence(8, -254, 122, -255.6)
+   380→   380→  fence(-122, -270, -20, -271.6); fence(20, -270, 122, -271.6)
+   381→   381→  fence(-8, -270, 20, -271.6)
+   382→   382→  // Watchtowers with searchlights
+   383→   383→  const towers: [number, number][] = [[-20, -214], [20, -214], [-24, -246], [24, -246]]
+   384→   384→  towers.forEach(([x, z], i) => {
+   385→   385→    deco({ kind: 'tower', x, z, variant: i })
+   386→   386→    box(x - 2, 0, z - 2, x + 2, 5.2, z + 2)
+   387→   387→    searchlights.push({ id: `sl${i}`, x, z, ry: Math.PI + (i % 2 ? -0.5 : 0.5), speed: (i % 2 ? -1 : 1) * 0.55 })
+   388→   388→  })
+   389→   389→  landmarks.push({ name: 'Security Checkpoint', x: 0, z: -240 })
+   390→   390→  // Guard huts + crates for hiding
+   391→   391→  for (let i = 0; i < 5; i++) { deco({ kind: 'crate', x: -30 + i * 13 + rnd() * 4, z: -216 - (i % 3) * 18, ry: rnd() * 1.5, s: 1.2 }); box(-30 + i * 13 - 1, 0, -217 - (i % 3) * 18, -30 + i * 13 + 1, 2.2, -215 - (i % 3) * 18) }
+   392→   392→  for (let i = 0; i < 4; i++) deco({ kind: 'barrier', x: i % 2 ? -14 : 14, z: -228 - i * 10, ry: 0.2, w: 6, d: 2 })
+   393→   393→  // outer corridor hiding spots (west + east dead-end pockets between fence lines)
+   394→   394→  for (let i = 0; i < 3; i++) { const x = -84 - i * 14; const z = -216 + i * 16; deco({ kind: 'crate', x, z, ry: rnd(), s: 1.1 }); box(x - 1, 0, z - 1, x + 1, 2, z + 1) }
+   395→   395→  for (let i = 0; i < 3; i++) { const x = 76 + i * 14; const z = -220 + i * 15; deco({ kind: 'crate', x, z, ry: rnd(), s: 1.2 }); box(x - 1.1, 0, z - 1.1, x + 1.1, 2.2, z + 1.1) }
+   396→   396→  deco({ kind: 'cart', x: -56, z: -262, ry: 0.7, collider: true }); box(-57.2, 0, -263.2, -54.8, 1.5, -260.8)
+   397→   397→  for (let i = 0; i < 3; i++) deco({ kind: 'crowd', x: -90 + i * 70, z: -230 - i * 14, ry: rnd() * 6.28, variant: i % 6 })
+   398→   398→
+   399→   399→  items.push(
+   400→   400→    { id: 'C_tok_1', type: 'token', x: -34, y: 1, z: -216 },
+   401→   401→    { id: 'C_tok_2', type: 'token', x: 33, y: 1, z: -232 },
+   402→   402→    { id: 'C_tok_3', type: 'token', x: -2, y: 1, z: -260 },
+   403→   403→    { id: 'C_tok_4', type: 'token', x: 36, y: 1, z: -266 },
+   404→   404→    { id: 'C_chai_1', type: 'chai', x: -14, y: 1, z: -224 },
+   405→   405→    { id: 'C_chai_2', type: 'chai', x: 16, y: 1, z: -252 },
+   406→   406→    { id: 'C_bot_1', type: 'bottle', x: 6, y: 1, z: -212 },
+   407→   407→    { id: 'C_bot_2', type: 'bottle', x: -22, y: 1, z: -244 },
+   408→   408→    { id: 'C_aid_1', type: 'firstaid', x: -36, y: 1, z: -252 },
+   409→   409→    { id: 'C_snack_1', type: 'snack', x: 8, y: 1, z: -240 },
+   410→   410→    { id: 'C_aid_2', type: 'firstaid', x: -6, y: 1, z: -212 },
+   411→   411→    { id: 'C_snack_2', type: 'snack', x: -6, y: 1, z: -246 },
+   412→   412→    { id: 'C_aid_3', type: 'firstaid', x: -20, y: 1, z: -270 },
+   413→   413→    { id: 'C_foam_1', type: 'foam', x: -10, y: 1, z: -264 },
+   414→   414→    { id: 'S6_foam', type: 'foam', x: -80, y: 1, z: -246 },
+   415→   415→    { id: 'S6_bot', type: 'bottle', x: 80, y: 1, z: -256 },
+   416→   416→  )
+   417→   417→
+   418→   418→  npcs.push(
+   419→   419→    { id: 'npcC1', type: 'police', x: -8, z: -212, patrol: [[-8, -212], [8, -214], [10, -220], [-10, -220]], zone: 2 },
+   420→   420→    { id: 'npcC2', type: 'police', x: 14, z: -226, patrol: [[14, -226], [-14, -228], [-16, -236], [16, -234]], zone: 2 },
+   421→   421→    { id: 'npcC3', type: 'security', x: 0, z: -232, patrol: [[0, -232], [0, -246]], zone: 2 },
+   422→   422→    { id: 'npcC4', type: 'police', x: -18, z: -244, patrol: [[-18, -244], [18, -246], [18, -252], [-18, -250]], zone: 2 },
+   423→   423→    { id: 'npcC5', type: 'security', x: -6, z: -258, patrol: [[-6, -258], [-6, -268]], zone: 2 },
+   424→   424→    { id: 'npcC6', type: 'police', x: 10, z: -262, patrol: [[10, -262], [-10, -264], [-12, -274], [12, -276]], zone: 2 },
+   425→   425→    { id: 'npcC7', type: 'police', x: -30, z: -230, patrol: [[-30, -230], [-34, -268], [-24, -266]], zone: 2 },
+   426→   426→    { id: 'npcC8', type: 'police', x: 30, z: -234, patrol: [[30, -234], [34, -270], [24, -268]], zone: 2 },
+   427→   427→  )
+   428→   428→
+   429→   429→  // ================= ZONE D — MAJOR AVENUE (z -280 .. -420) =================
+   430→   430→  // Wide road, flyover with ramps on the right, roadworks, moving traffic.
+   431→   431→  // Rows shifted south (round 19) so the Avenue Cross Road at z -286 stays open.
+   432→   432→  for (let i = 0; i < 6; i++) {
+   433→   433→    const w = 9 + rnd() * 7, d = 10 + rnd() * 6, h = 12 + rnd() * 10
+   434→   434→    const x = -(20 + w / 2), z = -302 - i * 20
+   435→   435→    deco({ kind: 'building', x, z, w, d, h, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 1, sign: SHOP_NAMES[(i * 4) % SHOP_NAMES.length] })
+   436→   436→    box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
+   437→   437→    const x2 = 20 + w / 2, z2 = -308 - i * 20
+   438→   438→    deco({ kind: 'building', x: x2, z: z2, w, d, h: 10 + rnd() * 12, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 2, sign: SHOP_NAMES[(i * 4 + 1) % SHOP_NAMES.length] })
+   439→   439→    box(x2 - w / 2, 0, z2 - d / 2, x2 + w / 2, 12, z2 + d / 2)
+   440→   440→  }
+   441→   441→  // Flyover: deck + ramps (walkable)
+   442→   442→  const fy = 5.2 // deck height
+   443→   443→  box(6, 0, -392, 18, fy, -380) // south ramp base
+   444→   444→  box(6, 0, -368, 18, fy, -356) // north ramp base
+   445→   445→  // stepped ramps (each step 0.5m tall -> walkable step-up)
+   446→   446→  for (let s = 0; s < 10; s++) {
+   447→   447→    const z0 = -380 + s * 1.2
+   448→   448→    box(6, 0, z0, 18, (fy * (s + 1)) / 10, z0 + 1.2, true)
+   449→   449→  }
+   450→   450→  for (let s = 0; s < 10; s++) {
+   451→   451→    const z0 = -368 - s * 1.2
+   452→   452→    box(6, 0, z0 - 1.2, 18, (fy * (s + 1)) / 10, z0, true)
+   453→   453→  }
+   454→   454→  box(6, fy, -380, 18, fy + 0.6, -368, true) // deck
+   455→   455→  deco({ kind: 'billboard', x: 12, y: fy + 0.6, z: -374, ry: 0, sign: 'AVENUE FLYOVER — USE AT OWN RISK' })
+   456→   456→  landmarks.push({ name: 'Flyover', x: 12, z: -374 })
+   457→   457→  // Roadworks + barriers
+   458→   458→  for (let i = 0; i < 6; i++) {
+   459→   459→    const x = -16 + i * 6.4
+   460→   460→    deco({ kind: 'barrier', x, z: -302 - (i % 2) * 40, ry: 0.1, w: 4, d: 1.6 })
+   461→   461→    box(x - 2, 0, -303 - (i % 2) * 40, x + 2, 1.1, -301 - (i % 2) * 40)
+   462→   462→  }
+   463→   463→  for (let i = 0; i < 4; i++) { deco({ kind: 'crate', x: -18 + i * 11, z: -344 - (i % 2) * 22, ry: rnd(), s: 1.1 }); box(-19 + i * 11, 0, -345 - (i % 2) * 22, -17 + i * 11, 2, -343 - (i % 2) * 22) }
+   464→   464→  for (let i = 0; i < 5; i++) { const x = i % 2 ? 16 : -16, z = -296 - i * 26; deco({ kind: 'lamp', x, z }) }
+   465→   465→  for (let i = 0; i < 4; i++) deco({ kind: 'hoarding', x: i % 2 ? 15 : -15, z: -316 - i * 24, ry: i % 2 ? -0.4 : 0.4, sign: ['VOTE RESPONSIBLY', 'HONK IF YOU LOVE FORMS', 'SPEED THRILLS BUT PAPERWORK KILLS', 'DEMOTE DAMAD, PROMOTE DEMOCRACY'][i] })
+   466→   466→  for (let i = 0; i < 10; i++) { const x = -18 + rnd() * 36, z = -294 - rnd() * 118; if (Math.abs(x) < 17) continue; if (inCrossRoad(z)) continue; deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.25 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined }) }
+   467→   467→
+   468→   468→  // Moving vehicles (server + client simulate identically: deterministic polyline
+   469→   469→  // ping-pong from shared world time). v37 — routes ROAM: multi-leg paths turn
+   470→   470→  // through junctions and loop around blocks instead of straight left-right shuttles.
+   471→   471→  // Road-network facts this table must respect (see CROSS_ROADS + world.ts):
+   472→   472→  //  - main avenue asphalt x -8.5..8.5 (widening x ±19 in zone D, z -275..-425)
+   473→   473→  //  - cross roads A z=-78 (halfW 4.8), B z=-198 (5), C z=-286 (4), D z=-452 (5),
+   474→   474→  //    each paved the full map width (x ±114)
+   475→   475→  //  - checkpoint gates flank cross roads A and B at x ±8.5 → vehicles on those
+   476→   476→  //    cross roads keep |x| >= 14 and never enter the gate span
+   477→   477→  //  - zone D clutter: barrier rows z -302/-342 (gaps only 11.6 < |x| < 14),
+   478→   478→  //    crates z -344/-366, flyover x 6..18 z -356..-392 → the zone-D loop keeps to
+   479→   479→  //    the clear north half (z -308..-347), lanes x ±12.8 through the roadworks gap
+   480→   480→  //  - boss gate blocks the avenue at z -478 (x -10..10) → car4's grand-avenue
+   481→   481→  //    leg turns around at z -470 on the Parliament Plaza approach
+   482→   482→  vehicles.push(
+   483→   483→    // zone-D block loop — the auto circles the north half of the widened avenue
+   484→   484→    // (east side south of z -356 is blocked by the flyover ramp, x 6..18)
+   485→   485→    { id: 'veh_auto1', kind: 'auto', speed: 7.2, path: [[-12.8, -308], [12.8, -308], [12.8, -347], [-12.8, -347]] },
+   486→   486→    // Avenue Cross Road (C, no gate) — full-map crossers through the junction:
+   487→   487→    // car westbound north lane, auto centre lane, bike eastbound south lane
+   488→   488→    { id: 'veh_auto2', kind: 'auto', speed: 6.5, path: [[-100, -286], [100, -286]] },
+   489→   489→    { id: 'veh_auto3', kind: 'auto', speed: 6, path: [[-16, -455.2], [-100, -455.2]] },
+   490→   490→    { id: 'veh_bus1', kind: 'bus', speed: 6, path: [[0, -300], [0, -415]] },
+   491→   491→    { id: 'veh_cow1', kind: 'cow', speed: 1.2, path: [[-10, -330], [10, -395]] },
+   492→   492→    // cross streets A + B carry checkpoint gate pillars at x ±8.5 — roamers stay
+   493→   493→    // on their own half (|x| >= 14) and never clip the gates
+   494→   494→    { id: 'veh_auto4', kind: 'auto', speed: 6, path: [[-96, -198], [-14, -198]] },
+   495→   495→    { id: 'veh_auto6', kind: 'auto', speed: 6.4, path: [[14, -198], [96, -198]] },
+   496→   496→    { id: 'veh_auto5', kind: 'auto', speed: 6.2, path: [[-100, -78], [-14, -78]] },
+   497→   497→    { id: 'veh_auto7', kind: 'auto', speed: 6, path: [[14, -78], [96, -78]] },
+   498→   498→    // Colony Cross Road (D, no gate) — the bus crosses the WHOLE map, the car
+   499→   499→    // turns off the junction and roams down the grand avenue (U-turn before the
+   500→   500→    // boss gate at z -478)
+   501→   501→    { id: 'veh_bus2', kind: 'bus', speed: 5.5, path: [[-100, -452], [100, -452]] },
+   502→   502→    { id: 'veh_cow2', kind: 'cow', speed: 1.1, path: [[-96, -44], [-52, -58]] },
+   503→   503→    { id: 'veh_car1', kind: 'car', speed: 10.5, path: [[-88, -79.0], [-16, -79.0]] },    // Plaza Cross Rd westbound (lane north of the row-A shopfront corner)
+   504→   504→    { id: 'veh_car2', kind: 'car', speed: 9.5, path: [[16, -195.5], [94, -195.5]] },     // Market Exit eastbound
+   505→   505→    { id: 'veh_car3', kind: 'car', speed: 9, path: [[-100, -283.5], [100, -283.5]] },    // Avenue Cross Rd westbound — full map
+   506→   506→    { id: 'veh_car4', kind: 'car', speed: 8.6, path: [[-88, -449.4], [-4, -449.4], [-4, -470]] }, // Colony Rd → grand avenue, 90° turn at the junction
+   507→   507→    { id: 'veh_bike1', kind: 'bike', speed: 8.5, path: [[16, -75.5], [92, -75.5]] },     // Plaza Cross Rd eastbound
+   508→   508→    { id: 'veh_bike2', kind: 'bike', speed: 9, path: [[-92, -200.5], [-16, -200.5]] },   // Market Exit westbound
+   509→   509→    { id: 'veh_bike3', kind: 'bike', speed: 8.2, path: [[-100, -288.5], [100, -288.5]] }, // Avenue Cross Rd eastbound — full map
+   510→   510→    { id: 'veh_bike4', kind: 'bike', speed: 7.6, path: [[16, -455.2], [92, -455.2]] },   // Colony Cross Rd eastbound
+   511→   511→  )
+   512→   512→
+   513→   513→  // Street trees lining the avenue sidewalks (zones B+C) — every spot verified
+   514→   514→  // clear of all decos/colliders/gates via tests/tree-spot-check.ts
+   515→   515→  const STREET_TREES: Array<[number, number]> = [
+   516→   516→    [11.5, -100], [11.5, -140], [11.5, -164], [11.5, -226], [11.5, -262],
+   517→   517→    [-11.5, -132], [-11.5, -158], [-11.5, -178], [-11.5, -210], [-11.5, -240], [-11.5, -268],
+   518→   518→  ]
+   519→   519→  STREET_TREES.forEach(([x, z], i) => {
+   520→   520→    deco({ kind: 'tree', x, z, s: 1 + (i % 3) * 0.15, variant: i % 2 })
+   521→   521→    box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+   522→   522→  })
+   523→   523→
+   524→   524→  items.push(
+   525→   525→    { id: 'D_tok_1', type: 'token', x: 12, y: 5.9, z: -374 },   // on flyover deck
+   526→   526→    { id: 'D_tok_2', type: 'token', x: -34, y: 1, z: -318 },
+   527→   527→    { id: 'D_tok_3', type: 'token', x: -6, y: 1, z: -352 },
+   528→   528→    { id: 'D_tok_4', type: 'token', x: 33, y: 1, z: -400 },
+   529→   529→    { id: 'D_chai_1', type: 'chai', x: -16, y: 1, z: -304 },
+   530→   530→    { id: 'D_chai_2', type: 'chai', x: 12, y: 5.9, z: -376 },
+   531→   531→    { id: 'D_bot_1', type: 'bottle', x: 4, y: 1, z: -310 },
+   532→   532→    { id: 'D_bot_2', type: 'bottle', x: -4, y: 1, z: -366 },
+   533→   533→    { id: 'D_snack_1', type: 'snack', x: 16, y: 5.9, z: -370 },
+   534→   534→    { id: 'D_aid_1', type: 'firstaid', x: -33, y: 1, z: -384 },
+   535→   535→    { id: 'D_foam_1', type: 'foam', x: 30, y: 1, z: -330 },
+   536→   536→    { id: 'D_joke_1', type: 'joke', x: -12, y: 1, z: -404 },
+   537→   537→    { id: 'D_aid_2', type: 'firstaid', x: 8, y: 1, z: -312 },
+   538→   538→    { id: 'D_snack_2', type: 'snack', x: -10, y: 1, z: -356 },
+   539→   539→    { id: 'D_chai_3', type: 'chai', x: 14, y: 1, z: -396 },
+   540→   540→  )
+   541→   541→
+   542→   542→  npcs.push(
+   543→   543→    { id: 'npcD1', type: 'police', x: -8, z: -298, patrol: [[-8, -298], [8, -300], [8, -312], [-8, -310]], zone: 3 },
+   544→   544→    { id: 'npcD2', type: 'police', x: 12, z: -316, patrol: [[12, -316], [-12, -318], [-14, -330], [14, -328]], zone: 3 },
+   545→   545→    { id: 'npcD3', type: 'security', x: 0, z: -340, patrol: [[0, -340], [-4, -356]], zone: 3 },
+   546→   546→    { id: 'npcD4', type: 'police', x: -14, z: -362, patrol: [[-14, -362], [14, -364], [14, -380], [-14, -378]], zone: 3 },
+   547→   547→    { id: 'npcD5', type: 'police', x: 6, z: -392, patrol: [[6, -392], [-6, -394], [-8, -408], [8, -410]], zone: 3 },
+   548→   548→  )
+   549→   549→
+   550→   550→  // ================= SIDE CITY — WEST, BAND 3 (z -290 .. -447) — APARTMENTS + NEEM PARK ==
+   551→   551→  {
+   552→   552→    landmarks.push({ name: 'Neem Park', x: -78, z: -360 })
+   553→   553→    // apartment row fronting the avenue margin
+   554→   554→    const aptX = [-104, -78, -52]
+   555→   555→    aptX.forEach((x, i) => {
+   556→   556→      const w = 14 + rnd() * 4, d = 10, h = 11 + i * 2
+   557→   557→      deco({ kind: 'building', x, z: -314, w, d, h, color: BUILDING_COLORS[(i + 3) % BUILDING_COLORS.length], variant: 2, sign: SHOP_NAMES[(i + 16) % SHOP_NAMES.length] })
+   558→   558→      box(x - w / 2, 0, -319, x + w / 2, h, -309)
+   559→   559→    })
+   560→   560→    for (let i = 0; i < 3; i++) deco({ kind: 'scooter', x: -108 + i * 26, z: -304, ry: rnd() * 6.28 })
+   561→   561→    // Neem Park — the green lung of the west city
+   562→   562→    for (let i = 0; i < 10; i++) {
+   563→   563→      const x = -110 + (i % 5) * 14 + rnd() * 5, z = -332 - Math.floor(i / 5) * 30 - rnd() * 10
+   564→   564→      deco({ kind: 'tree', x, z, s: 1 + rnd() * 0.6, variant: i % 2 })
+   565→   565→      box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+   566→   566→    }
+   567→   567→    for (let i = 0; i < 5; i++) deco({ kind: 'bench', x: -100 + i * 13, z: -348 - (i % 2) * 26, ry: rnd() * 3 })
+   568→   568→    for (let i = 0; i < 6; i++) deco({ kind: 'planter', x: -106 + i * 12, z: -340 + (i % 2) * 44 })
+   569→   569→    for (let i = 0; i < 6; i++) deco({ kind: 'crowd', x: -108 + i * 12 + rnd() * 5, z: -330 - rnd() * 70, ry: rnd() * 6.28, variant: (i + 1) % 6, sign: rnd() < 0.45 ? SIGN_TEXTS[(i * 4 + 2) % SIGN_TEXTS.length] : undefined })
+   570→   570→    deco({ kind: 'teaKettle', x: -58, z: -380, ry: -1 })
+   571→   571→    // homes row closing the block, facing Colony Cross Road
+   572→   572→    for (let k = 0; k < 6; k++) home(-108 + k * 11.4 + rnd(), -416, 6.6 + rnd(), 6.4, 3.4 + rnd() * 1.6, k % 2)
+   573→   573→    clothesline(-86, -422.6, 8)
+   574→   574→    items.push(
+   575→   575→      { id: 'S3_tok', type: 'token', x: -84, y: 1, z: -360 },
+   576→   576→      { id: 'S3_chai', type: 'chai', x: -100, y: 1, z: -304 },
+   577→   577→    )
+   578→   578→    npcs.push({ id: 'npcS4', type: 'police', x: -100, z: -344, patrol: [[-100, -344], [-56, -344], [-56, -392], [-100, -390]], zone: 3 })
+   579→   579→  }
+   580→   580→
+   581→   581→  // ================= SIDE CITY — EAST, BAND 3 (z -290 .. -447) — CITY DEPOT ===========
+   582→   582→  {
+   583→   583→    landmarks.push({ name: 'City Depot', x: 80, z: -330 })
+   584→   584→    const warehouses: [number, number, number, number][] = [[64, -314, 20, 8], [94, -316, 18, 7.5], [70, -344, 22, 9]]
+   585→   585→    warehouses.forEach(([x, z, w, h], i) => {
+   586→   586→      deco({ kind: 'building', x, z, w, d: 13, h, color: ['#8d9a8c', '#9a8d7a', '#8c8d9a'][i], variant: 1, sign: ['CITY TRANSPORT DEPOT', 'GODOWN No. 4 — LOADING ONLY', 'ZILLA WORKS & STORAGE'][i] })
+   587→   587→      box(x - w / 2, 0, z - 6.5, x + w / 2, h, z + 6.5)
+   588→   588→    })
+   589→   589→    // shipping-container stacks
+   590→   590→    for (let i = 0; i < 8; i++) {
+   591→   591→      const x = 48 + (i % 4) * 15 + rnd() * 3, z = -364 - Math.floor(i / 4) * 12
+   592→   592→      const s = 1.5 + rnd() * 0.3
+   593→   593→      deco({ kind: 'crate', x, z, ry: rnd() * 0.4, s })
+   594→   594→      box(x - 1.2 * s, 0, z - 1.2 * s, x + 1.2 * s, 2.6 * s, z + 1.2 * s)
+   595→   595→    }
+   596→   596→    // auto-stand scooter row + chai point
+   597→   597→    for (let i = 0; i < 5; i++) deco({ kind: 'scooter', x: 100, z: -306 - i * 4.4, ry: Math.PI / 2 + rnd() * 0.3 })
+   598→   598→    deco({ kind: 'teaKettle', x: 58, z: -306, ry: Math.PI })
+   599→   599→    deco({ kind: 'stall', x: 92, z: -330, ry: -Math.PI / 2, variant: 2, sign: 'Depot Chai Point' })
+   600→   600→    box(90.3, 0, -331.7, 93.7, 2.4, -328.3)
+   601→   601→    for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 50 + i * 14 + rnd() * 4, z: -312 - rnd() * 60, ry: rnd() * 6.28, variant: (i + 3) % 6 })
+   602→   602→    // homes row facing the Colony Cross Road
+   603→   603→    for (let k = 0; k < 5; k++) home(52 + k * 12.2 + rnd(), -416, 6.5 + rnd(), 6.3, 3.3 + rnd() * 1.5, (k + 1) % 2)
+   604→   604→    items.push(
+   605→   605→      { id: 'S4_chai', type: 'chai', x: 60, y: 1, z: -310 },
+   606→   606→      { id: 'S4_snack', type: 'snack', x: 94, y: 1, z: -344 },
+   607→   607→      { id: 'S4_bot', type: 'bottle', x: 76, y: 1, z: -332 },
+   608→   608→      { id: 'S4_aid', type: 'firstaid', x: 66, y: 1, z: -330 },
+   609→   609→    )
+   610→   610→    npcs.push({ id: 'npcS5', type: 'police', x: 60, z: -312, patrol: [[60, -312], [104, -312], [104, -356], [60, -356]], zone: 3 })
+   611→   611→  }
+   612→   612→
+   613→   613→  // ================= ZONE E — GOVERNMENT DISTRICT (z -420 .. -572) =================
+   614→   614→  // Monumental buildings + grand avenue to boss arena
+   615→   615→  const monuments: [number, number, number][] = [[-30, -436, 14], [30, -436, 14], [-32, -466, 18], [32, -466, 18]]
+   616→   616→  monuments.forEach(([x, z, h]) => {
+   617→   617→    deco({ kind: 'monument', x, z, h, color: '#d8cfc0' })
+   618→   618→    box(x - 8, 0, z - 8, x + 8, h, z + 8)
+   619→   619→  })
+   620→   620→  // Flag poles + gardens (shifted clear of the Colony Cross Road at z -452)
+   621→   621→  for (let i = 0; i < 6; i++) { deco({ kind: 'flagpole', x: i % 2 ? -12 : 12, z: -424 - Math.floor(i / 2) * 10, variant: i % 3 }) }
+   622→   622→  for (let i = 0; i < 8; i++) { const x = i % 2 ? -20 - rnd() * 8 : 20 + rnd() * 8, z = -428 - i * 5; if (inCrossRoad(z)) continue; deco({ kind: 'planter', x, z }) }
+   623→   623→  for (let i = 0; i < 12; i++) { const x = -26 + rnd() * 52, z = -424 - rnd() * 46; if (Math.abs(x) < 10) continue; if (inCrossRoad(z)) continue; deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.5 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined }) }
+   624→   624→  for (let i = 0; i < 4; i++) { const x = i % 2 ? -14 : 14, z = -430 - i * 8; if (inCrossRoad(z)) continue; deco({ kind: 'lamp', x, z }) }
+   625→   625→  // Grand Parliament building backdrop
+   626→   626→  deco({ kind: 'monument', x: 0, z: -566, h: 26, w: 70, d: 26, color: '#e2d8c3', sign: 'SANSAD SABHA (FICTIONAL)' })
+   627→   627→  box(-35, 0, -580, 35, 26, -552)
+   628→   628→  landmarks.push({ name: 'Parliament Plaza', x: 0, z: -520 })
+   629→   629→
+   630→   630→  // Boss gate (removed when tokens >= TOKENS_NEEDED) — renderer draws energy barrier
+   631→   631→  box(-10, 0, -479.2, 10, 7, -477.2)
+   632→   632→  deco({ kind: 'barrier', x: 0, z: -478.2, w: 20, d: 2 })
+   633→   633→
+   634→   634→  items.push(
+   635→   635→    { id: 'E_tok_1', type: 'token', x: -20, y: 1, z: -430 },
+   636→   636→    { id: 'E_tok_2', type: 'token', x: 21, y: 1, z: -448 },
+   637→   637→    { id: 'E_chai_1', type: 'chai', x: -14, y: 1, z: -440 },
+   638→   638→    { id: 'E_chai_2', type: 'chai', x: 14, y: 1, z: -462 },
+   639→   639→    { id: 'E_bot_1', type: 'bottle', x: 8, y: 1, z: -430 },
+   640→   640→    { id: 'E_bot_2', type: 'bottle', x: -8, y: 1, z: -468 },
+   641→   641→    { id: 'E_aid_1', type: 'firstaid', x: -24, y: 1, z: -470 },
+   642→   642→    { id: 'E_snack_1', type: 'snack', x: 24, y: 1, z: -426 },
+   643→   643→    { id: 'E_foam_1', type: 'foam', x: 18, y: 1, z: -470 },
+   644→   644→    { id: 'E_aid_2', type: 'firstaid', x: 12, y: 1, z: -446 },
+   645→   645→    { id: 'E_snack_2', type: 'snack', x: -8, y: 1, z: -420 },
+   646→   646→    { id: 'E_joke_2', type: 'joke', x: 18, y: 1, z: -440 },
+   647→   647→  )
+   648→   648→
+   649→   649→  npcs.push(
+   650→   650→    { id: 'npcE1', type: 'police', x: -8, z: -428, patrol: [[-8, -428], [8, -430], [8, -442], [-8, -440]], zone: 4 },
+   651→   651→    { id: 'npcE2', type: 'police', x: 10, z: -452, patrol: [[10, -452], [-10, -454], [-12, -466], [12, -468]], zone: 4 },
+   652→   652→    { id: 'npcE3', type: 'guard', x: -14, z: -486, patrol: [[-14, -486], [-14, -496]], zone: 4 },
+   653→   653→    { id: 'npcE4', type: 'guard', x: 14, z: -486, patrol: [[14, -486], [14, -496]], zone: 4 },
+   654→   654→    { id: 'npcE5', type: 'police', x: -20, z: -500, patrol: [[-20, -500], [-20, -520], [-8, -522]], zone: 4 },
+   655→   655→    { id: 'npcE6', type: 'police', x: 20, z: -500, patrol: [[20, -500], [20, -520], [8, -522]], zone: 4 },
+   656→   656→  )
+   657→   657→  searchlights.push({ id: 'slE1', x: -18, z: -482, ry: 0.9, speed: 0.5 }, { id: 'slE2', x: 18, z: -482, ry: Math.PI - 0.9, speed: -0.5 })
+   658→   658→
+   659→   659→  // ================= SIDE CITY — WEST, BAND 4 (z -457 .. -568) — GOVT QUARTERS ========
+   660→   660→  {
+   661→   661→    // bungalow rows on tree-lined plots
+   662→   662→    for (let k = 0; k < 5; k++) home(-108 + k * 15 + rnd(), -470, 9, 8, 3.8, 1)
+   663→   663→    for (let k = 0; k < 4; k++) home(-104 + k * 16 + rnd(), -488, 9, 8, 3.6, 1)
+   664→   664→    // plot walls with street gaps
+   665→   665→    wall(-114, -462, -114, -500, 1.2)
+   666→   666→    wall(-42, -462, -42, -478, 1.2); wall(-42, -484, -42, -500, 1.2)
+   667→   667→    for (let i = 0; i < 6; i++) {
+   668→   668→      const x = -110 + i * 14 + rnd() * 4, z = -508 - rnd() * 40
+   669→   669→      deco({ kind: 'tree', x, z, s: 1 + rnd() * 0.5, variant: i % 2 })
+   670→   670→      box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+   671→   671→    }
+   672→   672→    for (let i = 0; i < 3; i++) deco({ kind: 'crowd', x: -100 + i * 26 + rnd() * 6, z: -510 - rnd() * 30, ry: rnd() * 6.28, variant: i % 6 })
+   673→   673→    items.push({ id: 'S5_joke', type: 'joke', x: -64, y: 1, z: -500 })
+   674→   674→  }
+   675→   675→
+   676→   676→  // ================= SIDE CITY — EAST, BAND 4 (z -457 .. -568) — AZAD COLONY ==========
+   677→   677→  {
+   678→   678→    landmarks.push({ name: 'Azad Colony Park', x: 78, z: -486 })
+   679→   679→    // colony park with a small samarak (memorial)
+   680→   680→    deco({ kind: 'monument', x: 78, z: -486, h: 7, w: 5, d: 5, color: '#d8cfc0' })
+   681→   681→    box(75.5, 0, -488.5, 80.5, 7, -483.5)
+   682→   682→    for (let i = 0; i < 8; i++) {
+   683→   683→      const x = 48 + (i % 4) * 18 + rnd() * 5, z = -464 - Math.floor(i / 4) * 26 - rnd() * 8
+   684→   684→      deco({ kind: 'tree', x, z, s: 1 + rnd() * 0.5, variant: i % 2 })
+   685→   685→      box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+   686→   686→    }
+   687→   687→    for (let i = 0; i < 4; i++) deco({ kind: 'bench', x: 56 + i * 14, z: -476 - (i % 2) * 18, ry: rnd() * 3 })
+   688→   688→    for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 50 + i * 14 + rnd() * 5, z: -464 - rnd() * 40, ry: rnd() * 6.28, variant: (i + 4) % 6, sign: rnd() < 0.4 ? SIGN_TEXTS[(i * 5 + 3) % SIGN_TEXTS.length] : undefined })
+   689→   689→    // colony homes rows facing the park
+   690→   690→    for (let k = 0; k < 6; k++) home(50 + k * 11 + rnd(), -518, 6.5 + rnd(), 6.4, 3.3 + rnd() * 1.5, k % 2)
+   691→   691→    for (let k = 0; k < 6; k++) home(50 + k * 11 + rnd(), -532, 6.5 + rnd(), 6.2, 3.2 + rnd() * 1.6, (k + 2) % 3)
+   692→   692→    clothesline(72, -525.4, 8)
+   693→   693→    deco({ kind: 'lamp', x: 72, z: -510, ry: Math.PI / 2 })
+   694→   694→    items.push(
+   695→   695→      { id: 'S5_tok', type: 'token', x: 54, y: 1, z: -539 },     // behind the colony homes
+   696→   696→      { id: 'S5_aid', type: 'firstaid', x: 90, y: 1, z: -474 },
+   697→   697→      { id: 'S5_chai', type: 'chai', x: 86, y: 1, z: -480 },
+   698→   698→    )
+   699→   699→    npcs.push({ id: 'npcS6', type: 'police', x: 56, z: -464, patrol: [[56, -464], [104, -464], [104, -506], [56, -506]], zone: 4 })
+   700→   700→  }
+   701→   701→
+   702→   702→  // Boss arena (center z=-520)
+   703→   703→  landmarks.push({ name: 'BOSS: Vote Collector', x: 0, z: -520 })
+   704→   704→
+   705→   705→  return {
+   706→   706→    bounds: { minX: -120, maxX: 120, minZ: -572, maxZ: 10 },
+   707→   707→    spawn: { x: 0, z: -8 },
+   708→   708→    zones: [
+   709→   709→      { name: 'Protest Plaza', hint: 'Practice here. The cross road south leads to the old galis.', zStart: 4, zEnd: -80 },
+   710→   710→      { name: 'Chowk Market', hint: 'Dense stalls. Purani Gali west + Naya Bazaar east hide loot.', zStart: -80, zEnd: -200 },
+   711→   711→      { name: 'Security Checkpoint', hint: 'Fences span the whole city now. No walking around.', zStart: -200, zEnd: -280 },
+   712→   712→      { name: 'Grand Avenue', hint: 'Mind the traffic! Neem Park west, City Depot east.', zStart: -280, zEnd: -420 },
+   713→   713→      { name: 'Government District', hint: 'The Vote Collector awaits beyond the gate.', zStart: -420, zEnd: -572 },
+   714→   714→    ],
+   715→   715→    crossRoads: CROSS_ROADS,
+   716→   716→    colliders, decorations, items, npcs, checkpoints: [
+   717→   717→      { id: 1, name: 'Plaza Gate', x: 0, z: -78, radius: 6, detention: { x: 10, z: -70 } },
+   718→   718→      { id: 2, name: 'Market Exit', x: 0, z: -198, radius: 6, detention: { x: 12, z: -190 } },
+   719→   719→      { id: 3, name: 'Security Gate', x: 0, z: -278, radius: 6, detention: { x: 10, z: -268 } },
+   720→   720→      { id: 4, name: 'Avenue Junction', x: 0, z: -418, radius: 6, detention: { x: 14, z: -408 } },
+   721→   721→    ],
+   722→   722→    searchlights, vehicles,
+   723→   723→    bossArena: { x: 0, z: -520, radius: 26, gateZ: -478 },
+   724→   724→    landmarks,
+   725→   725→  }
+   726→   726→}
+   727→   727→

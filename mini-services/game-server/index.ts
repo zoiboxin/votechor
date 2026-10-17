@@ -319,7 +319,7 @@ const socketRooms = new Map<string, string>()
 io.on('connection', (socket) => {
   console.log(`[conn] ${socket.id} connected`)
 
-  socket.on('game:join', (payload: { name?: unknown; archetype?: unknown; roomCode?: unknown; season?: unknown; cosmetics?: unknown } = {}) => {
+  socket.on('game:join', (payload: { name?: unknown; archetype?: unknown; roomCode?: unknown; season?: unknown; cosmetics?: unknown; role?: unknown } = {}) => {
     if (socketRooms.has(socket.id)) return // already joined
     if (totalPlayers() >= PLAYER_CAP) {
       socket.emit('game:joined', { ok: false, error: 'Server full' })
@@ -353,7 +353,9 @@ io.on('connection', (socket) => {
     // wardrobe: sanitize once here — stored on the player, echoed on the join ack
     // (players list) and re-broadcast to incumbents via game:playerjoined.
     const cosmetics = sanitizeCosmetics(payload.cosmetics)
-    const player = room.addPlayer(socket.id, name, archetype, { cosmetics })
+    // chosen side: only 'police' is special — anything else fights for the protest
+    const role = payload.role === 'police' ? 'police' as const : 'protector' as const
+    const player = room.addPlayer(socket.id, name, archetype, { cosmetics, role })
 
     if (wantsSeason) {
       // One bot steps aside, bots top back up to SEASON_CAP — all BEFORE the ack
@@ -378,8 +380,8 @@ io.on('connection', (socket) => {
       matchStartedAt: room.matchStartedAt,
       season: seasonInfo ?? null,
     })
-    socket.to(room.id).emit('game:playerjoined', socket.id, player.name, player.archetype, player.cosmetics ?? undefined)
-    console.log(`[join] ${player.name}(${socket.id}) → ${room.id} (${room.size}/${ROOM_CAP})`)
+    socket.to(room.id).emit('game:playerjoined', socket.id, player.name, player.archetype, player.cosmetics ?? undefined, player.role)
+    console.log(`[join] ${player.name}(${socket.id}) → ${room.id} (${room.size}/${ROOM_CAP})${role === 'police' ? ' [POLICE]' : ''}`)
   })
 
   socket.on('game:state', (s: Record<string, unknown> = {}) => {
@@ -399,6 +401,28 @@ io.on('connection', (socket) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined
     room?.confiscateInventory(socket.id, data.items)
+  })
+
+  // Player-initiated ground drop (dropped inventory item / thrown item landing).
+  // Room validates + registers + relays game:dropped to the whole room.
+  socket.on('game:dropItem', (data: { type?: unknown; x?: unknown; z?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    room?.dropItem(socket.id, data.type, data.x, data.z)
+  })
+
+  // Police-role arrest: cuff the nearest suspect — room validates role/range/cooldown
+  socket.on('game:arrest', (data: { targetId?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    room?.arrest(socket.id, data.targetId, Date.now())
+  })
+
+  // Police-role baton strike (F): lathi-hit a protester — room validates role/range/cooldown
+  socket.on('game:policeHit', (data: { targetId?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    room?.strike(socket.id, data.targetId, Date.now())
   })
 
   socket.on('game:throw', (data: Record<string, unknown> = {}) => {
@@ -442,6 +466,44 @@ io.on('connection', (socket) => {
     const msgId = Number(data.msgId)
     if (!Number.isInteger(msgId) || msgId < 0 || msgId > 9) return
     io.to(room.id).emit('game:quickmsg', socket.id, msgId)
+  })
+
+  // v44 — free-text chat: sanitize, rate-limit (own bucket, 5/s like emotes),
+  // relay to the whole room with the sender's id + name so clients can bubble it.
+  socket.on('game:chat', (data: { text?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    const p = room?.getPlayer(socket.id)
+    if (!room || !p) return
+    if (!room.rateLimit(p, 'chatTimes')) return
+    const text = String(data.text ?? '')
+      // strip control characters, collapse whitespace, hard-cap at 90 chars
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 90)
+    if (!text) return
+    io.to(room.id).emit('game:chat', socket.id, p.name, text)
+  })
+
+  socket.on('game:shout', (data: { x?: unknown; z?: unknown; whistle?: unknown; line?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    const p = room?.getPlayer(socket.id)
+    if (!room || !p) return
+    if (!room.rateLimit(p, 'noiseTimes')) return
+    // clamped world coords (the city spans roughly −600..600 on both axes)
+    const x = Number(data.x)
+    const z = Number(data.z)
+    const line = String(data.line ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 48)
+    io.to(room.id).emit('game:shout', socket.id,
+      Number.isFinite(x) ? Math.max(-600, Math.min(600, x)) : 0,
+      Number.isFinite(z) ? Math.max(-600, Math.min(600, z)) : 0,
+      Boolean(data.whistle), line)
   })
 
   socket.on('game:revive', (data: { targetId?: unknown } = {}) => {

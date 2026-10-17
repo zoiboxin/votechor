@@ -1,4 +1,6 @@
 // VoteChor input manager — keyboard, mouse (pointer lock), and touch state.
+import { DEFAULT_KEYBINDS } from '@/lib/game-store'
+
 export interface InputState {
   forward: number // -1..1
   strafe: number  // -1..1
@@ -10,12 +12,15 @@ export interface InputState {
   lookDy: number
 }
 
-type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem' | 'gift' | 'shout' | 'heal'
+type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem' | 'gift' | 'shout' | 'heal' | 'strike'
 
 export class InputManager {
   state: InputState = { forward: 0, strafe: 0, jump: false, sprint: false, slide: false, interact: false, lookDx: 0, lookDy: 0 }
   keys = new Set<string>()
-  keybinds: Record<string, string> = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF', heal: 'KeyH', shout: 'KeyV' }
+  // canonical defaults from the store (v34) — this private copy previously drifted
+  // from the settings panel's copy; game.ts overwrites it with the live settings
+  // keybinds at match boot anyway, so only the shared constant keeps them in sync
+  keybinds: Record<string, string> = { ...DEFAULT_KEYBINDS }
   enabled = false
   /** While true (map/big overlay open) movement output is zeroed but keys + one-shots keep working. */
   suppressed = false
@@ -58,6 +63,13 @@ export class InputManager {
 
   private onKey(e: KeyboardEvent, down: boolean) {
     if (!this.enabled) return
+    // v44 — typing in a chat/menu input must never drive the character: the game
+    // listeners are window-capture, so WASD/Space in the T comms box would move,
+    // jump and throw. INPUT/TEXTAREA/contentEditable targets are ignored wholesale
+    // (return WITHOUT preventDefault/stopPropagation — the keystroke must still
+    // reach the input and type normally).
+    const t = e.target as (HTMLElement & { isContentEditable?: boolean }) | null
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable === true)) return
     // Normalize: some environments (automation, IMEs) send empty `code`
     const code = normalizeKeyCode(e)
     // Prevent browser scrolling etc for game keys

@@ -47,6 +47,7 @@ export async function GET(req: Request) {
       itemsCollected: row.totalItems,
       bossHits: Math.round(agg._sum.bossContribution ?? 0),
       detentions: row.detentions,
+      arrests: row.arrests,
       bossKills: row.bossKills,
       bestPosition: row.bestPosition,
       totalXp: row.totalXp,

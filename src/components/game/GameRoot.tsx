@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useGameStore, type Profile } from '@/lib/game-store'
-import { Loader2, Vote } from 'lucide-react'
+import { VC_BUILD } from '@/lib/build-version'
+import { AlertTriangle, Loader2, RefreshCw, Vote } from 'lucide-react'
 import { motion } from 'framer-motion'
 import MainMenu from './MainMenu'
 import Hud from './Hud'
@@ -80,6 +81,37 @@ export default function GameRoot() {
   const minimapBufferRef = useRef<HTMLCanvasElement>(null)
   const uiMode = useGameStore((s) => s.uiMode)
   const photoMode = useGameStore((s) => s.photoMode)
+  const fatalError = useGameStore((s) => s.fatalError)
+  // v46 — the touch HUD unmounts while ANY in-match overlay is open (chat, big
+  // map, emote wheel, squad manager): the modal gets the whole screen, and the
+  // unmount cleanup releases held joystick/sprint/interact flags so the engine
+  // never keeps driving the player underneath a modal.
+  const touchBlocked = useGameStore((s) => s.chatOpen || s.mapOpen || s.emoteWheelOpen || s.squadOpen)
+  // ---- stale-build detection: the recurring "blue world" report kept verifying
+  // green in QA while the user still saw the old bug — a stale tab running
+  // pre-fix code is the prime suspect. The server's /api/version reflects the
+  // CURRENT code; if it disagrees with the constant compiled into THIS bundle,
+  // this tab is old → show a loud, un-missable refresh banner.
+  const [staleV, setStaleV] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const check = async () => {
+      try {
+        const r = await fetch('/api/version', { cache: 'no-store' })
+        if (!r.ok) return
+        const d = (await r.json()) as { v?: string }
+        if (alive && d.v && d.v !== VC_BUILD) {
+          setStaleV(d.v)
+          const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+          ;(w.__vcDiag ??= []).push({ kind: 'staleBuild', client: VC_BUILD, server: d.v, t: Date.now() })
+        }
+      } catch { /* version probe is best-effort (offline play must keep working) */ }
+    }
+    void check()
+    const iv = setInterval(check, 60_000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [])
 
   useEffect(() => {
     const st = useGameStore.getState()
@@ -87,7 +119,38 @@ export default function GameRoot() {
     // ---- hydrate persisted settings BEFORE engine boot ----
     try {
       const rawSettings = localStorage.getItem('votechor_settings')
-      if (rawSettings) st.setSettings(JSON.parse(rawSettings))
+      if (rawSettings) {
+        const parsed = JSON.parse(rawSettings) as Record<string, unknown>
+        // ONE-TIME v31 MIGRATION — builds ≤ v30 shipped distanceCulling ON and it got
+        // persisted. The affected device renders a blue world with those visibility
+        // optimizations active but renders fine on the pre-culler v25 path (user-
+        // verified via version history). Strip the saved preference exactly once so
+        // the new safe default (OFF) applies; after this runs, an explicit opt-in
+        // from Options is respected forever.
+        if (!localStorage.getItem('votechor_cull_migrated')) {
+          try {
+            localStorage.setItem('votechor_cull_migrated', '1')
+            delete parsed.distanceCulling
+            // rewrite the stored copy too — otherwise the next load (marker present)
+            // would re-apply the old saved `true` and undo the migration
+            localStorage.setItem('votechor_settings', JSON.stringify(parsed))
+          } catch { /* private browsing */ }
+        }
+        // ONE-TIME v33 MIGRATION — builds ≤ v32 shipped hiFiModel ON: the generic
+        // GLB body replaced the procedural rig in-game, so the entire wardrobe
+        // (hat / hair / face / build / outfit / footwear / gear / held) silently
+        // vanished — "I customized my character but it doesn't show in the game".
+        // Strip the saved preference once so the customized Classic rig becomes
+        // the default; an explicit opt-in from Options is respected forever.
+        if (!localStorage.getItem('votechor_hifi_migrated')) {
+          try {
+            localStorage.setItem('votechor_hifi_migrated', '1')
+            delete parsed.hiFiModel
+            localStorage.setItem('votechor_settings', JSON.stringify(parsed))
+          } catch { /* private browsing */ }
+        }
+        st.setSettings(parsed)
+      }
     } catch {
       /* corrupt settings are ignored, defaults win */
     }
@@ -171,10 +234,21 @@ export default function GameRoot() {
     // ---- dynamic engine boot (keeps three.js out of the UI bundle) ----
     if (!engineBooted) {
       engineBooted = true
-      void import('@/game/game').then(({ getGame }) => {
+      // every failure path lands in a VISIBLE fatal card — never a silent dead canvas
+      import('@/game/game').then(({ getGame }) => {
         const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null
         const buffer = minimapBufferRef.current
-        if (canvas && buffer) void getGame().boot(canvas, buffer)
+        if (canvas && buffer) {
+          getGame().boot(canvas, buffer).catch((e) => {
+            useGameStore.getState().setFatalError(
+              `Engine boot failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200),
+            )
+          })
+        }
+      }).catch((e) => {
+        useGameStore.getState().setFatalError(
+          `Game code failed to load: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200),
+        )
       })
     }
   }, [])
@@ -238,7 +312,7 @@ export default function GameRoot() {
           <EmoteWheel />
           <QuickMessages />
           <ReconnectOverlay />
-          {uiMode === 'playing' && <TouchControls />}
+          {uiMode === 'playing' && !touchBlocked && <TouchControls />}
         </>
       )}
 
@@ -251,6 +325,54 @@ export default function GameRoot() {
       <NotificationStack />
       {/* Interactive squad-invite flyer (multiplay matches + menus, dismisses itself) */}
       <InviteToast />
+
+      {/* ---- stale-build banner: THIS tab is running older code than the server.
+           Every silent rendering fix shipped recently requires the new bundle —
+           make refresh a one-tap action instead of a debugging session. ---- */}
+      {staleV && !fatalError && (
+        <button
+          onClick={() => location.reload()}
+          className="fixed inset-x-0 top-0 z-[95] flex items-center justify-center gap-2 border-b-2 border-[#1c1a17] bg-[#f2a541] px-3 py-2 text-left text-[11px] font-black uppercase tracking-wide text-[#1c1a17] shadow-[0_4px_0_rgba(28,26,23,0.35)] sm:text-xs"
+        >
+          <RefreshCw className="h-4 w-4 shrink-0" />
+          <span>
+            New version available ({VC_BUILD} → {staleV}) — tap to refresh &amp; fix rendering bugs
+          </span>
+        </button>
+      )}
+
+      {/* ---- fatal boot-error card: the engine could not start on this device.
+            This replaces what used to be a silent dead canvas / mysterious
+            "everything looks blue" screen with an actionable report. ---- */}
+      {fatalError && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-[#f5efdc]/97 p-5">
+          <div className="vc-paper w-full max-w-md rounded-2xl border-2 border-[#1c1a17]/80 p-5 shadow-[6px_6px_0_#1c1a17] sm:p-6">
+            <div className="mb-3 flex items-center gap-2.5">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border-2 border-[#1c1a17]/70 bg-[#8c1f28] text-[#f5efdc]">
+                <AlertTriangle className="h-5 w-5" strokeWidth={2.4} />
+              </span>
+              <h2 className="text-base font-black uppercase leading-tight tracking-tight text-[#1c1a17] sm:text-lg">
+                3D engine failed to start
+              </h2>
+            </div>
+            <p className="mb-2 text-sm font-semibold text-[#1c1a17]/80">
+              The graphics engine could not start on this device. This card replaces the silent blue screen this failure used to cause.
+            </p>
+            <p className="mb-4 break-words rounded-lg border border-[#8c1f28]/30 bg-[#8c1f28]/10 p-2.5 font-mono text-xs leading-relaxed text-[#8c1f28]">
+              {fatalError}
+            </p>
+            <button
+              onClick={() => { useGameStore.getState().setFatalError(null); location.reload() }}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-[#1c1a17]/80 bg-[#2e6e4e] px-4 py-3 text-sm font-black uppercase tracking-tight text-[#f5efdc] shadow-[4px_4px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:bg-[#3a8560] active:translate-x-[1px] active:translate-y-[1px] active:shadow-[2px_2px_0_#1c1a17]"
+            >
+              <RefreshCw className="h-4 w-4" strokeWidth={2.4} /> Reload game
+            </button>
+            <p className="mt-3 text-[11px] font-semibold leading-relaxed text-[#1c1a17]/60">
+              If this keeps happening: update your browser, enable hardware acceleration in browser settings, or try Chrome / Safari / Edge.
+            </p>
+          </div>
+        </div>
+      )}
     </>
   )
 }

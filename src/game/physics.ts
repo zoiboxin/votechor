@@ -67,6 +67,13 @@ export class PhysicsWorld {
    * Move actor with axis-separated collision + step-up + sprint vault.
    * Returns collision flags. `vaulted` is set when a sprinting, grounded actor
    * mantled onto a low obstacle (top between stepHeight and 1.18m above the feet).
+   *
+   * v47 — the horizontal phases are SUBSTEPPED (≤0.25m per sub-step). Each
+   * sub-step tests only its ENDPOINT, so a single fast step (sprint 9.2 m/s at the
+   * 0.1s dt clamp = 0.92 m) used to skip straight over any collider thinner than
+   * ~0.9 m — hitch frames literally walked the player through barriers, scooters
+   * and stall edges. Substepping bounds every sweep to 0.25 m + 2r ≈ 0.95 m of
+   * guaranteed detection while costing extra queries only on hitch frames.
    */
   moveActor(
     pos: { x: number; y: number; z: number },
@@ -77,42 +84,54 @@ export class PhysicsWorld {
   ): { grounded: boolean; hitWall: boolean; groundY: number; landed: boolean; vaulted: boolean } {
     let hitWall = false
     let vaulted = false
-    // --- horizontal X ---
-    const nx = pos.x + vel.x * dt
-    for (const c of this.nearby(nx, pos.z).concat(this.dynamic)) {
-      if (c.walkable) continue // walkable platforms are ground, not walls
-      if (this.hits(nx, pos.y, pos.z, r, h, c)) {
-        // step-up?
-        if (c.maxY - pos.y <= 0.62 && c.maxY - pos.y > -0.01) {
-          const g = this.groundHeight(nx, pos.z, c.maxY + 0.5)
-          if (g <= c.maxY + 0.01) { pos.y = g; continue }
+    // --- horizontal X (substepped) ---
+    const totalX = vel.x * dt
+    const stepsX = Math.max(1, Math.ceil(Math.abs(totalX) / 0.25))
+    const segX = totalX / stepsX
+    for (let i = 0; i < stepsX; i++) {
+      if (hitWall || vaulted) break
+      const nx = pos.x + segX
+      for (const c of this.nearby(nx, pos.z).concat(this.dynamic)) {
+        if (c.walkable) continue // walkable platforms are ground, not walls
+        if (this.hits(nx, pos.y, pos.z, r, h, c)) {
+          // step-up?
+          if (c.maxY - pos.y <= 0.62 && c.maxY - pos.y > -0.01) {
+            const g = this.groundHeight(nx, pos.z, c.maxY + 0.5)
+            if (g <= c.maxY + 0.01) { pos.y = g; continue }
+          }
+          // sprint vault/mantle — extends the 0.62 step-up to 1.18m (walk speed untouched)
+          if (this.tryVault(pos, vel, r, h, c, 'x')) { vaulted = true; break }
+          hitWall = true
+          pos.x = segX > 0 ? Math.min(pos.x, c.minX - r - 0.001) : Math.max(pos.x, c.maxX + r + 0.001)
+          break
         }
-        // sprint vault/mantle — extends the 0.62 step-up to 1.18m (walk speed untouched)
-        if (this.tryVault(pos, vel, r, h, c, 'x')) { vaulted = true; break }
-        hitWall = true
-        pos.x = vel.x > 0 ? Math.min(pos.x, c.minX - r - 0.001) : Math.max(pos.x, c.maxX + r + 0.001)
-        break
       }
+      if (!hitWall && !vaulted) pos.x = nx
     }
-    if (!hitWall && !vaulted) pos.x = nx
 
-    // --- horizontal Z ---
+    // --- horizontal Z (substepped) ---
     let hitWallZ = false
-    const nz = pos.z + vel.z * dt
-    for (const c of this.nearby(pos.x, nz).concat(this.dynamic)) {
-      if (c.walkable) continue
-      if (this.hits(pos.x, pos.y, nz, r, h, c)) {
-        if (c.maxY - pos.y <= 0.62 && c.maxY - pos.y > -0.01) {
-          const g = this.groundHeight(pos.x, nz, c.maxY + 0.5)
-          if (g <= c.maxY + 0.01) { pos.y = g; continue }
+    const totalZ = vel.z * dt
+    const stepsZ = Math.max(1, Math.ceil(Math.abs(totalZ) / 0.25))
+    const segZ = totalZ / stepsZ
+    for (let i = 0; i < stepsZ; i++) {
+      if (hitWallZ || vaulted) break
+      const nz = pos.z + segZ
+      for (const c of this.nearby(pos.x, nz).concat(this.dynamic)) {
+        if (c.walkable) continue
+        if (this.hits(pos.x, pos.y, nz, r, h, c)) {
+          if (c.maxY - pos.y <= 0.62 && c.maxY - pos.y > -0.01) {
+            const g = this.groundHeight(pos.x, nz, c.maxY + 0.5)
+            if (g <= c.maxY + 0.01) { pos.y = g; continue }
+          }
+          if (this.tryVault(pos, vel, r, h, c, 'z')) { vaulted = true; break }
+          hitWallZ = true
+          pos.z = segZ > 0 ? Math.min(pos.z, c.minZ - r - 0.001) : Math.max(pos.z, c.maxZ + r + 0.001)
+          break
         }
-        if (this.tryVault(pos, vel, r, h, c, 'z')) { vaulted = true; break }
-        hitWallZ = true
-        pos.z = vel.z > 0 ? Math.min(pos.z, c.minZ - r - 0.001) : Math.max(pos.z, c.maxZ + r + 0.001)
-        break
       }
+      if (!hitWallZ && !vaulted) pos.z = nz
     }
-    if (!hitWallZ && !vaulted) pos.z = nz
     if (hitWallZ) hitWall = true
 
     // --- vertical ---

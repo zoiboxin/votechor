@@ -2,6 +2,10 @@
 import * as THREE from 'three'
 import { CharacterRig } from './character'
 import { MOVE, DAMAGE, archetypeById } from './shared/constants'
+import { policeUniformColors } from '../lib/cosmetics'
+import { pickLoco, mapToAnimName } from './anim'
+import type { GLBAnimDriver, LocoState } from './anim'
+import type { GLBInstance } from './glb'
 import type { AnimName } from './shared/types'
 import type { PhysicsWorld } from './physics'
 
@@ -29,6 +33,12 @@ export class PlayerController {
   jumpsUsed = 0 // jumps consumed in the current airborne sequence
   coyoteTimer = 0 // grace window after leaving a ledge
   jumpBufTimer = 0 // early-press buffering window
+  // ---- animation state timers (drive land/recover states in the anim controller) ----
+  landTimer = 0 // landing absorb window (longer after hard falls)
+  recoverTimer = 0 // getup window after dazed/detained release
+  // ---- fall-out-of-world recovery ----
+  private lastSafe = { x: 0, z: 0 }
+  private lastSafeAt = 0
   private wasGrounded = true
   private footPhase = 0
   onFootstep: ((running: boolean) => void) | null = null
@@ -38,6 +48,13 @@ export class PlayerController {
   onVault: (() => void) | null = null
   onSlide: (() => void) | null = null
   onDazed: (() => void) | null = null
+  onFallRecover: (() => void) | null = null
+  /** Numeric-glitch sentinel fired when pos/vel stopped being finite (see applyInput). */
+  onNanRecover: ((reason?: 'nan' | 'bounds') => void) | null = null
+  // ---- High-Fi GLB rig (optional — procedural rig stays as the fallback) ----
+  glb: { inst: GLBInstance; driver: GLBAnimDriver } | null = null
+  /** Last resolved animation state, published to the network (works for BOTH backends). */
+  netAnim: AnimName = 'idle'
 
   // stamina costs (floor at 0 — never blocks walking; sprint/jump gating unchanged)
   private static JUMP_COST = 3
@@ -50,8 +67,13 @@ export class PlayerController {
     private physics: PhysicsWorld,
     opts?: {
       hat?: string; glasses?: boolean; signText?: string
-      face?: string; outfit?: string; footwear?: string; gear?: string; held?: string
+      face?: string; build?: string; outfit?: string; footwear?: string; gear?: string; held?: string
       cosmetics?: { skinTone?: string }
+      gender?: 'male' | 'female' // round 23: body silhouette + lips
+      hair?: string              // round 23: hair style slot
+      policeOutfit?: string      // round 23: POLICE_UNIFORMS key (police role only)
+      policeHat?: string         // round 23: 'peak' | 'beret' | 'turban' | 'helmet' | 'none'
+      npcType?: 'police' // police role: render the officer uniform + lathi instead of protest wear
     },
   ) {
     const arch = archetypeById(archetype)
@@ -61,10 +83,20 @@ export class PlayerController {
     this.stamina = this.maxStamina
     const colors = { ...arch.colors }
     if (opts?.cosmetics?.skinTone) colors.skin = opts.cosmetics.skinTone
+    // police role: officer uniform palette (round 23 — six dress styles) + lathi rig
+    if (opts?.npcType === 'police') {
+      const u = policeUniformColors(opts?.policeOutfit)
+      colors.shirt = u.shirt
+      colors.pants = u.pants
+      colors.accent = u.accent
+    }
     this.rig = new CharacterRig({
       archetype, name, colors,
       hat: opts?.hat, glasses: opts?.glasses, signText: opts?.signText,
-      face: opts?.face, outfit: opts?.outfit, footwear: opts?.footwear, gear: opts?.gear, held: opts?.held,
+      face: opts?.face, build: opts?.build, outfit: opts?.outfit, footwear: opts?.footwear, gear: opts?.gear, held: opts?.held,
+      gender: opts?.gender, hair: opts?.hair,
+      policeOutfit: opts?.policeOutfit, policeHat: opts?.policeHat,
+      npcType: opts?.npcType,
     })
     this.pos.set(spawn.x, 0, spawn.z)
     this.rig.group.position.copy(this.pos)
@@ -84,6 +116,46 @@ export class PlayerController {
     oneShot: 'jump' | 'slide' | null,
     speedBoostActive: boolean,
   ) {
+    // ---- numeric-glitch sentinel (self-healing) ----
+    // A single NaN in pos/vel permanently poisons the render: frustum culling with
+    // a NaN camera/origin hides every world mesh (player reports "everything looks
+    // blue" — only sky+fog remain), and it NEVER self-heals because every NaN
+    // comparison is false (the pos.y < -6 fall recovery can not fire). Whatever
+    // the upstream cause (a bad knockback, a rogue network value, a device glitch),
+    // the poisoned state must not survive a physics tick.
+    if (!Number.isFinite(this.pos.x + this.pos.y + this.pos.z + this.vel.x + this.vel.y + this.vel.z)) {
+      const sx = Number.isFinite(this.lastSafe.x) ? this.lastSafe.x : 0
+      const sz = Number.isFinite(this.lastSafe.z) ? this.lastSafe.z : -8
+      this.pos.set(sx, this.physics.groundHeight(sx, sz, 2), sz)
+      this.vel.set(0, 0, 0)
+      this.jumpsUsed = 0
+      this.coyoteTimer = 0
+      this.jumpBufTimer = 0
+      if (this.state === 'dazed') this.state = 'normal' // dazedTimer may be NaN too
+      this.onNanRecover?.('nan')
+    }
+
+    // ---- world-bounds leash (self-healing) ----
+    // A finite-but-absurd position (flung past the map edge by a physics edge
+    // case) does NOT trip the NaN sentinel above, yet leaves every static mesh
+    // beyond the 195 m cull radius — the same sky-only "blue world" report, but
+    // permanent while the player stays out there. The playable city is
+    // z (-580..20), |x| < 130; anything clearly outside is pulled back to the
+    // last safe spot (bounds-checked so a poisoned lastSafe can't become the
+    // rescue point) with velocity zeroed.
+    if (this.pos.z < -620 || this.pos.z > 60 || Math.abs(this.pos.x) > 150) {
+      const okSafe = Number.isFinite(this.lastSafe.x) && Number.isFinite(this.lastSafe.z) &&
+        this.lastSafe.z > -600 && this.lastSafe.z < 40 && Math.abs(this.lastSafe.x) < 140
+      const sx = okSafe ? this.lastSafe.x : 0
+      const sz = okSafe ? this.lastSafe.z : -8
+      this.pos.set(sx, this.physics.groundHeight(sx, sz, 2), sz)
+      this.vel.set(0, 0, 0)
+      this.jumpsUsed = 0
+      this.coyoteTimer = 0
+      this.jumpBufTimer = 0
+      this.onNanRecover?.('bounds')
+    }
+
     const arch = archetypeById(archetype)
     if (this.state === 'detained' || this.state === 'frozen') {
       this.vel.x = 0; this.vel.z = 0
@@ -99,12 +171,21 @@ export class PlayerController {
       }
     }
 
+    // animation impact timers tick down regardless of state
+    if (this.landTimer > 0) this.landTimer = Math.max(0, this.landTimer - dt)
+    if (this.recoverTimer > 0) this.recoverTimer = Math.max(0, this.recoverTimer - dt)
+
     const slideNow = this.state === 'sliding'
     if (slideNow) {
       this.slideTimer -= dt
       const decel = Math.exp(-MOVE.slideFriction * dt)
       this.vel.x *= decel; this.vel.z *= decel
-      if (this.slideTimer <= 0) this.state = 'normal'
+      if (this.slideTimer <= 0) {
+        this.state = 'normal'
+        // brief get-up window so the crouched slide pose rises smoothly instead
+        // of snapping upright (pickLoco plays 'recover' — a short crouch-rise)
+        this.recoverTimer = Math.max(this.recoverTimer, 0.14)
+      }
     } else if (this.state === 'normal') {
       // camera-relative wish direction
       const sin = Math.sin(camYaw), cos = Math.cos(camYaw)
@@ -114,6 +195,9 @@ export class PlayerController {
       const canSprint = input.sprint && this.stamina > 2 && wishLen > 0.1
       let speed = (canSprint ? MOVE.sprintSpeed : MOVE.walkSpeed) * arch.stats.speedMul
       if (speedBoostActive) speed *= 1.45
+      // landing/getup recovery — brief slow-out so impacts read on the body
+      if (this.landTimer > 0) speed *= 0.45
+      else if (this.recoverTimer > 0) speed *= 0.6
       if (wishLen > 0.01) {
         const tx = (wishX / wishLen) * speed
         const tz = (wishZ / wishLen) * speed
@@ -198,6 +282,12 @@ export class PlayerController {
       this.coyoteTimer = Math.max(0, this.coyoteTimer - dt)
     }
 
+    // landing: absorb anim window on every airborne→grounded transition (hard = longer)
+    if (this.grounded && !this.wasGrounded) {
+      const hard = res.landed
+      this.landTimer = Math.max(this.landTimer, hard ? 0.5 : 0.2)
+    }
+
     // hard landing damage
     if (res.landed && this.wasGrounded === false) {
       const fall = Math.abs(this.vel.y)
@@ -207,6 +297,22 @@ export class PlayerController {
       }
     }
     this.wasGrounded = this.grounded
+
+    // ---- fall-out-of-world recovery: never leave the player stuck under the map ----
+    if (this.pos.y < -6) {
+      this.teleport(this.lastSafe.x, this.lastSafe.z)
+      this.landTimer = 0.4
+      this.onFallRecover?.()
+    } else if (this.grounded && this.state === 'normal') {
+      // remember recent solid ground (0.4s cadence) as the fall-recovery point
+      // (finite-guarded — a poisoned position must never become the rescue point)
+      const now = performance.now()
+      if (now - this.lastSafeAt > 400 && Number.isFinite(this.pos.x) && Number.isFinite(this.pos.z) && this.pos.z > -580 && this.pos.z < 20 && Math.abs(this.pos.x) < 130) {
+        this.lastSafeAt = now
+        this.lastSafe.x = this.pos.x
+        this.lastSafe.z = this.pos.z
+      }
+    }
 
     // footsteps
     const hSpeed = Math.hypot(this.vel.x, this.vel.z)
@@ -265,6 +371,8 @@ export class PlayerController {
     this.health = Math.max(this.health, DAMAGE.dazedRecoverHealth)
     this.pos.set(x, this.physics.groundHeight(x, z, 2), z)
     this.vel.set(0, 0, 0)
+    this.recoverTimer = 0.8 // getup animation after being freed
+    this.lastSafe.x = x; this.lastSafe.z = z
   }
 
   teleport(x: number, z: number) {
@@ -272,19 +380,60 @@ export class PlayerController {
     this.vel.set(0, 0, 0)
   }
 
+  /** Attach the High-Fi GLB rig (hides the procedural body; both stay positioned). */
+  attachGlb(inst: GLBInstance, driver: GLBAnimDriver) {
+    this.glb = { inst, driver }
+    this.glb.driver.snap('idle')
+    this.rig.group.visible = false
+    inst.group.visible = true
+  }
+
+  /** Remove the GLB rig and fall back to the procedural body. */
+  detachGlb() {
+    if (!this.glb) return
+    this.glb.driver.dispose()
+    this.glb = null
+    this.rig.group.visible = true
+  }
+
   render(dt: number) {
-    let anim: AnimName = 'idle'
     const hSpeed = Math.hypot(this.vel.x, this.vel.z)
+    // ---- resolve the animation state via the shared state machine ----
+    let loco = pickLoco({
+      grounded: this.grounded,
+      vy: this.vel.y,
+      hSpeed,
+      sliding: this.state === 'sliding',
+      dazed: this.state === 'dazed',
+      detained: this.state === 'detained',
+      landTimer: this.landTimer,
+      recoverTimer: this.recoverTimer,
+      jumpsUsed: this.jumpsUsed,
+    })
+    // emote / forced one-shot override (celebrate, throw, heal, …)
     if (this.animOverride && this.animOverrideTimer > 0) {
-      anim = this.animOverride
+      // legacy AnimName overrides map onto the closest LocoState so BOTH
+      // backends stay safe ('dazed' → hit stagger, 'down' → detained hold)
+      const o = this.animOverride
+      loco = o === 'dazed' ? 'hit' : o === 'down' ? 'detained' : (o as LocoState)
       this.animOverrideTimer -= dt
-    } else if (this.state === 'dazed') anim = 'dazed'
-    else if (this.state === 'detained') anim = 'detained'
-    else if (this.state === 'sliding') anim = 'slide'
-    else if (!this.grounded) anim = 'jump'
-    else if (hSpeed > 6.4) anim = 'run'
-    else if (hSpeed > 0.6) anim = 'walk'
-    this.rig.update(dt, anim, hSpeed)
+    }
+    this.netAnim = mapToAnimName(loco)
+
+    if (this.glb) {
+      // High-Fi backend: keyframed clips with crossfade blending
+      this.glb.driver.play(loco, {
+        grounded: this.grounded, vy: this.vel.y, hSpeed,
+        sliding: this.state === 'sliding', dazed: this.state === 'dazed',
+        detained: this.state === 'detained', landTimer: this.landTimer,
+        recoverTimer: this.recoverTimer, jumpsUsed: this.jumpsUsed,
+      })
+      this.glb.driver.update(dt)
+      this.glb.inst.group.position.copy(this.pos)
+      this.glb.inst.group.rotation.y = this.ry
+    }
+    // procedural backend always updates (it holds the name tag + is the fallback)
+    this.rig.update(dt, this.netAnim, hSpeed)
     this.rig.group.position.copy(this.pos)
     this.rig.group.rotation.y = this.ry
   }

@@ -1,7 +1,9 @@
 // VoteChor NPC system (client) — renders server NPC states with interpolation.
 // Falls back to local simulation when offline (solo mode without server).
 import * as THREE from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { CharacterRig } from './character'
 import { createNpcStates, tickNpc, applyNoise, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
 import type { NpcNetState, NpcStateName, WorldDef, AABB } from './shared/types'
@@ -24,6 +26,9 @@ const NPC_COLORS: Record<string, { shirt: string; pants: string; skin: string; h
 }
 
 export class NpcSystem {
+  /** OPT-IN far-LOD (game.ts keys it to the performance-visibility setting). Default
+   *  false = every NPC rig always drawn — the proven v25 rendering path. */
+  farLod = false
   group = new THREE.Group()
   bubbles = new SpeechBubbleSystem()
   visuals: NpcVisual[] = []
@@ -100,13 +105,40 @@ export class NpcSystem {
       if (!v) continue
       v.prev = { ...v.target }
       v.target = { x: s.x, z: s.z, ry: s.ry }
+      // brain mirrors the latest server truth — minimapData(), nearestChaserDistance(),
+      // speech-bubble proximity and hit-feel knockback all read brain.x/z, which were
+      // silently stuck at world-def SPAWN positions in online mode (latent bug found
+      // while fixing the WANTED banner: distance checks compared against stale spawns)
+      v.brain.x = s.x
+      v.brain.z = s.z
+      v.brain.ry = s.ry
       v.brain.state = s.state
       v.brain.alert = s.alert
+      // chase target — lets nearestChaserDistance() tell "I am the quarry" from
+      // "some officer across town is chasing a bot" (WANTED banner correctness)
+      v.brain.targetId = s.target ?? null
     }
   }
 
   update(dt: number, alpha: number, t: number, px?: number, pz?: number) {
+    // ---- far LOD (OPT-IN via game.ts, keyed to the performance-visibility setting):
+    // NPC rigs beyond 70m are sub-pixel silhouettes in fog — hide the body and skip
+    // its pose update entirely (AI/minimaps/speech logic untouched: everything reads
+    // brain.x/z, and speech targets are always <34m away). A hidden rig saves ~25
+    // draw calls + a full procedural pose pass per NPC. Default OFF = the proven
+    // v25 rendering path where every rig is always drawn.
+    const LOD_DIST = 70
+    const lod = this.farLod && px !== undefined && pz !== undefined
     for (const v of this.visuals) {
+      if (lod) {
+        const far = Math.hypot(v.target.x - px, v.target.z - pz) > LOD_DIST
+        if (far) {
+          if (v.rig.group.visible) v.rig.group.visible = false
+          continue
+        } else if (!v.rig.group.visible) {
+          v.rig.group.visible = true
+        }
+      }
       // interpolate
       const x = v.prev.x + (v.target.x - v.prev.x) * alpha
       const z = v.prev.z + (v.target.z - v.prev.z) * alpha
@@ -152,22 +184,29 @@ export class NpcSystem {
     return this.visuals.map(v => ({ id: v.brain.id, x: v.brain.x, z: v.brain.z, chasing: v.brain.state === 'chase', state: v.brain.state }))
   }
 
-  nearestChaserDistance(px: number, pz: number): number {
+  /**
+   * Distance to the nearest officer ACTIVELY CHASING `targetId` (omit for "any chaser").
+   * Target-aware since round 25: a Season officer chasing a bot across town must not
+   * flash the WANTED banner on an unrelated player's screen.
+   */
+  nearestChaserDistance(px: number, pz: number, targetId?: string): number {
     let best = 1e9
     for (const v of this.visuals) {
-      if (v.brain.state === 'chase') {
-        const d = Math.hypot(v.brain.x - px, v.brain.z - pz)
-        if (d < best) best = d
-      }
+      if (v.brain.state !== 'chase') continue
+      if (targetId !== undefined && v.brain.targetId !== targetId) continue
+      const d = Math.hypot(v.brain.x - px, v.brain.z - pz)
+      if (d < best) best = d
     }
     return best
   }
 }
 
-// ---- vehicles (deterministic ping-pong; identical on server & client from shared world time) ----
-// 2-d visual overhaul: lowpoly poster-palette cars / city buses / auto-rickshaws / cows built from
-// primitives, static sub-boxes merged per material (few draw calls), shared geometry+material caches,
-// spinning (and steering, front axle) cylinder wheels, plus heading-agnostic solid AABBs for movement.
+// ---- vehicles (deterministic polyline ping-pong; identical on server & client from shared world time) ----
+// 2-d visual overhaul: poster-palette cars / city buses / auto-rickshaws / cows built from
+// primitives + extrusions, static sub-parts merged per material (few draw calls), shared
+// geometry+material caches, spinning (and steering, front axle) wheels, plus heading-agnostic
+// solid AABBs for movement. v37 — paths may have any number of waypoints; traversal walks the
+// polyline by arc length (turns at junctions, ping-pong at the ends).
 
 export interface VehicleWheel { pivot: THREE.Object3D; spin: THREE.Object3D; radius: number; steers: boolean }
 
@@ -176,6 +215,7 @@ export interface VehicleVisual {
   kind: string
   group: THREE.Group
   path: { x: number; z: number }[]
+  cum: number[]            // cumulative arc length from path[0] (cum[0] = 0)
   speed: number
   wheels: VehicleWheel[]   // empty for the cow
   prevHeading: number      // drive state for the steer-angle approximation
@@ -184,10 +224,21 @@ export interface VehicleVisual {
 
 /** (2-d contract) Solid half-extents + roof height per kind — heading-agnostic AABBs for getSolidAABBs(). */
 export const VEHICLE_SOLID_EXTENTS: Record<string, { hx: number; hz: number; maxY: number }> = {
-  car: { hx: 0.95, hz: 1.6, maxY: 1.45 },
+  car: { hx: 0.95, hz: 1.6, maxY: 1.55 },
   bus: { hx: 1.3, hz: 4.3, maxY: 2.7 },
   auto: { hx: 0.85, hz: 1.1, maxY: 1.75 }, // auto-rickshaw
+  bike: { hx: 0.4, hz: 1.05, maxY: 1.4 }, // motorcycle (v38 — mirrors now clear the roof line)
   cow: { hx: 0.7, hz: 1.25, maxY: 1.6 },
+}
+
+/** Per-kind player-collision ring + contact damage — client feel; the game-server
+ *  mirrors these numbers in its VEHICLE_RADIUS / VEHICLE_DAMAGE tables. */
+const VEHICLE_HIT: Record<string, { r: number; dmg: number }> = {
+  car: { r: 1.8, dmg: 35 },
+  bus: { r: 2.6, dmg: 40 },
+  auto: { r: 1.7, dmg: 35 },
+  bike: { r: 1.0, dmg: 22 },
+  cow: { r: 1.4, dmg: 8 },
 }
 
 // ---- module-level shared materials / geometry caches (no per-instance or per-frame allocation) ----
@@ -198,13 +249,69 @@ function flatMat(color: string, opts: Partial<THREE.MeshStandardMaterialParamete
   if (!m) { m = new THREE.MeshStandardMaterial({ color, flatShading: true, ...opts }); matCache.set(key, m) }
   return m
 }
-const tireMat = flatMat('#181614', { roughness: 0.95 })
+const tireMat = flatMat('#181614', { roughness: 0.92 })
 const rimMat = flatMat('#4a453d', { metalness: 0.35, roughness: 0.5 })
-const glassMat = flatMat('#1d2429', { metalness: 0.4, roughness: 0.15, transparent: true, opacity: 0.62 })
+const glassMat = flatMat('#141b21', { metalness: 0.3, roughness: 0.08, transparent: true, opacity: 0.7, flatShading: false })
 const trimMat = flatMat('#24201b', { roughness: 0.8 })
 const plateMat = flatMat('#f2ecd9', { roughness: 0.6 })
 const headlightMat = flatMat('#fff1c4', { emissive: '#ffcf6e', emissiveIntensity: 0.9, roughness: 0.4 })
 const taillightMat = flatMat('#7a1611', { emissive: '#ff2f1f', emissiveIntensity: 0.75, roughness: 0.4 })
+
+// v36 realism tech — per-material env-reflection strength (RoomEnvironment PMREM,
+// applied ONLY to vehicle materials so the proven world look is untouched).
+tireMat.userData.envInt = 0.12
+rimMat.userData.envInt = 0.7
+glassMat.userData.envInt = 1.15
+trimMat.userData.envInt = 0.25
+plateMat.userData.envInt = 0.3
+headlightMat.userData.envInt = 0.5
+taillightMat.userData.envInt = 0.5
+
+let vehicleEnvTex: THREE.Texture | null = null
+let vehicleEnvRenderer: THREE.WebGLRenderer | null = null
+/** Bake a small neutral-studio environment once per renderer; null on any failure. */
+function ensureVehicleEnv(renderer: THREE.WebGLRenderer): THREE.Texture | null {
+  if (vehicleEnvRenderer === renderer) return vehicleEnvTex
+  try {
+    const pmrem = new THREE.PMREMGenerator(renderer)
+    const rt = pmrem.fromScene(new RoomEnvironment(), 0.04)
+    vehicleEnvTex = rt.texture
+    pmrem.dispose()
+    vehicleEnvRenderer = renderer
+  } catch {
+    vehicleEnvTex = null
+  }
+  return vehicleEnvTex
+}
+/** Assign the env map to every vehicle material (shared caches → guarded by envDone). */
+function applyVehicleEnv(root: THREE.Object3D) {
+  if (!vehicleEnvTex) return
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh
+    if (!mesh.isMesh) return
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const m of mats) {
+      const mat = m as THREE.MeshStandardMaterial & { userData: { envDone?: boolean; envInt?: number } }
+      if (!mat || !mat.isMaterial || mat.userData.envDone) continue
+      mat.envMap = vehicleEnvTex
+      mat.envMapIntensity = typeof mat.userData.envInt === 'number' ? mat.userData.envInt : 0.45
+      mat.userData.envDone = true
+      mat.needsUpdate = true
+    }
+  })
+}
+
+// v36 car paint — clearcoat physical material (smooth-shaded, env-reflective)
+const paintCache = new Map<string, THREE.MeshPhysicalMaterial>()
+function carPaint(color: string): THREE.MeshPhysicalMaterial {
+  let m = paintCache.get(color)
+  if (!m) {
+    m = new THREE.MeshPhysicalMaterial({ color, metalness: 0.62, roughness: 0.34, clearcoat: 1, clearcoatRoughness: 0.12 })
+    m.userData.envInt = 0.65
+    paintCache.set(color, m)
+  }
+  return m
+}
 
 const wheelGeoms = new Map<string, THREE.CylinderGeometry>()
 function cachedCyl(key: string, make: () => THREE.CylinderGeometry) {
@@ -214,13 +321,25 @@ function cachedCyl(key: string, make: () => THREE.CylinderGeometry) {
 }
 function wheelGeo(r: number, w: number) { return cachedCyl(`t${r}:${w}`, () => new THREE.CylinderGeometry(r, r, w, 10)) }
 function rimGeo(r: number, w: number) { return cachedCyl(`r${r}:${w}`, () => new THREE.CylinderGeometry(r * 0.52, r * 0.52, w + 0.03, 8)) }
+// v36 torus tire — rounded cross-section reads far more real than a plain cylinder
+const torusCache = new Map<string, THREE.TorusGeometry>()
+function torusGeo(r: number, w: number) {
+  let g = torusCache.get(`tt${r}:${w}`)
+  if (!g) {
+    const tube = w * 0.42
+    g = new THREE.TorusGeometry(r - tube, tube, 8, 18)
+    g.rotateY(Math.PI / 2) // axle → X (mesh rotation stays identity; spin = rotation.x)
+    torusCache.set(`tt${r}:${w}`, g)
+  }
+  return g
+}
 
 /** buildWheels — cylinder wheels rolled around X (rotation.z=π/2, spin = rotation.x), grouped per axle. */
 function buildWheels(
   count: number,
   positions: Array<[number, number]>, // [x, z]; front axle = largest z (steers when opts.steer)
   radius: number,
-  opts: { width?: number; steer?: boolean; rims?: boolean | 'front' } = {},
+  opts: { width?: number; steer?: boolean; rims?: boolean | 'front'; torus?: boolean } = {},
 ): { group: THREE.Group; wheels: VehicleWheel[] } {
   const width = opts.width ?? radius * 0.68
   const frontZ = Math.max(...positions.map(p => p[1]))
@@ -235,8 +354,9 @@ function buildWheels(
     const pivot = new THREE.Group()
     pivot.position.x = wx
     axle.add(pivot)
-    const tire = new THREE.Mesh(wheelGeo(radius, width), tireMat)
-    tire.rotation.z = Math.PI / 2
+    const useTorus = opts.torus === true
+    const tire = new THREE.Mesh(useTorus ? torusGeo(radius, width) : wheelGeo(radius, width), tireMat)
+    if (!useTorus) tire.rotation.z = Math.PI / 2
     tire.castShadow = false // perf: bodies only
     pivot.add(tire)
     if (opts.rims === true || (opts.rims === 'front' && isFront)) {
@@ -257,65 +377,157 @@ function box(w: number, h: number, d: number, x = 0, y = 0, z = 0, rx = 0): THRE
   g.translate(x, y, z)
   return g
 }
-function taperTop(g: THREE.BoxGeometry, sx: number, sz: number) {
-  const pos = g.attributes.position
-  for (let i = 0; i < pos.count; i++) if (pos.getY(i) > 0) { pos.setX(i, pos.getX(i) * sx); pos.setZ(i, pos.getZ(i) * sz) }
-  pos.needsUpdate = true
-  g.computeVertexNormals()
+/** v38 helper — a cylinder spanning two points (frame tubes, forks, exhaust…).
+ *  Build-time only: outputs are merged straight into the body groups. */
+function tube(ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number, seg = 7): THREE.CylinderGeometry {
+  const g = new THREE.CylinderGeometry(r, r, Math.max(1e-4, Math.hypot(bx - ax, by - ay, bz - az)), seg)
+  const dir = new THREE.Vector3(bx - ax, by - ay, bz - az)
+  if (dir.lengthSq() > 1e-10) {
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize())
+    g.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q))
+  }
+  g.translate((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2)
   return g
 }
 function merged(parts: THREE.BufferGeometry[], mat: THREE.Material, castShadow = true): THREE.Mesh {
-  const geo = mergeGeometries(parts, false)
+  // mergeGeometries requires uniform indexedness AND uniform attribute sets —
+  // RoundedBoxGeometry (v36) is non-indexed, so weld any non-indexed part into an
+  // indexed geometry first (mergeVertices hashes positions and builds an index; no
+  // toIndexed in three), and v38: strip uv so smoothExtrude outputs (UVs dropped)
+  // can merge with primitive geometries (which carry uv) — every vehicle material
+  // is untextured, so the attribute is dead weight everywhere in this pipeline.
+  // (Caught live: the bike's painted merge mixed extrusions + boxes → null merge →
+  // the tail/fenders/panels silently vanished, only parts[0] rendered.)
+  const norm = parts.map(p => {
+    const q = p.index ? p : mergeVertices(p, 1e-4) ?? p
+    if (q.attributes.uv) q.deleteAttribute('uv')
+    if (q.attributes.uv1) q.deleteAttribute('uv1')
+    return q
+  })
+  const geo = mergeGeometries(norm, false)
   const mesh = new THREE.Mesh(geo ?? parts[0], mat)
-  if (geo) for (const p of parts) p.dispose()
+  if (geo) for (const p of norm) p.dispose()
   mesh.castShadow = castShadow
   return mesh
 }
 
-const CAR_PALETTES = ['#d9a441', '#b5543a', '#93a67e'] // taxi-gold, dusty red, sage green (poster palette)
+const CAR_PALETTES = ['#d9a441', '#b5543a', '#93a67e', '#e8e2d4', '#6b4a3a'] // taxi-gold, dusty red, sage, cream, walnut (poster palette)
+const chromeMat = flatMat('#b8b2a6', { metalness: 0.75, roughness: 0.22 })
 
+/** buildCar v3 (v36) — real automotive construction via ExtrudeGeometry:
+ *  the three-box side profile (bumper faces, curved nose, bonnet, cowl dip,
+ *  rear deck, tail drop) is drawn as a Shape with WHEEL ARCHES cut into the
+ *  outline, then extruded across the body width with a bevel and welded
+ *  vertices → smooth rounded panel edges. Greenhouse is a separate blacked-out
+ *  glass extrusion (modern stylized A/B/C pillars) with a painted roof panel on
+ *  top. Clearcoat paint + env reflections finish it. Details kit kept from v35. */
 function buildCar(variant: number): { group: THREE.Group; wheels: VehicleWheel[] } {
-  const L = 3.7 + (variant % 3) * 0.25 // per-instance length variance
-  const H = 0.55 + (variant % 2) * 0.05
-  const cabinY = 0.325 + H + 0.25
-  const bodyMat = flatMat(CAR_PALETTES[variant % 3], { roughness: 0.5, metalness: 0.12 })
-  const body = merged([
-    taperTop(new THREE.BoxGeometry(1.42, 0.5, L * 0.5), 0.84, 0.86).translate(0, cabinY, -L * 0.06), // tapered cabin
-    box(1.55, H, L, 0, 0.325 + H / 2, 0),   // chassis
-    box(1.48, 0.24, L * 0.3, 0, cabinY - 0.13, L * 0.3),  // hood
-    box(1.48, 0.22, L * 0.22, 0, cabinY - 0.14, -L * 0.33), // boot
-  ], bodyMat)
-  const glass = merged([
-    box(1.46, 0.3, L * 0.4, 0, cabinY - 0.03, -L * 0.06),      // side window band (pokes past cabin)
-    box(1.3, 0.42, 0.07, 0, cabinY - 0.02, L * 0.2, -0.42),    // windshield
-    box(1.28, 0.36, 0.07, 0, cabinY - 0.02, -L * 0.31, 0.46),  // rear glass
-  ], glassMat, false)
+  const L = 3.9 + (variant % 3) * 0.25 // per-instance length variance
+  const paint = carPaint(CAR_PALETTES[variant % CAR_PALETTES.length])
+  const W = 1.58
+  const belt = 0.96 // bonnet / boot top line — the cabin sits clearly above it
+  // --- lower body: side-profile silhouette with real wheel arches ---
+  const archZ = L * 0.315
+  const archR = 0.42 // tire r=0.34 → tight 0.08 arch gap (real-car stance)
+  const archY = 0.32
+  const s = new THREE.Shape()
+  s.moveTo(-L / 2 + 0.10, archY)
+  s.lineTo(-archZ - archR, archY)
+  s.absarc(-archZ, archY, archR, Math.PI, 0, true)      // rear wheel arch (over the top)
+  s.lineTo(archZ - archR, archY)
+  s.absarc(archZ, archY, archR, Math.PI, 0, true)       // front wheel arch
+  s.lineTo(L / 2 - 0.10, archY)
+  s.lineTo(L / 2 + 0.02, 0.52)                          // front bumper face
+  s.quadraticCurveTo(L / 2 + 0.10, 0.72, L / 2 - 0.06, 0.88)   // nose curve
+  s.quadraticCurveTo(L * 0.20, 0.99, L * 0.14, 0.97)    // bonnet slope
+  s.quadraticCurveTo(0.0, 0.93, -L * 0.16, 0.96)        // cowl dip → beltline
+  s.quadraticCurveTo(-L * 0.38, 1.01, -L / 2 + 0.06, 0.95) // rear deck
+  s.quadraticCurveTo(-L / 2 - 0.06, 0.78, -L / 2 + 0.02, 0.60) // tail drop
+  s.lineTo(-L / 2 + 0.10, archY)
+  const bodyGeo = smoothExtrude(s, W, 0.05)
+  const body = new THREE.Mesh(bodyGeo, paint)
+  body.castShadow = true
+  // --- greenhouse: blacked-out glass extrusion (raked windshield + rear glass) ---
+  const g = new THREE.Shape()
+  g.moveTo(L * 0.30, belt - 0.05)
+  g.quadraticCurveTo(L * 0.26, belt + 0.27, L * 0.06, belt + 0.39) // raked windshield
+  g.lineTo(-L * 0.12, belt + 0.41)                      // roof line
+  g.quadraticCurveTo(-L * 0.28, belt + 0.37, -L * 0.40, belt - 0.03) // raked rear glass
+  g.lineTo(L * 0.30, belt - 0.05)
+  const cabinGeo = smoothExtrude(g, W - 0.18, 0.04)
+  const cabin = new THREE.Mesh(cabinGeo, glassMat)
+  cabin.castShadow = false
+  // painted roof panel on top of the glass greenhouse → roofline step
+  const roof = new THREE.Mesh(new RoundedBoxGeometry(W - 0.30, 0.07, L * 0.21, 2, 0.03), paint)
+  roof.position.set(0, belt + 0.425, -L * 0.03)
+  roof.castShadow = true
   const dark = merged([
-    box(1.62, 0.2, 0.22, 0, 0.42, L / 2 + 0.02), box(1.62, 0.2, 0.22, 0, 0.42, -L / 2 - 0.02), // bumpers
-    box(0.9, 0.12, 0.05, 0, 0.72, L / 2 + 0.02),                                               // grill
-    box(0.26, 0.32, 0.6, 0.7, 0.62, L * 0.32), box(0.26, 0.32, 0.6, -0.7, 0.62, L * 0.32),     // wheel arches
-    box(0.26, 0.32, 0.6, 0.7, 0.62, -L * 0.32), box(0.26, 0.32, 0.6, -0.7, 0.62, -L * 0.32),
-    box(0.05, 0.04, 0.06, 0.8, cabinY - 0.12, L * 0.16), box(0.05, 0.04, 0.06, -0.8, cabinY - 0.12, L * 0.16),   // mirror stalks
-    box(0.17, 0.11, 0.08, 0.9, cabinY - 0.1, L * 0.16), box(0.17, 0.11, 0.08, -0.9, cabinY - 0.1, L * 0.16),     // mirrors
+    box(1.66, 0.2, 0.28, 0, 0.42, L / 2 - 0.02), box(1.66, 0.2, 0.28, 0, 0.42, -L / 2 + 0.02), // rubber bumper strips
+    box(0.86, 0.16, 0.1, 0, 0.66, L / 2 + 0.02), // grille housing
+    box(0.24, 0.05, 0.02, 0, 0.68, L / 2 + 0.075), box(0.24, 0.05, 0.02, 0, 0.62, L / 2 + 0.075), box(0.24, 0.05, 0.02, 0, 0.56, L / 2 + 0.075), // grille slats
+    box(1.44, 0.2, L * 0.80, 0, 0.34, 0),        // chassis slab — fills the underbody between the wheels
+    box(1.6, 0.09, L * 0.44, 0, 0.27, 0),        // side skirts
+    box(0.03, 0.012, L * 0.34, 0.795, 0.74, L * 0.02), box(0.03, 0.012, L * 0.34, -0.795, 0.74, L * 0.02), // door seams (front)
+    box(0.03, 0.012, L * 0.3, 0.795, 0.74, -L * 0.26), box(0.03, 0.012, L * 0.3, -0.795, 0.74, -L * 0.26), // door seams (rear)
+    box(0.14, 0.045, 0.02, 0.62, 0.84, L * 0.14), box(0.14, 0.045, 0.02, -0.62, 0.84, L * 0.14),           // door handles
+    box(0.05, 0.04, 0.06, 0.76, belt + 0.05, L * 0.16), box(0.05, 0.04, 0.06, -0.76, belt + 0.05, L * 0.16), // mirror stalks
+    box(0.16, 0.11, 0.07, 0.86, belt + 0.09, L * 0.16), box(0.16, 0.11, 0.07, -0.86, belt + 0.09, L * 0.16), // mirrors
+    box(0.4, 0.02, 0.05, 0.28, 0.91, L * 0.26, -0.5), box(0.4, 0.02, 0.05, -0.28, 0.91, L * 0.26, -0.5),   // wipers
   ], trimMat)
-  const headlights = merged([box(0.3, 0.14, 0.07, 0.48, 0.74, L / 2 + 0.03), box(0.3, 0.14, 0.07, -0.48, 0.74, L / 2 + 0.03)], headlightMat, false)
-  const taillights = merged([box(0.34, 0.13, 0.07, 0.5, 0.78, -L / 2 - 0.03), box(0.34, 0.13, 0.07, -0.5, 0.78, -L / 2 - 0.03)], taillightMat, false)
-  const plates = [box(0.36, 0.13, 0.04, 0, 0.55, L / 2 + 0.14), box(0.36, 0.13, 0.04, 0, 0.55, -L / 2 - 0.14)]
-  if (variant % 3 === 0) plates.push(box(0.46, 0.13, 0.22, 0, cabinY + 0.315, -L * 0.06)) // taxi roof sign (gold flavor)
-  const plateMesh = merged(plates, plateMat, false)
-  const w = buildWheels(4, [[-0.68, L * 0.32], [0.68, L * 0.32], [-0.68, -L * 0.32], [0.68, -L * 0.32]], 0.33, { width: 0.22, steer: true, rims: true })
+  const chrome = merged([
+    box(0.5, 0.05, 0.06, 0, 0.76, L / 2 + 0.03), // grille centre bar
+    new THREE.CylinderGeometry(0.05, 0.05, 0.24, 7).rotateX(Math.PI / 2).translate(-0.55, 0.36, -L / 2 - 0.1), // exhaust tip
+    box(0.014, 0.3, 0.014, 0.6, belt + 0.46, -L * 0.24), // aerial
+  ], chromeMat, false)
+  const headlights = merged([
+    box(0.4, 0.13, 0.08, 0.5, 0.78, L / 2 + 0.02), box(0.4, 0.13, 0.08, -0.5, 0.78, L / 2 + 0.02),          // main lamps
+    new THREE.CylinderGeometry(0.07, 0.07, 0.06, 8).rotateX(Math.PI / 2).translate(0.55, 0.52, L / 2 + 0.03), // fog lamps
+    new THREE.CylinderGeometry(0.07, 0.07, 0.06, 8).rotateX(Math.PI / 2).translate(-0.55, 0.52, L / 2 + 0.03),
+  ], headlightMat, false)
+  const taillights = merged([box(1.34, 0.11, 0.07, 0, 0.84, -L / 2 - 0.02)], taillightMat, false) // full-width light bar
+  const plates: THREE.BufferGeometry[] = [box(0.4, 0.14, 0.04, 0, 0.5, L / 2 + 0.1), box(0.4, 0.14, 0.04, 0, 0.52, -L / 2 - 0.09)]
+  if (variant % CAR_PALETTES.length === 0) plates.push(box(0.52, 0.15, 0.24, 0, belt + 0.52, -L * 0.03)) // taxi roof sign (gold flavour)
+  const extras = variant % CAR_PALETTES.length === 3
+    ? merged([box(0.05, 0.06, L * 0.4, 0.5, belt + 0.54, -L * 0.03), box(0.05, 0.06, L * 0.4, -0.5, belt + 0.54, -L * 0.03), box(0.05, 0.06, 1.0, 0, belt + 0.54, -L * 0.03)], chromeMat, false) // luggage rack (cream flavour)
+    : null
+  const w = buildWheels(4, [[-0.7, L * 0.315], [0.7, L * 0.315], [-0.7, -L * 0.32], [0.7, -L * 0.32]], 0.34, { width: 0.26, steer: true, rims: true, torus: true })
   const group = new THREE.Group()
-  group.add(body, dark, glass, headlights, taillights, plateMesh, w.group)
+  group.add(body, cabin, roof, dark, chrome, headlights, taillights, merged(plates, plateMat, false), w.group)
+  if (extras) group.add(extras)
   return { group, wheels: w.wheels }
+}
+
+/** v36 helper — extrude a side-profile Shape across the body width with a bevel,
+ *  weld coincident vertices and recompute smooth normals (UVs dropped: untextured). */
+function smoothExtrude(shape: THREE.Shape, depth: number, bevel: number): THREE.BufferGeometry {
+  let geo: THREE.BufferGeometry = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel * 0.9,
+    bevelSegments: 3,
+    curveSegments: 10,
+  })
+  geo.deleteAttribute('uv')
+  const welded = mergeVertices(geo, 1e-4)
+  if (welded) { geo.dispose(); geo = welded }
+  geo.computeVertexNormals()
+  geo.rotateY(-Math.PI / 2) // profile length (shape x) → world +Z (front), extrusion → X
+  geo.computeBoundingBox()
+  const bb = geo.boundingBox
+  if (bb) geo.translate(-(bb.min.x + bb.max.x) / 2, 0, 0) // center across the width
+  return geo
 }
 
 function buildBus(variant: number): { group: THREE.Group; wheels: VehicleWheel[] } {
   const L = 8.6
-  const cream = flatMat('#e7ddc4', { roughness: 0.6 })
-  const liveryMat = flatMat(variant % 2 ? '#7a3040' : '#3e6b4f', { roughness: 0.6 }) // maroon / green livery
+  const cream = flatMat('#e7ddc4', { roughness: 0.6, flatShading: false })
+  cream.userData.envInt = 0.4
+  const liveryMat = flatMat(variant % 2 ? '#7a3040' : '#3e6b4f', { roughness: 0.55, flatShading: false }) // maroon / green livery
+  liveryMat.userData.envInt = 0.45
   const creamParts: THREE.BufferGeometry[] = [
-    box(2.36, 1.85, L, 0, 1.525, 0),            // main body
-    box(2.3, 0.17, L - 0.1, 0, 2.535, 0),       // roof cap
+    new RoundedBoxGeometry(2.36, 1.85, L, 2, 0.12).translate(0, 1.525, 0), // main body — rounded edges all around
+    new RoundedBoxGeometry(2.3, 0.17, L - 0.1, 2, 0.06).translate(0, 2.535, 0), // roof cap
     box(0.5, 0.07, 0.8, -0.5, 2.65, -1.6), box(0.5, 0.07, 0.8, 0.5, 2.65, -2.0), // roof hatches
     box(0.5, 0.2, 0.06, 0, 1.32, L / 2 + 0.03), box(0.5, 0.2, 0.06, 0, 1.32, -L / 2 - 0.03), // route + rear plates
   ]
@@ -345,6 +557,26 @@ function buildBus(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
     box(0.4, 0.45, 0.42, -0.55, 1.5, -1.8), box(0.4, 0.45, 0.42, 0.55, 1.5, -1.8),
     box(0.4, 0.45, 0.42, 0, 1.5, -3.0),
   ], trimMat)
+  // v35 realism kit — chrome + lamps + underbody details (merged, ~3 extra draw calls)
+  const chromeBits = merged([
+    box(1.9, 0.06, 0.06, 0, 1.06, L / 2 + 0.05),                        // front chrome bumper bar
+    box(0.04, 0.06, L * 0.72, 1.21, 2.62, 0), box(0.04, 0.06, L * 0.72, -1.21, 2.62, 0), // roof rails
+    box(0.06, 0.22, 0.9, 0, 0.42, 1.4),                                 // fuel tank
+    box(0.5, 0.05, 0.02, 0, 2.06, L / 2 + 0.06),                        // windshield divider
+  ], chromeMat, false)
+  const grilleBits = merged([
+    box(1.7, 0.05, 0.04, 0, 0.68, L / 2 + 0.06), box(1.7, 0.05, 0.04, 0, 0.6, L / 2 + 0.06), box(1.7, 0.05, 0.04, 0, 0.52, L / 2 + 0.06), // grille slats
+    box(0.9, 0.04, 0.03, 0, 0.66, -L / 2 - 0.055), box(0.9, 0.04, 0.03, 0, 0.58, -L / 2 - 0.055),                                          // rear engine grille
+  ], trimMat)
+  const indicatorMat = flatMat('#d98a2b', { emissive: '#ff9d2e', emissiveIntensity: 0.7, roughness: 0.4 })
+  const indicatorBits = merged([
+    box(0.16, 0.12, 0.06, 1.02, 0.86, L / 2 + 0.05), box(0.16, 0.12, 0.06, -1.02, 0.86, L / 2 + 0.05),   // front indicators
+    box(0.06, 0.1, 0.5, 1.21, 1.15, 2.55), box(0.06, 0.1, 0.5, -1.21, 1.15, 2.55),                        // side repeaters
+  ], indicatorMat, false)
+  const mudflaps = merged([
+    box(0.34, 0.3, 0.03, 1.05, 0.32, -2.62), box(0.34, 0.3, 0.03, -1.05, 0.32, -2.62),
+    box(0.34, 0.3, 0.03, 1.05, 0.32, -3.57), box(0.34, 0.3, 0.03, -1.05, 0.32, -3.57),
+  ], trimMat, false)
   const w = buildWheels(6, [[-1.05, 2.9], [1.05, 2.9], [-1.05, -2.0], [1.05, -2.0], [-1.05, -2.95], [1.05, -2.95]], 0.5, { width: 0.32, steer: true })
   const group = new THREE.Group()
   group.add(
@@ -352,6 +584,10 @@ function buildBus(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
     merged([box(2.42, 0.5, L + 0.04, 0, 0.85, 0), box(2.42, 0.5, 0.3, 0, 1.1, L / 2 - 0.1), box(2.42, 0.5, 0.3, 0, 1.1, -L / 2 + 0.1)], liveryMat),
     merged(glassParts, glassMat, false),
     dark,
+    chromeBits,
+    grilleBits,
+    indicatorBits,
+    mudflaps,
     merged([box(0.36, 0.16, 0.07, 0.8, 0.78, L / 2 + 0.05), box(0.36, 0.16, 0.07, -0.8, 0.78, L / 2 + 0.05)], headlightMat, false),
     merged([box(0.36, 0.16, 0.07, 0.85, 0.95, -L / 2 - 0.05), box(0.36, 0.16, 0.07, -0.85, 0.95, -L / 2 - 0.05)], taillightMat, false),
     w.group,
@@ -359,39 +595,180 @@ function buildBus(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
   return { group, wheels: w.wheels }
 }
 
+/** buildAuto v2 (v37) — proper auto-rickshaw construction with the car's extrusion
+ *  technology: the classic silhouette (round snout, raked windscreen, long curved
+ *  roof, rounded tail) drawn as side-profile Shapes with the front fender + rear
+ *  wheel arches cut into the outline, extruded across the width with a bevel and
+ *  welded. Delhi CNG livery: green body, yellow canopy, chrome cockpit kit, fare
+ *  meter, roof luggage rails, taillight. Unlike the other vehicles the wheel set
+ *  is lifted so the three tires rest ON the ground (proper stance). Merged
+ *  primitive discipline — the body parts stay a handful of draw calls. */
 function buildAuto(): { group: THREE.Group; wheels: VehicleWheel[] } {
-  const green = flatMat('#2e6b4a', { roughness: 0.6, side: THREE.DoubleSide })
-  const yellow = flatMat('#e3b23c', { roughness: 0.55, side: THREE.DoubleSide })
-  const cowl = new THREE.CylinderGeometry(0.62, 0.62, 0.72, 8, 1, true, Math.PI * 1.5, Math.PI) // front-half shell
-  cowl.translate(0, 0.95, 0.8)
-  const canopy = new THREE.CylinderGeometry(0.7, 0.7, 1.7, 8, 1, true, Math.PI / 2, Math.PI) // top-half shell
-  canopy.rotateX(Math.PI / 2)
-  canopy.translate(0, 1.05, 0.7)
-  const body = merged([
-    cowl,
-    box(1.3, 0.14, 2.5, 0, 0.45, 0),        // floor pan
-    box(1.5, 0.8, 1.4, 0, 0.98, -0.85),     // rear body
-  ], green)
-  const canopyMesh = merged([canopy], yellow) // yellow roof over green body — classic auto livery
+  const green = flatMat('#2f7050', { roughness: 0.45, flatShading: false }) // CNG body green
+  green.userData.envInt = 0.5
+  const yellow = flatMat('#e8b93a', { roughness: 0.45, flatShading: false }) // CNG canopy yellow
+  yellow.userData.envInt = 0.5
+  const FW = 1.02, RW = -0.98 // wheelbase z (front = +z)
+  const archR = 0.38, archY = 0.33
+  // --- green lower body: snout + footboard + passenger tub, wheel arches cut ---
+  const b = new THREE.Shape()
+  b.moveTo(-1.52, 0.34)
+  b.lineTo(RW - archR, 0.34)
+  b.absarc(RW, archY, archR, Math.PI, 0, true)       // rear wheel arch
+  b.lineTo(FW - archR - 0.1, 0.34)                   // low footboard line between the axles
+  b.absarc(FW, archY, archR, Math.PI, 0, true)       // front fender arch
+  b.lineTo(1.44, 0.36)
+  b.quadraticCurveTo(1.56, 0.52, 1.5, 0.8)           // round snout nose
+  b.quadraticCurveTo(1.47, 1.0, 1.22, 1.04)          // cowl top
+  b.lineTo(0.6, 0.99)                                // door-sill dip
+  b.lineTo(-0.7, 1.05)                               // tub beltline
+  b.lineTo(-1.44, 1.07)
+  b.quadraticCurveTo(-1.58, 0.94, -1.52, 0.34)       // rounded tail drop
+  const body = new THREE.Mesh(smoothExtrude(b, 1.42, 0.045), green)
+  body.castShadow = true
+  // --- yellow canopy: raked windscreen → long roof crown → curved rear drop ---
+  const c = new THREE.Shape()
+  c.moveTo(1.14, 1.0)
+  c.lineTo(0.74, 1.68)                               // raked windscreen line
+  c.quadraticCurveTo(0.2, 1.84, -0.5, 1.8)           // roof crown
+  c.quadraticCurveTo(-1.3, 1.72, -1.5, 1.04)         // rear drop onto the tub
+  c.lineTo(1.14, 1.0)
+  const canopy = new THREE.Mesh(smoothExtrude(c, 1.26, 0.04), yellow)
+  canopy.castShadow = true
+  // --- glazing: raked windscreen + big tinted side openings (one merge) ---
   const glass = merged([
-    box(0.95, 0.42, 0.05, 0, 1.3, 1.48, -0.3),                    // windshield
-    box(0.38, 0.28, 0.04, 0.42, 1.22, -1.57), box(0.38, 0.28, 0.04, -0.42, 1.22, -1.57), // rear panes
+    box(0.88, 0.54, 0.04, 0, 1.34, 1.0, -0.5),       // windscreen (rides the canopy's raked line)
+    box(0.03, 0.44, 1.46, 0.675, 1.33, -0.24),       // side openings (proud of the canopy face)
+    box(0.03, 0.44, 1.46, -0.675, 1.33, -0.24),
   ], glassMat, false)
+  // --- darks: twin underbody trays (slotted so the single front wheel shows),
+  // rear fender lips, external footboard step ---
   const dark = merged([
-    box(1.1, 0.6, 1.4, 0, 0.9, 0.55),        // interior mass (open sides read dark inside)
-    box(0.5, 0.45, 0.5, 0, 0.85, 0.3),       // driver seat silhouette
-    box(1.15, 0.42, 0.5, 0, 0.9, -0.75),     // passenger bench
-    box(0.04, 0.72, 0.04, 0.68, 1.1, 0.05), box(0.04, 0.72, 0.04, -0.68, 1.1, 0.05),   // canopy struts
-    box(0.04, 0.72, 0.04, 0.68, 1.1, 1.4), box(0.04, 0.72, 0.04, -0.68, 1.1, 1.4),
-    box(0.34, 0.2, 0.55, 0, 0.6, 1.05),      // front mudguard
+    box(0.55, 0.28, 2.5, -0.425, 0.44, -0.1), box(0.55, 0.28, 2.5, 0.425, 0.44, -0.1),
+    box(0.22, 0.16, 0.62, 0.70, 0.64, RW), box(0.22, 0.16, 0.62, -0.70, 0.64, RW),
+    box(1.0, 0.05, 0.3, 0, 0.315, 0.3),
   ], trimMat)
-  const lampGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.07, 8)
-  lampGeo.rotateX(Math.PI / 2)
-  lampGeo.translate(0, 1.08, 1.44)
-  const lamp = new THREE.Mesh(lampGeo, headlightMat)
-  const w = buildWheels(3, [[0, 1.05], [-0.72, -0.95], [0.72, -0.95]], 0.32, { width: 0.2, steer: true, rims: 'front' })
+  // --- chrome cockpit kit: handlebar, mirror, grab rail, exhaust tip ---
+  const chromeBits = merged([
+    box(0.05, 0.34, 0.05, 0, 1.14, 0.94, 0.35),      // steering column (raked)
+    box(0.52, 0.04, 0.04, 0, 1.3, 0.87),             // handlebar
+    box(0.09, 0.05, 0.09, 0.26, 1.3, 0.87), box(0.09, 0.05, 0.09, -0.26, 1.3, 0.87), // grips
+    box(0.2, 0.04, 0.04, 0.70, 1.6, 0.84),           // mirror stalk (right side, rickshaw-style)
+    box(0.04, 0.16, 0.26, 0.80, 1.6, 0.84),          // mirror head
+    box(0.86, 0.04, 0.04, 0, 1.28, -1.55),           // rear passenger grab rail
+    new THREE.CylinderGeometry(0.045, 0.05, 0.26, 7).rotateX(Math.PI / 2).translate(0.5, 0.3, -1.54), // exhaust tip
+  ], chromeMat, false)
+  // --- yellow trim: fare meter box, windscreen rails, roof luggage rails ---
+  const trimBits = merged([
+    box(0.3, 0.14, 0.4, 0, 1.13, 1.02),              // fare meter box atop the cowl
+    box(0.9, 0.04, 0.04, 0, 1.62, 0.83, -0.5),       // windscreen top rail (raked)
+    box(0.04, 0.5, 0.04, 0.44, 1.32, 1.0, -0.5), box(0.04, 0.5, 0.04, -0.44, 1.32, 1.0, -0.5), // windscreen side rails
+    box(0.03, 0.03, 1.15, 0.38, 1.88, -0.32), box(0.03, 0.03, 1.15, -0.38, 1.88, -0.32),       // roof luggage rails
+  ], yellow)
+  // --- round headlamp in a chrome ring, low on the snout + red tail bar ---
+  const headlamp = merged([
+    new THREE.CylinderGeometry(0.085, 0.085, 0.05, 10).rotateX(Math.PI / 2).translate(0, 0.9, 1.52),
+  ], headlightMat, false)
+  const chromeRing = merged([new THREE.TorusGeometry(0.1, 0.02, 6, 12).translate(0, 0.9, 1.53)], chromeMat, false)
+  const tail = merged([box(0.5, 0.09, 0.03, 0, 0.88, -1.58)], taillightMat, false)
+  const plates = merged([box(0.32, 0.13, 0.04, 0, 0.62, -1.58)], plateMat, false)
+  const w = buildWheels(3, [[0, FW], [-0.68, RW], [0.68, RW]], 0.3, { width: 0.16, steer: true, rims: 'front', torus: true })
+  w.group.position.y = 0.3 // the rickshaw's own stance: tires rest on the ground
   const group = new THREE.Group()
-  group.add(body, canopyMesh, glass, dark, lamp, w.group)
+  group.add(body, canopy, glass, dark, chromeBits, trimBits, headlamp, chromeRing, tail, plates, w.group)
+  return { group, wheels: w.wheels }
+}
+
+const BIKE_PALETTES = ['#b5543a', '#2e6b4a', '#d9a441', '#e8e2d4'] // red, green, gold, cream (poster palette)
+
+/** buildBike v3 (v38) — motorcycle rebuilt with the car's extrusion technology:
+ *  fuel tank and tail unit are extruded side-profile Shapes (smooth rounded panels
+ *  with a bevel), front/rear fenders are true ARCS — annular extrusions wrapping the
+ *  wheels — and the chassis is real tube-frame geometry (spine, down tube, steering
+ *  head, sub-frame, swingarm) with telescopic forks (chrome stanchions inside dark
+ *  sliders), a finned single-cylinder engine, a down-then-up chrome exhaust with a
+ *  raised muffler, over-damper rear shock springs, raised handlebar with a round
+ *  nacelle headlamp, fly screen and mirrors. Clearcoat paint + env reflections match
+ *  the approved car look. Merged-primitive discipline kept: 6 body draw calls. */
+function buildBike(variant: number): { group: THREE.Group; wheels: VehicleWheel[] } {
+  const paint = carPaint(BIKE_PALETTES[variant % BIKE_PALETTES.length])
+  const AZ = 0.66 // axle z (wheelbase 1.32, front = +z)
+  const AY = 0.33 // axle height (torus tires r = 0.33)
+  // --- painted bodywork: extruded tank + tail, arced fenders, side panels ---
+  const tank = new THREE.Shape()
+  tank.moveTo(0.46, 0.9)
+  tank.lineTo(0.41, 1.0)                              // dash-side front rise
+  tank.quadraticCurveTo(0.26, 1.07, 0.08, 1.05)       // tank crown
+  tank.quadraticCurveTo(-0.1, 1.03, -0.18, 0.94)      // rear taper into the seat
+  tank.lineTo(-0.1, 0.87)
+  tank.quadraticCurveTo(0.18, 0.83, 0.46, 0.9)        // knee-recess underside
+  const tail = new THREE.Shape()
+  tail.moveTo(-0.12, 0.86)
+  tail.lineTo(-0.18, 0.95)                            // seat nose
+  tail.quadraticCurveTo(-0.45, 0.99, -0.62, 0.96)     // rider seat
+  tail.lineTo(-0.9, 1.04)                             // pillion tail kick
+  tail.quadraticCurveTo(-1.03, 1.04, -1.02, 0.92)     // tail tip
+  tail.quadraticCurveTo(-0.7, 0.79, -0.42, 0.79)      // underside
+  tail.lineTo(-0.12, 0.86)
+  const fenderArc = (cz: number, ro: number, ri: number, a0: number, a1: number) => {
+    const f = new THREE.Shape()
+    f.absarc(cz, AY, ro, a0, a1, false)               // outer arc over the wheel
+    f.absarc(cz, AY, ri, a1, a0, true)                // inner arc back
+    f.closePath()
+    return smoothExtrude(f, 0.18, 0.02)
+  }
+  const painted = merged([
+    smoothExtrude(tank, 0.3, 0.035),                  // fuel tank (wide, crowned)
+    smoothExtrude(tail, 0.24, 0.03),                  // tail unit
+    fenderArc(AZ, 0.46, 0.37, Math.PI * 0.3, Math.PI * 0.7),     // front fender arc
+    fenderArc(-AZ, 0.42, 0.34, Math.PI * 0.36, Math.PI * 0.74), // rear fender arc
+    box(0.03, 0.17, 0.32, 0.16, 0.68, -0.42), box(0.03, 0.17, 0.32, -0.16, 0.68, -0.42), // side panels
+  ], paint)
+  // --- dark chassis: tube frame, engine, fork sliders, swingarm, dampers, seat pads ---
+  const dark = merged([
+    tube(0, 0.93, 0.42, 0, 0.83, -0.32, 0.042),       // main spine
+    tube(0, 1.05, 0.45, 0, 0.86, 0.5, 0.048),         // steering head
+    tube(0, 0.88, 0.44, 0, 0.4, 0.26, 0.036),         // down tube to the engine mounts
+    tube(0, 0.8, -0.34, 0, 0.92, -0.95, 0.032),       // rear sub-frame
+    tube(0.09, 0.74, 0.55, 0.09, 0.36, 0.655, 0.038), tube(-0.09, 0.74, 0.55, -0.09, 0.36, 0.655, 0.038), // fork sliders
+    box(0.24, 0.05, 0.12, 0, 1.05, 0.455),            // triple clamp
+    tube(0.09, 0.4, -0.32, 0.09, AY, -AZ, 0.03), tube(-0.09, 0.4, -0.32, -0.09, AY, -AZ, 0.03), // swingarm
+    tube(0.11, 0.4, -0.56, 0.11, 0.78, -0.42, 0.02), tube(-0.11, 0.4, -0.56, -0.11, 0.78, -0.42, 0.02), // shock damper rods
+    new RoundedBoxGeometry(0.3, 0.26, 0.5, 2, 0.05).translate(0, 0.42, 0.06), // crankcase
+    box(0.2, 0.22, 0.17, 0, 0.63, 0.13, 0.12),        // cylinder block (slight forward tilt)
+    box(0.24, 0.014, 0.21, 0, 0.57, 0.145, 0.12), box(0.24, 0.014, 0.21, 0, 0.63, 0.13, 0.12), box(0.24, 0.014, 0.21, 0, 0.69, 0.115, 0.12), // cooling fins
+    new RoundedBoxGeometry(0.24, 0.06, 0.52, 2, 0.025).translate(0, 1.0, -0.4),   // rider seat pad
+    new RoundedBoxGeometry(0.22, 0.05, 0.3, 2, 0.02).translate(0, 1.07, -0.82),   // pillion pad
+    tube(0.21, 1.18, 0.42, 0.3, 1.18, 0.42, 0.04), tube(-0.3, 1.18, 0.42, -0.21, 1.18, 0.42, 0.04), // grips
+    new THREE.CylinderGeometry(0.02, 0.02, 0.14, 6).rotateZ(Math.PI / 2).translate(0.2, 0.4, -0.08),  // foot pegs
+    new THREE.CylinderGeometry(0.02, 0.02, 0.14, 6).rotateZ(Math.PI / 2).translate(-0.2, 0.4, -0.08),
+    box(0.12, 0.08, 0.04, 0, 1.0, -1.03),             // taillight housing
+    box(0.1, 0.14, 0.03, 0.33, 1.33, 0.34), box(0.1, 0.14, 0.03, -0.33, 1.33, 0.34), // mirror heads
+  ], trimMat)
+  // --- chrome kit: stanchions, handlebar, exhaust, springs, cap, ring, mirror stalks ---
+  const chrome = merged([
+    tube(0.09, 0.94, 0.485, 0.09, 0.7, 0.56, 0.026), tube(-0.09, 0.94, 0.485, -0.09, 0.7, 0.56, 0.026), // fork stanchions
+    tube(0, 1.05, 0.455, 0, 1.18, 0.42, 0.028),       // bar riser
+    tube(-0.3, 1.18, 0.42, 0.3, 1.18, 0.42, 0.026),   // handlebar
+    tube(0.15, 0.56, 0.2, 0.17, 0.3, 0.0, 0.03),      // exhaust header (down from the cylinder)
+    tube(0.17, 0.3, 0.0, 0.17, 0.46, -0.78, 0.058, 9),// muffler rising to the tail
+    tube(0.11, 0.42, -0.58, 0.11, 0.76, -0.44, 0.037), tube(-0.11, 0.42, -0.58, -0.11, 0.76, -0.44, 0.037), // shock springs
+    new THREE.CylinderGeometry(0.045, 0.045, 0.02, 8).translate(0, 1.075, 0.1),   // fuel cap
+    new THREE.TorusGeometry(0.1, 0.022, 6, 12).translate(0, 1.12, 0.61),          // headlamp ring
+    tube(0.24, 1.18, 0.42, 0.33, 1.34, 0.34, 0.014, 5), tube(-0.24, 1.18, 0.42, -0.33, 1.34, 0.34, 0.014, 5), // mirror stalks
+  ], chromeMat, false)
+  const lamp = merged([
+    new THREE.CylinderGeometry(0.1, 0.1, 0.07, 10).rotateX(Math.PI / 2).translate(0, 1.12, 0.585), // round headlamp
+    box(0.14, 0.07, 0.03, 0, 1.0, -1.06),             // taillight lens
+  ], headlightMat, false)
+  const screen = merged([box(0.3, 0.14, 0.02, 0, 1.26, 0.5, -0.35)], glassMat, false) // fly screen
+  const plates = merged([
+    box(0.16, 0.13, 0.02, 0, 0.9, 0.74, -0.15),       // front plate under the headlamp
+    box(0.2, 0.12, 0.02, 0, 0.86, -1.07),             // rear plate under the tail
+  ], plateMat, false)
+  const w = buildWheels(2, [[0, AZ], [0, -AZ]], 0.33, { width: 0.12, steer: true, rims: true, torus: true })
+  const group = new THREE.Group()
+  group.add(painted, dark, chrome, lamp, screen, plates, w.group)
   return { group, wheels: w.wheels }
 }
 
@@ -440,36 +817,63 @@ export class VehicleSystem {
   onPlayerHit: ((kind: string, x: number, z: number, dmg: number) => void) | null = null
   private hitCooldown = 0
 
-  constructor(world: WorldDef) {
+  constructor(world: WorldDef, renderer?: THREE.WebGLRenderer) {
     for (let i = 0; i < world.vehicles.length; i++) {
       const v = world.vehicles[i]
       const built = v.kind === 'bus' ? buildBus(i)
         : v.kind === 'cow' ? buildCow()
         : v.kind === 'auto' ? buildAuto()
+        : v.kind === 'bike' ? buildBike(i)
         : buildCar(i) // 'car' kind (and safe fallback for any future kind)
       built.group.name = `vehicle-${v.kind}-${v.id}`
       this.group.add(built.group)
-      this.vehicles.push({ id: v.id, kind: v.kind, group: built.group, path: v.path.map(([px, pz]) => ({ x: px, z: pz })), speed: v.speed, wheels: built.wheels, prevHeading: NaN, steer: 0 })
+      const path = v.path.map(([px, pz]) => ({ x: px, z: pz }))
+      const cum: number[] = [0]
+      for (let k = 1; k < path.length; k++) cum.push(cum[k - 1] + Math.hypot(path[k].x - path[k - 1].x, path[k].z - path[k - 1].z))
+      this.vehicles.push({ id: v.id, kind: v.kind, group: built.group, path, cum, speed: v.speed, wheels: built.wheels, prevHeading: NaN, steer: 0 })
+    }
+    // v36 — env reflections on vehicle materials only (world look untouched)
+    if (renderer) {
+      ensureVehicleEnv(renderer)
+      applyVehicleEnv(this.group)
     }
   }
 
-  /** Deterministic update from shared world time (seconds since match start) */
+  /** Deterministic update from shared world time (seconds since match start).
+   *  v37 — polyline traversal: constant speed along the waypoint chain, ping-pong
+   *  at the ends. For a 2-point path this reduces EXACTLY to the old shuttle math
+   *  (same formula the game-server mirrors), so existing routes are unchanged. */
   update(worldTime: number, dt: number, playerPos: THREE.Vector3 | null, localAuth: boolean) {
     this.hitCooldown = Math.max(0, this.hitCooldown - dt)
     const step = Math.max(dt, 1e-4)
     for (const v of this.vehicles) {
-      const a = v.path[0], b = v.path[1]
-      const len = Math.hypot(b.x - a.x, b.z - a.z)
-      const period = (len / v.speed) * 2
+      const total = v.cum[v.cum.length - 1]
+      if (!(total > 0)) continue
+      const period = (total / v.speed) * 2
       const phase = ((worldTime % period) + period) % period
       const half = period / 2
-      const t = phase < half ? phase / half : 2 - phase / half // ping-pong 0..1..0
+      const dir = phase < half ? 1 : -1
+      const sDist = (phase < half ? phase : period - phase) * v.speed // metres along the chain
+      let i = 0
+      while (i < v.path.length - 2 && sDist > v.cum[i + 1]) i++
+      const segLen = v.cum[i + 1] - v.cum[i]
+      const t = segLen > 0 ? Math.min(1, Math.max(0, (sDist - v.cum[i]) / segLen)) : 0
+      const a = v.path[i], b = v.path[i + 1]
       const x = a.x + (b.x - a.x) * t
       const z = a.z + (b.z - a.z) * t
-      const dir = phase < half ? 1 : -1
       v.group.position.set(x, 0, z)
       const heading = Math.atan2(b.x - a.x, b.z - a.z) * dir
-      // steer angle ≈ signed turn rate of heading, clamped ±0.5 rad (paths are straight → ~0, kicks at U-turns)
+      // body yaw eases toward the target heading (shortest arc) — corners read as
+      // real turns instead of snaps; client-visual only (server uses positions).
+      if (Number.isFinite(v.prevHeading)) {
+        let dh = heading - v.group.rotation.y
+        while (dh > Math.PI) dh -= Math.PI * 2
+        while (dh < -Math.PI) dh += Math.PI * 2
+        v.group.rotation.y += dh * Math.min(1, step * 7)
+      } else {
+        v.group.rotation.y = heading
+      }
+      // steer angle ≈ signed turn rate of the target heading, clamped ±0.5 rad
       if (Number.isFinite(v.prevHeading)) {
         let dh = heading - v.prevHeading
         while (dh > Math.PI) dh -= Math.PI * 2
@@ -478,19 +882,18 @@ export class VehicleSystem {
         v.steer += (turn - v.steer) * Math.min(1, step * 7)
       }
       v.prevHeading = heading
-      v.group.rotation.y = heading
       // wheels spin by actual travel speed; front pivots take the steer angle
       for (const w of v.wheels) {
         w.spin.rotation.x += (v.speed * dt) / w.radius
         if (w.steers) w.pivot.rotation.y = v.steer
       }
-      // collision with local player
+      // collision with local player (per-kind ring + damage, mirrored server-side)
       if (playerPos && localAuth && this.hitCooldown <= 0) {
+        const hit = VEHICLE_HIT[v.kind] ?? { r: 1.7, dmg: 35 }
         const d = Math.hypot(playerPos.x - x, playerPos.z - z)
-        if (d < (v.kind === 'bus' ? 2.6 : v.kind === 'cow' ? 1.4 : 1.7)) {
+        if (d < hit.r) {
           this.hitCooldown = 1.2
-          const dmg = v.kind === 'cow' ? 8 : v.kind === 'bus' ? 40 : 35
-          this.onPlayerHit?.(v.kind, x, z, dmg)
+          this.onPlayerHit?.(v.kind, x, z, hit.dmg)
         }
       }
     }

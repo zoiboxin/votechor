@@ -13,6 +13,7 @@ model Player {
   token         String   @unique
   name          String
   archetype     String   @default("student")
+  role          String   @default("protector") // 'protector' | 'police' — chosen side
   xp            Int      @default(0)
   level         Int      @default(1)
   cosmetics     String   @default("{}") // JSON: {hat,glasses,sign,skinTone,shirtColor...}
@@ -45,6 +46,7 @@ model MatchResult {
   itemsCollected   Int      @default(0)
   bossContribution Float    @default(0)
   detentions       Int      @default(0)
+  arrests          Int      @default(0) // police role: protesters detained by this player
   tokens           Int      @default(0) // vote tokens collected this match (lifetime sum drives token_collector)
   xpEarned         Int      @default(0)
   funnyTitle       String   @default("")
@@ -65,6 +67,7 @@ model PlayerStats {
   totalRevives  Int    @default(0)
   totalItems    Int    @default(0)
   detentions    Int    @default(0)
+  arrests       Int    @default(0) // lifetime suspects arrested (police role)
   bossKills     Int    @default(0)
   bestPosition  Int    @default(0) // 0 = none, 1 = best
   totalXp       Int    @default(0)

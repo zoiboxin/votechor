@@ -23,7 +23,7 @@ export default function BossBar() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -20 }}
           transition={{ type: 'spring', stiffness: 160, damping: 16 }}
-          className="pointer-events-none absolute left-1/2 top-2 z-20 w-[min(560px,92vw)] -translate-x-1/2 scale-95 sm:top-3 sm:scale-100"
+          className="pointer-events-none absolute left-1/2 top-12 z-20 w-[min(560px,92vw)] -translate-x-1/2 scale-95 sm:top-3 sm:scale-100"
         >
           <div className="rounded-2xl border-2 border-[#1c1a17]/90 bg-[#1c1a17]/92 p-2.5 shadow-[5px_5px_0_rgba(28,26,23,0.7)] backdrop-blur-sm">
             {/* header row */}

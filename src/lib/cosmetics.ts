@@ -220,7 +220,37 @@ export function emoteIsUnlocked(emote: string | undefined | null, level: number,
 // Six equip slots: hat + face + outfit + footwear + back gear + held item.
 // All catalogs are pure data so the API route can validate unlocks server-side.
 
-export type CosmeticKind = 'hat' | 'face' | 'outfit' | 'footwear' | 'gear' | 'held'
+export type CosmeticKind = 'hat' | 'hair' | 'face' | 'build' | 'outfit' | 'footwear' | 'gear' | 'held' | 'policeOutfit' | 'policeHat'
+
+/** Body shape preset — drives the rig's torso/limb proportions (v32). */
+export type BodyBuild = 'regular' | 'slim' | 'sturdy'
+
+export const BUILD_CATALOG: CosmeticItem[] = [
+  {
+    id: 'regular',
+    kind: 'build',
+    label: 'Regular Build',
+    emoji: '🧍',
+    desc: 'The classic protester frame. Balanced and march-ready.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'slim',
+    kind: 'build',
+    label: 'Slim Build',
+    emoji: '🏃',
+    desc: 'Light on the feet, hard for the committee to catch.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'sturdy',
+    kind: 'build',
+    label: 'Sturdy Build',
+    emoji: '🛡️',
+    desc: 'Built for holding the front line all monsoon.',
+    unlock: { type: 'free' },
+  },
+]
 
 export const SKIN_TONES: { id: string; hex: string; label: string }[] = [
   { id: 'porcelain', hex: '#e8c39a', label: 'Paperwork Pale' },
@@ -229,6 +259,17 @@ export const SKIN_TONES: { id: string; hex: string; label: string }[] = [
   { id: 'toffee', hex: '#b47a49', label: 'Chai Toffee' },
   { id: 'umber', hex: '#8d5a33', label: 'Deep Umber' },
   { id: 'midnight', hex: '#6b4226', label: 'Midnight Filter Coffee' },
+]
+
+export const HAIR_CATALOG: CosmeticItem[] = [
+  { id: 'default', kind: 'hair', label: 'Classic Cut', emoji: '💇', desc: 'The standard march haircut.', unlock: { type: 'free' } },
+  { id: 'buzz', kind: 'hair', label: 'Buzz Cut', emoji: '✂️', desc: 'Low maintenance, high defiance.', unlock: { type: 'free' } },
+  { id: 'bald', kind: 'hair', label: 'Bald & Bold', emoji: '🥚', desc: 'Aerodynamic. Committee-proof.', unlock: { type: 'free' } },
+  { id: 'bun', kind: 'hair', label: 'Top Bun', emoji: '🧑‍🦱', desc: 'Keeps hair out of the slogan painting.', unlock: { type: 'free' } },
+  { id: 'ponytail', kind: 'hair', label: 'Ponytail', emoji: '🐎', desc: 'Swings with every chant.', unlock: { type: 'free' } },
+  { id: 'curly', kind: 'hair', label: 'Curly Top', emoji: '🌀', desc: 'Maximum volume for maximum noise.', unlock: { type: 'level', level: 2 } },
+  { id: 'long', kind: 'hair', label: 'Flowing Long', emoji: '👩', desc: 'Wind-machine ready at all times.', unlock: { type: 'level', level: 3 } },
+  { id: 'braid', kind: 'hair', label: 'Side Braid', emoji: '🌾', desc: 'Woven with protest songs.', unlock: { type: 'level', level: 4 } },
 ]
 
 export const FACE_CATALOG: CosmeticItem[] = [
@@ -262,6 +303,66 @@ export const GEAR_CATALOG: CosmeticItem[] = [
   { id: 'umbrella', kind: 'gear', label: 'Strapped Umbrella', emoji: '☂️', desc: 'Monsoon-ready dissidence.', unlock: { type: 'level', level: 7 } },
 ]
 
+// ---------- Police Department wardrobe (round 23) — only rendered when role = police ----------
+
+export interface PoliceUniformDef {
+  id: string
+  label: string
+  desc: string
+  emoji: string
+  /** rig colors */
+  shirt: string
+  pants: string
+  accent: string
+  /** default peaked-cap dome color (beret/turban derive from it too) */
+  capColor: string
+  unlock: CosmeticUnlock
+}
+
+export const POLICE_UNIFORMS: Record<string, PoliceUniformDef> = {
+  khaki: {
+    id: 'khaki', label: 'Street Khaki', emoji: '🛵', desc: 'Standard-issue duty khaki. The city knows it on sight.',
+    shirt: '#8a6f4e', pants: '#5c4a34', accent: '#2c3947', capColor: '#1f3a2e', unlock: { type: 'free' },
+  },
+  traffic: {
+    id: 'traffic', label: 'Traffic Wing White', emoji: '🚦', desc: 'Crisp whites for the city’s hardest intersection.',
+    shirt: '#e8e4d8', pants: '#5c4a34', accent: '#8c1f28', capColor: '#e8e4d8', unlock: { type: 'free' },
+  },
+  navy: {
+    id: 'navy', label: 'Navy Dress Uniform', emoji: '🎖️', desc: 'Parade-grade navy with a gold-trimmed belt.',
+    shirt: '#22314a', pants: '#18233a', accent: '#d4a017', capColor: '#18233a', unlock: { type: 'level', level: 3 },
+  },
+  plain: {
+    id: 'plain', label: 'Plainclothes Detective', emoji: '🕵️', desc: 'Charcoal suit, quiet lathi. Nobody suspects the chai drinker.',
+    shirt: '#3a3f46', pants: '#26292f', accent: '#8c1f28', capColor: '#26292f', unlock: { type: 'level', level: 4 },
+  },
+  commandant: {
+    id: 'commandant', label: 'Officer Commandant', emoji: '🏅', desc: 'Khaki plus sash & medal bars. Salutes not included.',
+    shirt: '#7a5f40', pants: '#4f3f2c', accent: '#8c1f28', capColor: '#2c2418', unlock: { type: 'level', level: 7 },
+  },
+  swat: {
+    id: 'swat', label: 'Riot Squad Black', emoji: '🛡️', desc: 'Full black kit with heavy vest. Barricade day uniform.',
+    shirt: '#23252a', pants: '#1a1c20', accent: '#f2c14e', capColor: '#16171b', unlock: { type: 'level', level: 5 },
+  },
+}
+
+export const POLICE_OUTFIT_CATALOG: CosmeticItem[] = Object.values(POLICE_UNIFORMS).map((u) => ({
+  id: u.id, kind: 'policeOutfit' as const, label: u.label, emoji: u.emoji, desc: u.desc, unlock: u.unlock,
+}))
+
+export const POLICE_HAT_CATALOG: CosmeticItem[] = [
+  { id: 'peak', kind: 'policeHat', label: 'Peaked Cap', emoji: '🧢', desc: 'Regulation peaked cap with badge.', unlock: { type: 'free' } },
+  { id: 'beret', kind: 'policeHat', label: 'Officer Beret', emoji: '🪖', desc: 'Tilted with quiet confidence.', unlock: { type: 'free' } },
+  { id: 'turban', kind: 'policeHat', label: 'Police Turban', emoji: '🧑‍🦰', desc: 'Regulation dastaar with badge pin.', unlock: { type: 'free' } },
+  { id: 'none', kind: 'policeHat', label: 'Bare Head', emoji: '🚫', desc: 'Off-duty look. Hair still on duty.', unlock: { type: 'free' } },
+  { id: 'helmet', kind: 'policeHat', label: 'Riot Helmet', emoji: '⛑️', desc: 'Pairs beautifully with Riot Squad Black.', unlock: { type: 'level', level: 5 } },
+]
+
+/** Resolve the uniform palette for a police-role rig (defaults to Street Khaki). */
+export function policeUniformColors(id?: string | null): PoliceUniformDef {
+  return (id && POLICE_UNIFORMS[id]) || POLICE_UNIFORMS.khaki
+}
+
 export const HELD_CATALOG: CosmeticItem[] = [
   { id: 'none', kind: 'held', label: 'Empty Hands', emoji: '✋', desc: 'Clap for the cause instead.', unlock: { type: 'free' } },
   { id: 'sign', kind: 'held', label: 'Protest Sign', emoji: '🪧', desc: 'Shows your custom slogan.', unlock: { type: 'free' } },
@@ -275,11 +376,15 @@ export const HELD_CATALOG: CosmeticItem[] = [
 
 const CATALOGS: Record<CosmeticKind, CosmeticItem[]> = {
   hat: HAT_CATALOG,
+  hair: HAIR_CATALOG,
   face: FACE_CATALOG,
+  build: BUILD_CATALOG,
   outfit: OUTFIT_CATALOG,
   footwear: FOOTWEAR_CATALOG,
   gear: GEAR_CATALOG,
   held: HELD_CATALOG,
+  policeOutfit: POLICE_OUTFIT_CATALOG,
+  policeHat: POLICE_HAT_CATALOG,
 }
 
 export function catalogByKind(kind: CosmeticKind): CosmeticItem[] {
@@ -287,10 +392,10 @@ export function catalogByKind(kind: CosmeticKind): CosmeticItem[] {
 }
 
 /** All Wardrobe slots in tab order (hat already existed — kept first for muscle memory). */
-export const WARDROBE_KINDS: CosmeticKind[] = ['hat', 'face', 'outfit', 'footwear', 'gear', 'held']
+export const WARDROBE_KINDS: CosmeticKind[] = ['hat', 'hair', 'face', 'build', 'outfit', 'footwear', 'gear', 'held', 'policeOutfit', 'policeHat']
 
 /** Equippable check across every catalog. Unknown ids are rejected. 'none'/defaults always pass. */
-const NONE_LIKE = new Set(['none', 'clean', 'classic', 'shoes'])
+const NONE_LIKE = new Set(['none', 'clean', 'classic', 'shoes', 'default', 'khaki', 'peak', 'regular'])
 export function anyItemIsUnlocked(
   kind: CosmeticKind,
   id: string | undefined | null,
@@ -317,8 +422,18 @@ export function sanitizeCosmetics(raw: unknown): Record<string, string | boolean
   const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : undefined)
   const hat = str(src.hat, 24)
   if (hat && CATALOGS.hat.some((i) => i.id === hat)) out.hat = hat
+  const hair = str(src.hair, 24)
+  if (hair && CATALOGS.hair.some((i) => i.id === hair)) out.hair = hair
+  const gender = str(src.gender, 8)
+  if (gender === 'male' || gender === 'female') out.gender = gender
+  const policeOutfit = str(src.policeOutfit, 24)
+  if (policeOutfit && CATALOGS.policeOutfit.some((i) => i.id === policeOutfit)) out.policeOutfit = policeOutfit
+  const policeHat = str(src.policeHat, 24)
+  if (policeHat && CATALOGS.policeHat.some((i) => i.id === policeHat)) out.policeHat = policeHat
   const face = str(src.face, 24)
   if (face && CATALOGS.face.some((i) => i.id === face)) out.face = face
+  const build = str(src.build, 12)
+  if (build && CATALOGS.build.some((i) => i.id === build)) out.build = build
   const outfit = str(src.outfit, 24)
   if (outfit && CATALOGS.outfit.some((i) => i.id === outfit)) out.outfit = outfit
   const footwear = str(src.footwear, 24)
@@ -335,15 +450,23 @@ export function sanitizeCosmetics(raw: unknown): Record<string, string | boolean
   return Object.keys(out).length ? out : undefined
 }
 
-/** Deterministic-ish random free-tier look for season bots — variety without unlock logic. */
+/** Deterministic-ish random free-tier look for season bots — variety without unlock logic.
+ *  Female bots lean hard into the ponytail (the signature feminine style). */
 export function randomFreeCosmetics(rand: () => number = Math.random): Record<string, string | boolean> {
   const pick = (arr: CosmeticItem[]) => {
     const free = arr.filter((i) => i.unlock.type === 'free')
     return free[Math.floor(rand() * free.length)]?.id
   }
+  const female = rand() < 0.5
+  const hairRoll = rand()
   const out: Record<string, string | boolean> = {
     hat: pick(CATALOGS.hat),
+    hair: female
+      ? (hairRoll < 0.5 ? 'ponytail' : hairRoll < 0.8 ? 'bun' : pick(CATALOGS.hair))
+      : pick(CATALOGS.hair),
+    gender: female ? 'female' : 'male',
     face: pick(CATALOGS.face),
+    build: pick(CATALOGS.build),
     outfit: pick(CATALOGS.outfit),
     footwear: pick(CATALOGS.footwear),
     gear: pick(CATALOGS.gear),
@@ -354,18 +477,28 @@ export function randomFreeCosmetics(rand: () => number = Math.random): Record<st
   return out
 }
 
-/** Rig-facing cosmetics view — defaults resolved so the rig never sees undefined ids. */
+/** Rig-facing cosmetics view — defaults resolved so the rig never sees undefined ids.
+ *  Hair default is gender-aware: female rigs get the ponytail, male rigs the classic cut. */
 export function resolveRigCosmetics(c: Record<string, unknown> | undefined | null): {
-  hat: string; face: string; outfit: string; footwear: string; gear: string; held: string
+  hat: string; hair: string; gender: 'male' | 'female'; face: string; build: BodyBuild; outfit: string; footwear: string; gear: string; held: string
+  policeOutfit: string; policeHat: string
   glasses: boolean; skinTone?: string; signText?: string
 } {
+  const gender = c?.gender === 'female' ? 'female' as const : 'male' as const
+  const rawBuild = typeof c?.build === 'string' ? c.build : 'regular'
+  const build: BodyBuild = rawBuild === 'slim' || rawBuild === 'sturdy' ? rawBuild : 'regular'
   return {
     hat: typeof c?.hat === 'string' ? c.hat : 'none',
+    hair: typeof c?.hair === 'string' ? c.hair : (gender === 'female' ? 'ponytail' : 'default'),
+    gender,
     face: typeof c?.face === 'string' ? c.face : 'clean',
+    build,
     outfit: typeof c?.outfit === 'string' ? c.outfit : 'classic',
     footwear: typeof c?.footwear === 'string' ? c.footwear : 'shoes',
     gear: typeof c?.gear === 'string' ? c.gear : 'none',
     held: typeof c?.held === 'string' ? c.held : 'none',
+    policeOutfit: typeof c?.policeOutfit === 'string' ? c.policeOutfit : 'khaki',
+    policeHat: typeof c?.policeHat === 'string' ? c.policeHat : 'peak',
     glasses: c?.glasses === true,
     skinTone: typeof c?.skinTone === 'string' ? c.skinTone : undefined,
     signText: typeof c?.signText === 'string' ? c.signText : undefined,

@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/lib/game-store'
 import { uiActions } from '@/lib/game-store'
 import { archetypeById } from '@/game/shared/constants'
-import { ArrowLeft, Users, Zap, Shuffle, KeyRound, Server, Loader2, AlertTriangle, Ticket, Copy, Check, Link2 } from 'lucide-react'
+import { MAP_VARIANTS, mapForLevel, mapById } from '@/game/shared/maps'
+import { ArrowLeft, Users, Zap, Shuffle, KeyRound, Server, Loader2, AlertTriangle, Ticket, Copy, Check, Link2, MapPin, Lock, RotateCcw, Sparkles } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 /** Unambiguous room-code alphabet (no I/L/O/0/1 — the committee gave up on fonts). */
@@ -41,6 +42,13 @@ export default function PlayScreen({ onBack }: { onBack: () => void }) {
   const joining = useGameStore((s) => s.joining)
   const joinError = useGameStore((s) => s.joinError)
   const profile = useGameStore((s) => s.profile)
+  const selectedMapId = useGameStore((s) => s.selectedMapId)
+  const level = profile?.level ?? 1
+  // v43 — the district this player's level earns (AUTO pick)
+  const district = mapForLevel(level)
+  // v44 — the district this solo run will actually play (selection wins when unlocked)
+  const chosen = selectedMapId && mapById(selectedMapId).minLevel <= level ? mapById(selectedMapId) : district
+  const isAuto = !selectedMapId || mapById(selectedMapId).minLevel > level
   const [roomCode, setRoomCode] = useState('')
   const [copied, setCopied] = useState(false)
   const [deepCell, setDeepCell] = useState<string | null>(null)
@@ -168,6 +176,102 @@ export default function PlayScreen({ onBack }: { onBack: () => void }) {
               chat, flee police and march on checkpoints). When a real player joins, a bot steps aside. Leave and come back:
               your season keeps breathing.
             </p>
+            {/* v44 — district selector: replay any UNLOCKED district (or ride AUTO).
+                Locked tiers stay visible as teasers — the campaign ladder in one glance. */}
+            <div className="mt-3 rounded-xl border-2 border-dashed border-[#b07d1e]/70 bg-[#f2c14e]/20 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.18em] text-[#8c1f28]">
+                  <MapPin className="h-3 w-3" /> Pick Your District
+                </span>
+                <span className="rounded-md border border-[#1c1a17]/50 bg-[#1c1a17] px-1.5 py-px text-[8px] font-black uppercase tracking-widest text-[#f2c14e]">
+                  {isAuto ? 'Auto' : 'Replay pick'}
+                </span>
+              </div>
+
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5 vc-scroll max-h-44 overflow-y-auto pr-0.5">
+                {/* AUTO tile — the level-earned district */}
+                <button
+                  onClick={() => useGameStore.getState().setSelectedMapId(null)}
+                  aria-pressed={isAuto}
+                  className={`flex items-center gap-1.5 rounded-lg border-2 px-2 py-1.5 text-left transition-all ${
+                    isAuto
+                      ? 'border-[#8c1f28] bg-[#8c1f28] shadow-[2px_2px_0_#1c1a17]'
+                      : 'border-[#1c1a17]/50 bg-[#f5efdc] hover:border-[#8c1f28] hover:bg-[#f2c14e]/60'
+                  }`}
+                >
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-[#1c1a17]/60 bg-[#f2c14e]">
+                    <Sparkles className="h-3 w-3 text-[#1c1a17]" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className={`block truncate text-[10px] font-black uppercase leading-tight ${isAuto ? 'text-[#f5efdc]' : 'text-[#1c1a17]'}`}>
+                      Auto — {district.name}
+                    </span>
+                    <span className={`block text-[8px] font-bold uppercase tracking-wider ${isAuto ? 'text-[#f2c14e]' : 'text-[#1c1a17]/50'}`}>
+                      Level {level} earns this
+                    </span>
+                  </span>
+                </button>
+
+                {/* the six campaign districts — unlocked selectable, locked as teasers */}
+                {MAP_VARIANTS.map((m) => {
+                  const unlocked = level >= m.minLevel
+                  const active = !isAuto && selectedMapId === m.id
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => unlocked && useGameStore.getState().setSelectedMapId(m.id)}
+                      disabled={!unlocked}
+                      aria-pressed={active}
+                      title={unlocked ? `${m.name} — ${m.tagline}` : `${m.name} unlocks at level ${m.minLevel}`}
+                      className={`flex items-center gap-1.5 rounded-lg border-2 px-2 py-1.5 text-left transition-all ${
+                        active
+                          ? 'border-[#8c1f28] bg-[#8c1f28] shadow-[2px_2px_0_#1c1a17]'
+                          : unlocked
+                            ? 'border-[#1c1a17]/50 bg-[#f5efdc] hover:border-[#8c1f28] hover:bg-[#f2c14e]/60'
+                            : 'cursor-not-allowed border-[#1c1a17]/25 bg-[#1c1a17]/5 opacity-60'
+                      }`}
+                    >
+                      <span
+                        className="h-5 w-5 shrink-0 rounded-md border border-[#1c1a17]/50"
+                        style={{ background: m.ground, opacity: unlocked ? 1 : 0.45 }}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block truncate text-[10px] font-black uppercase leading-tight ${active ? 'text-[#f5efdc]' : 'text-[#1c1a17]'}`}>
+                          {m.name}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          {!unlocked ? (
+                            <span className={`flex items-center gap-0.5 text-[8px] font-bold uppercase tracking-wider ${active ? 'text-[#f2c14e]' : 'text-[#8c1f28]'}`}>
+                              <Lock className="h-2 w-2" /> LV {m.minLevel}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-0.5" role="img" aria-label={`Difficulty ${m.difficulty} of 5`}>
+                              {[1, 2, 3, 4, 5].map((i) => (
+                                <span key={i} className={`h-1 w-1 rounded-full ${i <= m.difficulty ? (active ? 'bg-[#f2c14e]' : 'bg-[#8c1f28]') : 'bg-[#1c1a17]/20'}`} />
+                              ))}
+                            </span>
+                          )}
+                          <span className={`text-[8px] font-black ${active ? 'text-[#f2c14e]' : 'text-[#2e6e4e]'}`}>×{m.xpMul}</span>
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* what THIS solo run will play */}
+              <div className="mt-1.5 flex items-baseline justify-between gap-2 border-t border-dashed border-[#1c1a17]/15 pt-1.5">
+                <span className="truncate text-sm font-black tracking-tight text-[#1c1a17]">{chosen.name}</span>
+                <span className="shrink-0 text-[10px] font-black text-[#2e6e4e]" title="District XP stakes — harder districts pay better">
+                  XP ×{chosen.xpMul}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-[10px] font-semibold text-[#1c1a17]/60" title={chosen.tagline}>{chosen.tagline}</p>
+              <p className="mt-1 flex items-start gap-1 text-[9px] font-semibold uppercase tracking-wider text-[#1c1a17]/45">
+                <RotateCcw className="mt-px h-2.5 w-2.5 shrink-0" />
+                Replay unlocked districts to march with newer protesters — XP pays the picked stakes. Multiplayer stays classic.
+              </p>
+            </div>
             <button
               onClick={startSolo}
               disabled={joining}

@@ -17,6 +17,11 @@ export class ThirdPersonCamera {
   constructor(private camera: THREE.PerspectiveCamera, private physics: PhysicsWorld) {}
 
   update(dt: number, target: THREE.Vector3, lookDx: number, lookDy: number) {
+    // NaN shield: a poisoned focus (positional glitch upstream) must never reach the
+    // camera — a NaN camera matrix makes the renderer frustum-cull the entire scene
+    // and the screen shows only the sky/floor color. Hold the last good view instead;
+    // the player controller's own sentinel restores the position within one tick.
+    if (!Number.isFinite(target.x + target.y + target.z)) return
     this.yaw -= lookDx
     this.pitch = Math.max(-0.55, Math.min(1.15, this.pitch + lookDy))
     // smooth distance
@@ -58,6 +63,11 @@ export class ThirdPersonCamera {
     } else this.shakeOffset.set(0, 0, 0)
 
     this.camera.position.copy(this.pos).add(this.shakeOffset)
+    // belt-and-braces: never hand the renderer a non-finite camera matrix
+    if (!Number.isFinite(this.camera.position.x + this.camera.position.y + this.camera.position.z)) {
+      this.camera.position.set(focus.x + 4, focus.y + 2.5, focus.z + 5)
+      this.pos.copy(this.camera.position)
+    }
     this.camera.lookAt(this.lookAt)
   }
 

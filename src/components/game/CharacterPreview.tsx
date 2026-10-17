@@ -2,22 +2,30 @@
 
 // Live WebGL wardrobe preview — renders the ACTUAL in-game CharacterRig on a slow
 // turntable so what you see is exactly what other protesters will see.
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { CharacterRig } from '@/game/character'
 import { archetypeById } from '@/game/shared/constants'
+import { policeUniformColors } from '@/lib/cosmetics'
 
 export interface PreviewLook {
   archetype: string
   hat: string
   glasses: boolean
   face: string
+  build: string
   outfit: string
   footwear: string
   gear: string
   held: string
   signText: string
   skinTone?: string
+  gender: 'male' | 'female'
+  hair: string
+  /** when true the preview renders the OFFICER look (uniform + headgear + lathi) */
+  police?: boolean
+  policeOutfit?: string
+  policeHat?: string
 }
 
 function disposeRig(rig: CharacterRig) {
@@ -34,6 +42,8 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
   const mountRef = useRef<HTMLDivElement | null>(null)
   const lookRef = useRef(look)
   const rebuildRef = useRef<(() => void) | null>(null)
+  const toggleViewRef = useRef<(() => void) | null>(null)
+  const [faceView, setFaceView] = useState(false)
 
   // keep the latest look readable inside effects (no render-phase ref writes)
   useEffect(() => {
@@ -88,6 +98,23 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
     scene.add(stage)
 
     let rig: CharacterRig | null = null
+
+    // camera presets: full-body fit check + close-up face check (round 23).
+    // camFace is re-targeted to the rig's actual head height on every rebuild —
+    // archetypes scale the whole rig, so a fixed look-at crops the face.
+    const camFull = { pos: new THREE.Vector3(0.55, 1.35, 2.9), look: new THREE.Vector3(0, 0.95, 0) }
+    const camFace = { pos: new THREE.Vector3(0.28, 1.72, 1.18), look: new THREE.Vector3(0, 1.66, 0) }
+    const retargetFaceCam = () => {
+      if (!rig) return
+      const s = rig.group.scale.y || 1
+      const headY = 1.7 * s
+      camFace.look.set(0, headY - 0.01, 0)
+      camFace.pos.set(0.24 * s, headY + 0.1, 1.34 * s)
+    }
+    const camPos = camFull.pos.clone()
+    const camLook = camFull.look.clone()
+    let faceMode = false
+
     const buildRig = () => {
       if (rig) {
         stage.remove(rig.group)
@@ -96,22 +123,38 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
       const l = lookRef.current
       const colors = { ...archetypeById(l.archetype).colors }
       if (l.skinTone) colors.skin = l.skinTone
+      if (l.police) {
+        // mirror the in-game officer look exactly (game.ts startMatch)
+        const u = policeUniformColors(l.policeOutfit)
+        colors.shirt = u.shirt
+        colors.pants = u.pants
+        colors.accent = u.accent
+      }
       rig = new CharacterRig({
         archetype: l.archetype,
         colors,
         hat: l.hat,
         glasses: l.glasses,
-        signText: l.signText,
+        signText: l.police ? undefined : l.signText,
         face: l.face,
-        outfit: l.outfit,
+        build: l.build,
+        outfit: l.police ? undefined : l.outfit,
         footwear: l.footwear,
-        gear: l.gear,
-        held: l.held,
+        gear: l.police ? 'none' : l.gear,
+        held: l.police ? undefined : l.held,
+        gender: l.gender,
+        hair: l.hair,
+        ...(l.police ? { npcType: 'police' as const, policeOutfit: l.policeOutfit, policeHat: l.policeHat } : {}),
       })
       stage.add(rig.group)
+      retargetFaceCam()
     }
     buildRig()
     rebuildRef.current = buildRig
+    toggleViewRef.current = () => {
+      faceMode = !faceMode
+      setFaceView(faceMode)
+    }
 
     // turntable + drag-to-rotate
     let spin = 0.55
@@ -142,9 +185,23 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
       const now = performance.now()
       const dt = Math.min(0.05, (now - last) / 1000)
       last = now
-      if (!dragging) spin += dt * 0.45
+      if (!dragging) {
+        if (faceMode) {
+          // Face Check: ease the turntable to the nearest front-facing angle and
+          // hold it there, so the close-up actually shows the face (not the ponytail)
+          const front = Math.round(spin / (Math.PI * 2)) * Math.PI * 2
+          spin += (front - spin) * Math.min(1, dt * 5)
+        } else {
+          spin += dt * 0.45
+        }
+      }
       stage.rotation.y = spin
       rig?.update(dt, 'idle', 0)
+      const t = Math.min(1, dt * 6)
+      camPos.lerp(faceMode ? camFace.pos : camFull.pos, t)
+      camLook.lerp(faceMode ? camFace.look : camFull.look, t)
+      camera.position.copy(camPos)
+      camera.lookAt(camLook)
       renderer.render(scene, camera)
     }
     loop()
@@ -153,6 +210,7 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
       cancelAnimationFrame(raf)
       ro.disconnect()
       rebuildRef.current = null
+      toggleViewRef.current = null
       renderer.domElement.removeEventListener('pointerdown', onDown)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
@@ -171,5 +229,16 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
     rebuildRef.current?.()
   }, [look])
 
-  return <div ref={mountRef} className={className} aria-label="Live 3D character preview" role="img" />
+  return (
+    <div className={`relative ${className ?? ''}`}>
+      <div ref={mountRef} className="h-full w-full" aria-label="Live 3D character preview" role="img" />
+      <button
+        type="button"
+        onClick={() => toggleViewRef.current?.()}
+        className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border-2 border-[#1c1a17]/80 bg-[#f5efdc]/95 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-[#1c1a17] shadow-[2px_2px_0_#1c1a17] transition-transform hover:-translate-y-0.5"
+      >
+        {faceView ? '🧍 Full Body' : '😀 Face Check'}
+      </button>
+    </div>
+  )
 }

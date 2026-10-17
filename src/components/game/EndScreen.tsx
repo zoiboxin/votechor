@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
 import { xpForLevel, levelFromXp, archetypeById } from '@/game/shared/constants'
+import { mapForLevel } from '@/game/shared/maps'
 import {
   Vote, Crown, Skull, Trophy, Footprints, Flag, KeyRound, HeartPulse, Package, Zap,
   Timer, Users, Play, Home, Medal, X, CalendarCheck, CalendarRange, Handshake, Gift,
-  HeartHandshake, Award, Lock,
+  HeartHandshake, Award, Lock, Gavel, MapPin,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -77,6 +78,7 @@ export default function EndScreen() {
     { icon: Gift, label: 'Gifts Given', value: summary.gifts ?? 0 },
     { icon: Zap, label: 'Boss Hits', value: summary.bossContribution },
     { icon: Skull, label: 'Detentions', value: summary.detentions },
+    ...(summary.arrests ? [{ icon: Gavel, label: 'Arrests Made', value: summary.arrests }] : []),
     { icon: Lock, label: 'Confiscated', value: summary.confiscated ? `${summary.confiscated} votes${summary.confiscatedItems ? ` + ${summary.confiscatedItems} items` : ''}` : '—' },
     { icon: Timer, label: 'Duration', value: `${Math.floor(summary.duration / 60)}m ${Math.floor(summary.duration % 60)}s` },
     { icon: Users, label: 'Protesters Online', value: summary.playersOnline },
@@ -237,6 +239,20 @@ export default function EndScreen() {
               <span className="text-xs font-black tabular-nums text-[#2e6e4e]">+{summary.solidarityBonus}</span>
             </motion.div>
           )}
+          {(summary.xpMul ?? 1) > 1 && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, rotate: -1 }}
+              animate={{ opacity: 1, scale: 1, rotate: -1 }}
+              transition={{ delay: 1.2 }}
+              className="mt-2 flex items-center justify-between rounded-xl border-2 border-[#8c1f28] bg-gradient-to-r from-[#8c1f28]/20 to-[#8c1f28]/5 px-3 py-1.5"
+            >
+              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-[#8c1f28]">
+                <MapPin className="h-3.5 w-3.5" />
+                {mapForLevel(summary.newLevel || 1).name} district stakes
+              </span>
+              <span className="text-xs font-black tabular-nums text-[#8c1f28]">XP ×{summary.xpMul}</span>
+            </motion.div>
+          )}
           {summary.leveledUp && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}
@@ -245,6 +261,20 @@ export default function EndScreen() {
               className="mt-2 rounded-xl border-2 border-[#b07d1e] bg-[#f2c14e] py-1.5 text-center text-xs font-black uppercase tracking-[0.2em] text-[#1c1a17]"
             >
               ⭐ Level Up! You are now Level {summary.newLevel} — the aunty has noticed ⭐
+            </motion.div>
+          )}
+          {summary.unlockedMap && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: [0, 1, 0.8, 1], scale: [0.85, 1.06, 1] }}
+              transition={{ delay: 1.55, duration: 0.9 }}
+              className="mt-2 rounded-xl border-2 border-[#b07d1e] bg-gradient-to-r from-[#8c1f28] via-[#b23a48] to-[#8c1f28] px-3 py-2 text-center shadow-[3px_3px_0_#1c1a17]"
+            >
+              <div className="text-[10px] font-black uppercase tracking-[0.24em] text-[#f2c14e]">
+                🗺️ New district unlocked — Level {summary.unlockedMap.minLevel}
+              </div>
+              <div className="text-base font-black tracking-tight text-[#f5efdc]">{summary.unlockedMap.name}</div>
+              <div className="text-[10px] font-semibold text-[#f5efdc]/85">{summary.unlockedMap.tagline}</div>
             </motion.div>
           )}
         </motion.div>

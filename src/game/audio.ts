@@ -8,6 +8,7 @@ export type SfxName =
   | 'heal' | 'revive' | 'checkpoint' | 'uiClick' | 'uiHover' | 'bossHit' | 'stampSlam'
   | 'shockwave' | 'paperRustle' | 'dizzy' | 'victory' | 'defeat' | 'cash' | 'horn' | 'moo' | 'gate'
   | 'shout' | 'thunder'
+  | 'bark' | 'meow' | 'chirp' | 'crunch'
 
 export type MusicTheme = 'menu' | 'ambient' | 'chase' | 'boss' | 'victory'
 
@@ -62,6 +63,10 @@ class AudioManagerImpl {
     g.gain.exponentialRampToValueAtTime(0.0001, t + a + d)
   }
 
+  /** Current per-play routing target — null = straight to the SFX bus (v45 spatial audio). */
+  private playDest: AudioNode | null = null
+  private out(): AudioNode { return this.playDest ?? this.sfxGain! }
+
   private osc(type: OscillatorType, freq: number, t: number, dur: number, peak: number, slideTo?: number, dest?: AudioNode) {
     if (!this.ctx || !this.sfxGain) return
     const o = this.ctx.createOscillator()
@@ -70,7 +75,7 @@ class AudioManagerImpl {
     o.frequency.setValueAtTime(freq, t)
     if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + dur)
     this.env(g, t, 0.008, dur, peak)
-    o.connect(g); g.connect(dest ?? this.sfxGain)
+    o.connect(g); g.connect(dest ?? this.out())
     o.start(t); o.stop(t + dur + 0.1)
   }
 
@@ -88,25 +93,127 @@ class AudioManagerImpl {
     f.Q.value = q
     const g = this.ctx.createGain()
     this.env(g, t, 0.005, dur, peak)
-    src.connect(f); f.connect(g); g.connect(dest ?? this.sfxGain)
+    src.connect(f); f.connect(g); g.connect(dest ?? this.out())
     src.start(t)
+  }
+
+  /**
+   * A human whistle voice — the two cues that make a bare sine read as
+   * "someone actually whistling through lips/fingers" are (1) VIBRATO, a
+   * slow ±dozens-of-Hz wobble on the pitch, and (2) breath tremolo, a gentle
+   * amplitude shimmer tied to the air stream. Adds a swell envelope: soft
+   * tongue-attack, brief hold, quick release. Near-pure sine carrier because
+   * real whistles carry almost no harmonics.
+   */
+  private whistleTone(t: number, f0: number, f1: number, dur: number, peak: number, vibHz: number, vibDepth: number) {
+    if (!this.ctx || !this.sfxGain) return
+    const ctx = this.ctx
+    const o = ctx.createOscillator()
+    o.type = 'sine'
+    o.frequency.setValueAtTime(Math.max(200, f0), t)
+    o.frequency.exponentialRampToValueAtTime(Math.max(200, f1), t + dur * 0.55)
+    const g = ctx.createGain() // swell envelope
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.035)
+    g.gain.setValueAtTime(peak, t + dur * 0.75)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    const am = ctx.createGain() // breath tremolo multiplies the carrier
+    am.gain.value = 0.86
+    const amOsc = ctx.createOscillator()
+    amOsc.type = 'sine'
+    amOsc.frequency.value = vibHz * 0.9
+    const amDepth = ctx.createGain()
+    amDepth.gain.value = peak * 0.14
+    amOsc.connect(amDepth); amDepth.connect(am.gain)
+    const lfo = ctx.createOscillator() // vibrato: pitch wobble
+    lfo.type = 'sine'
+    lfo.frequency.value = vibHz
+    const lfoDepth = ctx.createGain()
+    lfoDepth.gain.value = vibDepth
+    lfo.connect(lfoDepth); lfoDepth.connect(o.frequency)
+    o.connect(am); am.connect(g); g.connect(this.out())
+    o.start(t); o.stop(t + dur + 0.05)
+    lfo.start(t); lfo.stop(t + dur + 0.05)
+    amOsc.start(t); amOsc.stop(t + dur + 0.05)
   }
 
   play(name: SfxName, volume = 1) {
     if (!this.ctx || !this.sfxGain) return
+    this.playDest = null
+    this.emit(name, volume)
+  }
+
+  /**
+   * v45 — spatial one-shot: a voice/sound emitted at world position (sx, sz),
+   * heard by a listener at (lx, lz) facing yaw (Three.js convention: yaw 0
+   * faces −z, right vector = (cos yaw, −sin yaw)). Distance rolls off with a
+   * smoothstep curve to zero at `range` metres; direction becomes a stereo pan
+   * so a bark on your left ear actually sits left. Silent past the range.
+   */
+  playAt(name: SfxName, sx: number, sz: number, lx: number, lz: number, yaw: number, range = 52, base = 1) {
+    if (!this.ctx || !this.sfxGain) return
+    const dx = sx - lx, dz = sz - lz
+    const dist = Math.hypot(dx, dz)
+    const k = Math.max(0, Math.min(1, 1 - dist / range))
+    const atten = base * k * k * (3 - 2 * k) // smoothstep — full near, 0 at range
+    if (atten < 0.02) return // out of earshot — no nodes, no cost
+    let pan = 0
+    if (dist > 0.35) {
+      pan = Math.max(-1, Math.min(1, (dx * Math.cos(yaw) - dz * Math.sin(yaw)) / dist)) * 0.85
+    }
+    const ctx = this.ctx
+    const g = ctx.createGain()
+    g.gain.value = atten
+    if (Math.abs(pan) > 0.01 && typeof ctx.createStereoPanner === 'function') {
+      const sp = ctx.createStereoPanner()
+      sp.pan.value = pan
+      sp.connect(g); g.connect(this.sfxGain)
+      this.playDest = sp
+    } else {
+      g.connect(this.sfxGain)
+      this.playDest = g
+    }
+    this.emit(name, 1)
+    this.playDest = null
+  }
+
+  private emit(name: SfxName, v: number) {
+    if (!this.ctx || !this.sfxGain) return
     const t = this.ctx.currentTime
-    const v = volume
     switch (name) {
-      case 'footstep': this.noise(0.08, t, 0.12 * v, 500 + Math.random() * 300, 0.8); break
-      case 'footstepRun': this.noise(0.09, t, 0.2 * v, 600 + Math.random() * 400, 0.8); this.osc('triangle', 90, t, 0.05, 0.06 * v); break
-      case 'jump': this.osc('sine', 260, t, 0.18, 0.16 * v, 480); break
+      case 'footstep': {
+        // walk footfall anatomy: heel-weight thud + rubber-sole scuff + short
+        // toe flick. Pitch/brightness randomized per step so steps never loop.
+        // v45: peaks raised ~65% — players reported walking as nearly silent.
+        const f = 0.9 + Math.random() * 0.2
+        this.osc('sine', (78 + Math.random() * 14) * f, t, 0.055, 0.2 * v)
+        this.noise(0.05, t, 0.28 * v, (850 + Math.random() * 350) * f, 1.1)
+        this.noise(0.035, t + 0.05, 0.13 * v, 1400 * f, 1.4)
+        break
+      }
+      case 'footstepRun': {
+        // run footfall: heavier full-weight slam, bigger scuff, audible sole
+        // slap a beat after contact — reads as real ground strikes, louder
+        const f = 0.9 + Math.random() * 0.2
+        this.osc('sine', (72 + Math.random() * 12) * f, t, 0.07, 0.3 * v)
+        this.noise(0.06, t, 0.4 * v, (750 + Math.random() * 400) * f, 1)
+        this.noise(0.04, t + 0.055, 0.16 * v, 1700 * f, 1.3)
+        break
+      }
+      case 'jump': {
+        // v45: doubled the voice + a cloth/sole scuff layer so the hop reads
+        // as a physical push-off, not a faint video-game blip
+        this.osc('sine', 260, t, 0.2, 0.32 * v, 480)
+        this.noise(0.09, t, 0.12 * v, 1100, 0.9)
+        break
+      }
       case 'doublejump': {
         // distinctive whoosh-flap: layered filtered-noise sweeps + quick flutter blips
-        this.noise(0.28, t, 0.14 * v, 900, 0.6)
-        this.noise(0.22, t + 0.05, 0.1 * v, 2000, 0.7)
-        this.osc('sine', 340, t, 0.26, 0.1 * v, 820)
-        this.osc('triangle', 520, t + 0.02, 0.09, 0.06 * v, 700)
-        this.osc('triangle', 660, t + 0.11, 0.09, 0.05 * v, 880)
+        this.noise(0.28, t, 0.2 * v, 900, 0.6)
+        this.noise(0.22, t + 0.05, 0.15 * v, 2000, 0.7)
+        this.osc('sine', 340, t, 0.26, 0.16 * v, 820)
+        this.osc('triangle', 520, t + 0.02, 0.09, 0.09 * v, 700)
+        this.osc('triangle', 660, t + 0.11, 0.09, 0.08 * v, 880)
         break
       }
       case 'vault': {
@@ -124,27 +231,105 @@ class AudioManagerImpl {
         this.osc('sine', 620, t + 0.05, 0.22, 0.05 * v, 380)
         break
       }
-      case 'land': this.noise(0.12, t, 0.25 * v, 300, 0.7); break
-      case 'slide': this.noise(0.4, t, 0.16 * v, 900, 0.5); break
+      case 'land': this.noise(0.12, t, 0.38 * v, 300, 0.7); this.osc('sine', 95, t, 0.09, 0.14 * v, 60); break
+      case 'slide': {
+        // long ground-scrape glide: two overlapping band-passed scrapes with a
+        // falling filter (sole rubbing the road), rhythmic scuff pulses as the
+        // body skips, and a low friction hum underneath. Length matches the
+        // tuned ~1.5 s slide window.
+        if (this.ctx && this.sfxGain) {
+          const len = Math.max(1, Math.floor(this.ctx.sampleRate * 1.25))
+          const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
+          const data = buf.getChannelData(0)
+          for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1
+          const src = this.ctx.createBufferSource()
+          src.buffer = buf
+          const flt = this.ctx.createBiquadFilter()
+          flt.type = 'bandpass'
+          flt.Q.value = 0.7
+          flt.frequency.setValueAtTime(950, t)
+          flt.frequency.exponentialRampToValueAtTime(380, t + 1.15)
+          const g = this.ctx.createGain()
+          g.gain.setValueAtTime(0.0001, t)
+          g.gain.exponentialRampToValueAtTime(0.2 * v, t + 0.07)
+          g.gain.setValueAtTime(0.2 * v, t + 0.85)
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2)
+          src.connect(flt); flt.connect(g); g.connect(this.out())
+          src.start(t)
+        }
+        // skip pulses — the body bouncing on the leading leg
+        this.noise(0.06, t + 0.12, 0.09 * v, 620, 1.1)
+        this.noise(0.05, t + 0.48, 0.06 * v, 540, 1.1)
+        this.noise(0.05, t + 0.86, 0.045 * v, 460, 1.1)
+        this.osc('sine', 95, t, 0.5, 0.05 * v, 70)
+        break
+      }
       case 'whistle': {
-        this.osc('sine', 2100, t, 0.14, 0.14 * v, 2400)
-        this.osc('sine', 2600, t + 0.16, 0.18, 0.14 * v, 2200)
+        // real mouth/finger whistle, two blows — breathy air pickup, then a
+        // rising "fwee" and a louder held "wheeet" with natural vibrato and
+        // breath shimmer (whistleTone). ~2x louder than the old bare beeps.
+        const j = 0.94 + Math.random() * 0.12 // per-play pitch jitter — no two whistles identical
+        this.noise(0.06, t, 0.05 * v, 3200, 1.2) // tongue/air attack
+        this.whistleTone(t, 1700 * j, 2500 * j, 0.2, 0.22 * v, 5.5, 60)
+        this.whistleTone(t + 0.24, 2600 * j, 2250 * j, 0.42, 0.3 * v, 6.5, 85)
+        this.noise(0.09, t + 0.64, 0.035 * v, 2600, 1) // airy tail
         break
       }
       case 'shout': {
-        // human-ish street yell — formant-ish saw sweep + breath noise + chest thump
-        this.osc('sawtooth', 240, t, 0.24, 0.16 * v, 140)
-        this.osc('square', 480, t + 0.02, 0.16, 0.05 * v, 320)
-        this.noise(0.14, t, 0.07 * v, 950, 0.7)
+        // street yell — pitch RISES into the vowel then falls off ("AAZADII!"),
+        // chest-octave square underneath, breath layer, clipped stop so it
+        // reads as a voice, not a beep. Per-play pitch jitter.
+        const f = 0.94 + Math.random() * 0.12
+        this.osc('sawtooth', 195 * f, t, 0.13, 0.2 * v, 300 * f)
+        this.osc('sawtooth', 300 * f, t + 0.13, 0.17, 0.18 * v, 150 * f)
+        this.osc('square', 95 * f, t, 0.26, 0.07 * v, 75)
+        this.noise(0.16, t, 0.09 * v, 1000, 0.7)
+        this.noise(0.05, t + 0.26, 0.04 * v, 500, 0.8)
         break
       }
-      case 'whistleFar': this.osc('sine', 1900, t, 0.3, 0.05 * v, 2300); break
-      case 'pickup': this.osc('sine', 660, t, 0.1, 0.14 * v, 880); this.osc('sine', 880, t + 0.07, 0.12, 0.12 * v, 1100); break
+      case 'whistleFar': {
+        // distant constable's pea-whistle: shrill tone with a fast ~22 Hz
+        // warble trill (the pea bouncing) — FM + AM both fire at that rate
+        this.whistleTone(t, 2350, 2500, 0.5, 0.07 * v, 22, 90)
+        break
+      }
+      case 'pickup': {
+        // physical grab (hand/cloth snap) + short rising confirming chirp
+        this.noise(0.045, t, 0.1 * v, 950, 1.6)
+        this.osc('sine', 560, t + 0.02, 0.09, 0.16 * v, 820)
+        this.osc('sine', 840, t + 0.085, 0.1, 0.12 * v, 1120)
+        break
+      }
       case 'token': {
         for (let i = 0; i < 4; i++) this.osc('triangle', 700 + i * 160, t + i * 0.06, 0.14, 0.12 * v)
         break
       }
-      case 'throw': this.noise(0.15, t, 0.1 * v, 1200, 0.6); break
+      case 'throw': {
+        // arm-swing whoosh: band-passed air that brightens then falls as the
+        // item leaves the hand (filter sweeps 2.9k → 650), arc-shaped amp,
+        // plus a tiny grip-release tick at the start
+        if (this.ctx && this.sfxGain) {
+          const len = Math.max(1, Math.floor(this.ctx.sampleRate * 0.24))
+          const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
+          const data = buf.getChannelData(0)
+          for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1
+          const src = this.ctx.createBufferSource()
+          src.buffer = buf
+          const flt = this.ctx.createBiquadFilter()
+          flt.type = 'bandpass'
+          flt.Q.value = 0.8
+          flt.frequency.setValueAtTime(2900, t)
+          flt.frequency.exponentialRampToValueAtTime(650, t + 0.22)
+          const g = this.ctx.createGain()
+          g.gain.setValueAtTime(0.0001, t)
+          g.gain.exponentialRampToValueAtTime(0.24 * v, t + 0.05)
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.23)
+          src.connect(flt); flt.connect(g); g.connect(this.out())
+          src.start(t)
+        }
+        this.noise(0.02, t, 0.07 * v, 3400, 1.2)
+        break
+      }
       case 'impact': this.noise(0.16, t, 0.24 * v, 420, 0.8); this.osc('sine', 160, t, 0.12, 0.16 * v, 70); break
       case 'hit': this.osc('sawtooth', 200, t, 0.16, 0.2 * v, 80); this.noise(0.1, t, 0.18 * v, 700, 1); break
       case 'capture': {
@@ -184,7 +369,71 @@ class AudioManagerImpl {
         break
       }
       case 'horn': this.osc('sawtooth', 310, t, 0.4, 0.14 * v, 290); this.osc('sawtooth', 155, t, 0.4, 0.12 * v, 145); break
-      case 'moo': this.osc('sawtooth', 180, t, 0.5, 0.12 * v, 120); break
+      case 'moo': {
+        // proper cow moo — slow attack (no click), saw voice gliding down with a
+        // sub-octave chest layer and a breathy low band. Reads as a big animal.
+        const j = 0.92 + Math.random() * 0.16
+        const o = this.ctx.createOscillator()
+        o.type = 'sawtooth'
+        o.frequency.setValueAtTime(172 * j, t)
+        o.frequency.exponentialRampToValueAtTime(118 * j, t + 0.75)
+        const g = this.ctx.createGain()
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(0.15 * v, t + 0.13)
+        g.gain.setValueAtTime(0.15 * v, t + 0.6)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.95)
+        const sub = this.ctx.createOscillator()
+        sub.type = 'sine'
+        sub.frequency.setValueAtTime(86 * j, t)
+        sub.frequency.exponentialRampToValueAtTime(58 * j, t + 0.8)
+        const sg = this.ctx.createGain()
+        sg.gain.setValueAtTime(0.0001, t)
+        sg.gain.exponentialRampToValueAtTime(0.11 * v, t + 0.15)
+        sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.9)
+        o.connect(g); sub.connect(sg)
+        g.connect(this.out()); sg.connect(this.out())
+        o.start(t); o.stop(t + 1)
+        sub.start(t); sub.stop(t + 1)
+        this.noise(0.55, t + 0.1, 0.05 * v, 340, 0.6)
+        break
+      }
+      case 'bark': {
+        // two quick woofs — short saw bursts with a hard pitch drop (bow-wow)
+        // plus a breathy chest layer; per-play jitter so barks never loop
+        const j = 0.9 + Math.random() * 0.2
+        for (const [dt2, f0, f1, pk] of [[0, 430, 250, 0.15], [0.19, 400, 230, 0.13]] as const) {
+          this.osc('sawtooth', f0 * j, t + dt2, 0.09, pk * v, f1 * j)
+          this.noise(0.07, t + dt2, 0.09 * v, 850 * j, 1)
+          this.osc('square', 120 * j, t + dt2, 0.07, 0.05 * v, 90)
+        }
+        break
+      }
+      case 'meow': {
+        // two-part mew: rising "mee" then falling "ow" with a slow vibrato
+        const j = 0.92 + Math.random() * 0.16
+        this.osc('sawtooth', 350 * j, t, 0.2, 0.08 * v, 640 * j)
+        this.osc('sine', 700 * j, t + 0.02, 0.18, 0.05 * v, 900 * j)
+        this.osc('sawtooth', 620 * j, t + 0.2, 0.3, 0.07 * v, 320 * j)
+        this.noise(0.34, t + 0.06, 0.025 * v, 1700, 0.8)
+        break
+      }
+      case 'chirp': {
+        // 2-3 quick high songbird notes, each a fast down-chirp
+        const j = 0.92 + Math.random() * 0.16
+        const n = 2 + (Math.random() < 0.5 ? 1 : 0)
+        for (let i = 0; i < n; i++) {
+          this.osc('sine', (3400 - i * 180) * j, t + i * 0.11, 0.07, 0.045 * v, (2500 - i * 150) * j)
+        }
+        break
+      }
+      case 'crunch': {
+        // eating — 3 short crisp bites with a lower crumble tail
+        this.noise(0.05, t, 0.13 * v, 2100, 1.2)
+        this.noise(0.05, t + 0.13, 0.11 * v, 1500, 1.2)
+        this.noise(0.06, t + 0.27, 0.09 * v, 2300, 1.3)
+        this.noise(0.09, t + 0.4, 0.05 * v, 800, 0.9)
+        break
+      }
       case 'cash': this.osc('triangle', 1200, t, 0.1, 0.1 * v); this.osc('triangle', 1600, t + 0.06, 0.14, 0.1 * v); break
       case 'victory': {
         const notes = [523, 659, 784, 1046, 784, 1046]

@@ -7,6 +7,7 @@
 // depot, two parks and government quarters. The original 5-zone spine (plaza →
 // market → checkpoint → avenue → parliament) is untouched down the middle.
 import type { AABB, Deco, DecoKind, ItemSpawn, NpcSpawn, VehicleDef, WorldDef, SearchlightDef, CrossRoadDef } from './types'
+import { mapById } from './maps'
 
 function mulberry32(seed: number) {
   let a = seed >>> 0
@@ -35,6 +36,8 @@ const SIGN_TEXTS = [
 
 const BUILDING_COLORS = ['#c96f4a', '#b85c3e', '#7f9a8c', '#c9a86a', '#9a7b5f', '#8d6e63', '#a3b18a', '#c2b280', '#b07d62', '#7e9bb0']
 const HOME_COLORS = ['#d9b98a', '#cfa477', '#d8c49a', '#c2926a', '#bfae8e', '#d3b193', '#b9a27f', '#c8b093', '#c4a484', '#d6c8a8']
+// zone-D roadworks hoardings (classic pool — variants swap these via maps.ts)
+const HOARDING_TEXTS = ['VOTE RESPONSIBLY', 'HONK IF YOU LOVE FORMS', 'SPEED THRILLS BUT PAPERWORK KILLS', 'DEMOTE DAMAD, PROMOTE DEMOCRACY']
 
 // East-west cross streets — exported so the minimap and renderer pave the same
 // asphalt without duplicating layout numbers.
@@ -48,8 +51,20 @@ export const CROSS_ROADS: CrossRoadDef[] = [
 let idc = 0
 const nid = (p: string) => `${p}_${(idc++).toString(36)}`
 
-export function buildWorldDef(): WorldDef {
+/**
+ * Build the deterministic city. `mapId` (Task 43) selects the campaign district:
+ * the SKELETON (spawn/zones/checkpoints/cross roads/boss arena + every synced id)
+ * is identical for all variants — only palettes, signage, ground/road tint and
+ * the variant-only `extras` decor appended at the end differ. RNG call order is
+ * untouched by the variant, so every build stays byte-deterministic.
+ */
+export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   idc = 0
+  const mapDef = mapById(mapId)
+  const BLD = mapDef.building
+  const HOMES = mapDef.homes
+  const SHOPS = mapDef.shops ?? SHOP_NAMES
+  const SIGNS = mapDef.signs ?? SIGN_TEXTS
   const rnd = mulberry32(20240614)
   const colliders: AABB[] = []
   const decorations: Deco[] = []
@@ -67,13 +82,26 @@ export function buildWorldDef(): WorldDef {
   }
   const deco = (d: Deco) => { decorations.push(d); return d }
 
+  // v47 — solid-prop helpers: previously scooters, benches, crates, tea kettles,
+  // planters, the toilet, billboards and the checkpoint road barriers RENDERED
+  // solid but had NO collider — the player visibly walked straight through them.
+  // Every prop placement below now pairs its deco with a matching box.
+  const solidBox = (x: number, z: number, w: number, d: number, h: number, y = 0) => { const c = box(x - w / 2, y, z - d / 2, x + w / 2, y + h, z + d / 2); c.prop = true; return c }
+  // ry-proof square footprints for rotated clutter (scooters park at any angle)
+  const scooterBox = (x: number, z: number) => solidBox(x, z, 1.9, 1.9, 1.0)
+  // bench seat — low + standable (step-up height)
+  const benchBox = (x: number, z: number) => solidBox(x, z, 1.8, 0.9, 0.55)
+  const kettleBox = (x: number, z: number) => solidBox(x, z, 1.1, 1.1, 1.4)
+  const planterBox = (x: number, z: number) => solidBox(x, z, 1.5, 1.5, 1.0)
+  const crateBoxS = (x: number, z: number, s: number) => solidBox(x, z, 1.15 * s, 1.15 * s, 1.2 * s)
+
   // east-west street band test — random props must not spawn on the asphalt
   const inCrossRoad = (z: number, pad = 1.6) => CROSS_ROADS.some(r => Math.abs(z - r.z) < r.halfW + pad)
 
   // small home (mohalla house) — instanced in the renderer, AABB collider here.
   // variant: 0 pitched roof, 1 flat roof. ry: 0 or π only (keeps the AABB honest).
   const home = (x: number, z: number, w: number, d: number, h: number, variant = 0, ry = 0) => {
-    deco({ kind: 'home', x, z, w, d, h, variant, ry, color: HOME_COLORS[Math.floor(rnd() * HOME_COLORS.length)] })
+    deco({ kind: 'home', x, z, w, d, h, variant, ry, color: HOMES[Math.floor(rnd() * HOMES.length)] })
     box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
   }
   // compound / courtyard wall — 1.1m tall (sprint-vaultable) unless h given
@@ -96,8 +124,8 @@ export function buildWorldDef(): WorldDef {
     const w = 10 + rnd() * 8
     const d = 8 + rnd() * 6
     const h = 8 + rnd() * 8
-    const color = BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)]
-    deco({ kind: 'building', x, z, w, d, h, color, variant: Math.floor(rnd() * 3), sign: SHOP_NAMES[i % SHOP_NAMES.length] })
+    const color = BLD[Math.floor(rnd() * BLD.length)]
+    deco({ kind: 'building', x, z, w, d, h, color, variant: Math.floor(rnd() * 3), sign: SHOPS[i % SHOPS.length] })
     box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
   }
   for (let i = 0; i < 5; i++) { plazaBuilding(-22 - rnd() * 14, -6 - i * 15, i) }
@@ -110,12 +138,16 @@ export function buildWorldDef(): WorldDef {
   // Stage
   deco({ kind: 'stage', x: -16, z: -18, ry: 0.5 })
   box(-20, 0, -22, -12, 1.2, -14, true)
-  // Food stalls row
+  // Food stalls row — v47: EVERY stall is solid now (half used to be walk-through
+  // ghosts); 4.2 m pitch with 3.2 m stall boxes leaves 1.0 m gaps, so the market
+  // lane stays passable and no vehicle route crosses this band.
   const stallKinds: DecoKind[] = ['stall', 'cart', 'teaKettle']
   for (let i = 0; i < 6; i++) {
     const x = -10 + i * 4.2, z = -52
-    deco({ kind: stallKinds[i % 3], x, z, ry: Math.PI, variant: i, sign: SHOP_NAMES[(i + 8) % SHOP_NAMES.length], collider: true })
-    if (i % 2 === 0) box(x - 1.6, 0, z - 1.6, x + 1.6, 2.4, z + 1.6) // odd stalls get their AABB from the solid-world pass
+    deco({ kind: stallKinds[i % 3], x, z, ry: Math.PI, variant: i, sign: SHOPS[(i + 8) % SHOPS.length], collider: true })
+    // 2.6 m box on a 4.2 m pitch leaves a 1.6 m gap between stalls — solid to walk
+    // through, but the central avenue corridor stays comfortably passable
+    solidBox(x, z, 2.6, 2.6, 2.4)
   }
   // Street props (kept off the cross-road band at z -78)
   for (let i = 0; i < 8; i++) {
@@ -124,13 +156,15 @@ export function buildWorldDef(): WorldDef {
     deco({ kind: 'tree', x, z, s: 0.8 + rnd() * 0.6, variant: Math.floor(rnd() * 2) })
     box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
   }
-  for (let i = 0; i < 6; i++) deco({ kind: 'bench', x: -14 + i * 5.6, z: -12, ry: Math.PI })
-  for (let i = 0; i < 5; i++) deco({ kind: 'scooter', x: -30 + rnd() * 8, z: -30 - i * 9, ry: 0.3 + rnd() * 0.4 })
+  for (let i = 0; i < 6; i++) { const bx = -14 + i * 5.6; deco({ kind: 'bench', x: bx, z: -12, ry: Math.PI }); benchBox(bx, -12) }
+  for (let i = 0; i < 5; i++) { const sx = -30 + rnd() * 8, sz = -30 - i * 9; deco({ kind: 'scooter', x: sx, z: sz, ry: 0.3 + rnd() * 0.4 }); scooterBox(sx, sz) }
   for (let i = 0; i < 4; i++) deco({ kind: 'lamp', x: i % 2 ? 9 : -9, z: -10 - i * 20 })
   // Tutorial ring (train area)
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2
-    deco({ kind: 'crate', x: 16 + Math.cos(a) * 6, z: -64 + Math.sin(a) * 6, ry: a, s: 0.9 })
+    const cx = 16 + Math.cos(a) * 6, cz = -64 + Math.sin(a) * 6
+    deco({ kind: 'crate', x: cx, z: cz, ry: a, s: 0.9 })
+    crateBoxS(cx, cz, 0.9)
   }
   box(10, 0, -70, 22, 1.1, -58) // tutorial platform to jump on
   landmarks.push({ name: 'Training Ring', x: 16, z: -64 })
@@ -139,10 +173,12 @@ export function buildWorldDef(): WorldDef {
     const x = -20 + rnd() * 40, z = -6 - rnd() * 60
     if (Math.abs(x) < 5 && z > -20) continue
     if (inCrossRoad(z)) continue
-    deco({ kind: 'crowd', x, z, ry: rnd() * Math.PI * 2, variant: Math.floor(rnd() * 6), sign: rnd() < 0.55 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined })
+    deco({ kind: 'crowd', x, z, ry: rnd() * Math.PI * 2, variant: Math.floor(rnd() * 6), sign: rnd() < 0.55 ? SIGNS[Math.floor(rnd() * SIGNS.length)] : undefined })
   }
-  for (let i = 0; i < 3; i++) deco({ kind: 'billboard', x: i % 2 ? 14 : -14, z: -20 - i * 18, ry: i % 2 ? -0.6 : 0.6, sign: SIGN_TEXTS[(i * 5) % SIGN_TEXTS.length] })
-  deco({ kind: 'toilet', x: 30, z: -70 })
+  // Plaza billboards — v47: solid now; the middle one sits at z -35 (was -38) so
+  // the bazaar's festival-stall extra at (12.5, -40) stays clear of its box
+  for (let i = 0; i < 3; i++) { const bx = i % 2 ? 14 : -14, bz = i === 1 ? -35 : -20 - i * 18; deco({ kind: 'billboard', x: bx, z: bz, ry: i % 2 ? -0.6 : 0.6, sign: SIGNS[(i * 5) % SIGNS.length] }); solidBox(bx, bz, 4.6, 1.6, 3.4) }
+  deco({ kind: 'toilet', x: 30, z: -70 }); solidBox(30, -70, 1.3, 1.7, 2.4)
 
   // Plaza items
   items.push(
@@ -171,35 +207,35 @@ export function buildWorldDef(): WorldDef {
   for (let i = 0; i < 8; i++) {
     const w = 8 + rnd() * 6, d = 7 + rnd() * 5, h = 7 + rnd() * 9
     const x = -(11 + w / 2 + rnd() * 4), z = -86 - i * 13
-    deco({ kind: 'building', x, z, w, d, h, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 1, sign: SHOP_NAMES[(i + 3) % SHOP_NAMES.length] })
+    deco({ kind: 'building', x, z, w, d, h, color: BLD[Math.floor(rnd() * BLD.length)], variant: 1, sign: SHOPS[(i + 3) % SHOPS.length] })
     box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
   }
   for (let i = 0; i < 8; i++) {
     const w = 8 + rnd() * 6, d = 7 + rnd() * 5, h = 7 + rnd() * 9
     const x = 11 + w / 2 + rnd() * 4, z = -88 - i * 13
-    deco({ kind: 'building', x, z, w, d, h, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 2, sign: SHOP_NAMES[(i + 11) % SHOP_NAMES.length] })
+    deco({ kind: 'building', x, z, w, d, h, color: BLD[Math.floor(rnd() * BLD.length)], variant: 2, sign: SHOPS[(i + 11) % SHOPS.length] })
     box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
   }
   // Dense market stalls along road edges
   for (let i = 0; i < 12; i++) {
     const side = i % 2 ? 1 : -1
     const x = side * (7.5 + (i % 3) * 1.6), z = -86 - i * 8.4
-    deco({ kind: 'stall', x, z, ry: side > 0 ? Math.PI / 2 : -Math.PI / 2, variant: i % 4, sign: SHOP_NAMES[(i * 3 + 2) % SHOP_NAMES.length] })
+    deco({ kind: 'stall', x, z, ry: side > 0 ? Math.PI / 2 : -Math.PI / 2, variant: i % 4, sign: SHOPS[(i * 3 + 2) % SHOPS.length] })
     box(x - 1.7, 0, z - 1.7, x + 1.7, 2.4, z + 1.7)
   }
   // Overhead banners across the market street
-  for (let i = 0; i < 5; i++) deco({ kind: 'banner', x: 0, z: -96 - i * 24, ry: 0, sign: SIGN_TEXTS[(i * 3 + 1) % SIGN_TEXTS.length] })
+  for (let i = 0; i < 5; i++) deco({ kind: 'banner', x: 0, z: -96 - i * 24, ry: 0, sign: SIGNS[(i * 3 + 1) % SIGNS.length] })
   // Carts and scooters blocking lanes
   for (let i = 0; i < 8; i++) {
     const x = -4 + rnd() * 8, z = -92 - i * 13 - rnd() * 4
     if (i % 3 === 0) { deco({ kind: 'cart', x, z, ry: rnd() * 3, collider: true }); box(x - 1.2, 0, z - 1.2, x + 1.2, 1.5, z + 1.2) }
-    else deco({ kind: 'scooter', x: x > 0 ? x + 3 : x - 3, z, ry: rnd() * 6.28 })
+    else { const sx2 = x > 0 ? x + 3 : x - 3; deco({ kind: 'scooter', x: sx2, z, ry: rnd() * 6.28 }); scooterBox(sx2, z) }
   }
   for (let i = 0; i < 10; i++) {
     const x = -20 + rnd() * 40, z = -84 - rnd() * 104
     if (Math.abs(x) < 9.5) continue
     if (inCrossRoad(z)) continue
-    deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.3 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined })
+    deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.3 ? SIGNS[Math.floor(rnd() * SIGNS.length)] : undefined })
   }
   for (let i = 0; i < 6; i++) { const x = i % 2 ? 10.5 : -10.5, z = -90 - i * 18; deco({ kind: 'lamp', x, z }) }
   landmarks.push({ name: 'Chowk Market', x: 0, z: -140 })
@@ -248,10 +284,10 @@ export function buildWorldDef(): WorldDef {
       deco({ kind: 'tree', x, z, s: 0.9 + rnd() * 0.5, variant: i % 2 })
       box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
     }
-    for (let i = 0; i < 3; i++) deco({ kind: 'bench', x: -96 + i * 14, z: -46, ry: rnd() * 3 })
-    deco({ kind: 'teaKettle', x: -66, z: -56, ry: 0.8 })
-    deco({ kind: 'cart', x: -88, z: -60, ry: -0.4 })
-    for (let i = 0; i < 4; i++) deco({ kind: 'scooter', x: -106 + i * 15, z: -64 - rnd() * 3, ry: rnd() * 6.28 })
+    for (let i = 0; i < 3; i++) { const bx = -96 + i * 14; deco({ kind: 'bench', x: bx, z: -46, ry: rnd() * 3 }); benchBox(bx, -46) }
+    deco({ kind: 'teaKettle', x: -66, z: -58.6, ry: 0.8 }); kettleBox(-66, -58.6) // v47 — nudged clear of the cow route
+    deco({ kind: 'cart', x: -88, z: -60, ry: -0.4 }); solidBox(-88, -60, 2.4, 2.4, 1.5)
+    for (let i = 0; i < 4; i++) { const sx = -106 + i * 15, sz = -64 - rnd() * 3; deco({ kind: 'scooter', x: sx, z: sz, ry: rnd() * 6.28 }); scooterBox(sx, sz) }
     for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: -100 + i * 16 + rnd() * 5, z: -36 - rnd() * 24, ry: rnd() * 6.28, variant: i % 6 })
     // low wall with a gate gap facing the plaza margin
     wall(-42, -34, -42, -50); wall(-42, -56, -42, -70)
@@ -276,24 +312,24 @@ export function buildWorldDef(): WorldDef {
       if (r % 2 === 0) clothesline(-102.5, zRow + rowPitch / 2 - 3.25, 6)
       if (r % 2 === 1) clothesline(-75.5, zRow + rowPitch / 2 - 3.25, 7)
       if (r % 3 === 1) { deco({ kind: 'crate', x: -49, z: zRow + 4.8, ry: rnd(), s: 0.8 }); box(-50, 0, zRow + 3.8, -48, 1.3, zRow + 5.8) }
-      if (r % 4 === 2) deco({ kind: 'scooter', x: -66.5, z: zRow + rowPitch / 2, ry: rnd() * 6.28 })
+      if (r % 4 === 2) { deco({ kind: 'scooter', x: -66.5, z: zRow + rowPitch / 2, ry: rnd() * 6.28 }); scooterBox(-66.5, zRow + rowPitch / 2) }
       if (r === 5) { deco({ kind: 'cart', x: -89.5, z: zRow + rowPitch / 2, ry: 1.2, collider: true }); box(-90.7, 0, zRow + 3.6, -88.3, 1.5, zRow + 6) }
     }
     // courtyard compound mid-block: walls with a narrow entrance
     wall(-96, -115.8, -80, -115.8); wall(-96, -115.8, -96, -128.6); wall(-80, -115.8, -80, -123)
     home(-88, -122, 7, 6, 3.6, 0)
-    deco({ kind: 'planter', x: -94, z: -124 })
-    deco({ kind: 'planter', x: -82, z: -124 })
+    deco({ kind: 'planter', x: -94, z: -124 }); planterBox(-94, -124)
+    deco({ kind: 'planter', x: -82, z: -124 }); planterBox(-82, -124)
     // south garden (bageecha) between the last row and the checkpoint zone
     for (let i = 0; i < 5; i++) {
       const x = -108 + i * 16 + rnd() * 5, z = -168 - rnd() * 14
       deco({ kind: 'tree', x, z, s: 1 + rnd() * 0.5, variant: i % 2 })
       box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
     }
-    deco({ kind: 'bench', x: -92, z: -174, ry: 0.4 })
-    deco({ kind: 'bench', x: -64, z: -178, ry: -1.2 })
-    deco({ kind: 'teaKettle', x: -52, z: -166, ry: -0.6 })
-    for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: -108 + i * 18 + rnd() * 6, z: -164 - rnd() * 20, ry: rnd() * 6.28, variant: (i + 2) % 6, sign: rnd() < 0.4 ? SIGN_TEXTS[i * 3 % SIGN_TEXTS.length] : undefined })
+    deco({ kind: 'bench', x: -92, z: -174, ry: 0.4 }); benchBox(-92, -174)
+    deco({ kind: 'bench', x: -64, z: -178, ry: -1.2 }); benchBox(-64, -178)
+    deco({ kind: 'teaKettle', x: -52, z: -166, ry: -0.6 }); kettleBox(-52, -166)
+    for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: -108 + i * 18 + rnd() * 6, z: -164 - rnd() * 20, ry: rnd() * 6.28, variant: (i + 2) % 6, sign: rnd() < 0.4 ? SIGNS[i * 3 % SIGNS.length] : undefined })
     // lamps lighting the two long galis
     deco({ kind: 'lamp', x: -66.5, z: -102, ry: Math.PI / 2 })
     deco({ kind: 'lamp', x: -93.5, z: -140, ry: -Math.PI / 2 })
@@ -314,14 +350,14 @@ export function buildWorldDef(): WorldDef {
     for (let k = 0; k < 5; k++) {
       const w = 8 + rnd() * 3, d = 7 + rnd() * 2, h = 5 + rnd() * 2.5
       const x = 50 + k * 12.6 + rnd()
-      deco({ kind: 'building', x, z: -91, w, d, h, color: BUILDING_COLORS[(k + 2) % BUILDING_COLORS.length], variant: 2, sign: SHOP_NAMES[(k + 5) % SHOP_NAMES.length] })
+      deco({ kind: 'building', x, z: -91, w, d, h, color: BLD[(k + 2) % BLD.length], variant: 2, sign: SHOPS[(k + 5) % SHOPS.length] })
       box(x - w / 2, 0, -94.5, x + w / 2, h, -87.5)
     }
     // shop row B across the bazaar lane
     for (let k = 0; k < 5; k++) {
       const w = 8 + rnd() * 3, d = 7 + rnd() * 2, h = 5 + rnd() * 3
       const x = 52 + k * 12.4 + rnd()
-      deco({ kind: 'building', x, z: -112, w, d, h, color: BUILDING_COLORS[(k + 6) % BUILDING_COLORS.length], variant: 1, sign: SHOP_NAMES[(k + 13) % SHOP_NAMES.length] })
+      deco({ kind: 'building', x, z: -112, w, d, h, color: BLD[(k + 6) % BLD.length], variant: 1, sign: SHOPS[(k + 13) % SHOPS.length] })
       box(x - w / 2, 0, -115.5, x + w / 2, h, -108.5)
     }
     // back alley behind row B: crates, scooters, clotheslines — the shortcut gali
@@ -330,8 +366,8 @@ export function buildWorldDef(): WorldDef {
       deco({ kind: 'crate', x, z, ry: rnd(), s: 0.9 + rnd() * 0.4 })
       box(x - 0.9, 0, z - 0.9, x + 0.9, 1.5, z + 0.9)
     }
-    deco({ kind: 'scooter', x: 58, z: -119, ry: 0.4 })
-    deco({ kind: 'scooter', x: 86, z: -123, ry: 2.2 })
+    deco({ kind: 'scooter', x: 58, z: -119, ry: 0.4 }); scooterBox(58, -119)
+    deco({ kind: 'scooter', x: 86, z: -123, ry: 2.2 }); scooterBox(86, -123)
     clothesline(70, -122, 9)
     // homes row closing the block, then the school
     for (let k = 0; k < 6; k++) {
@@ -344,8 +380,8 @@ export function buildWorldDef(): WorldDef {
     wall(64, -141, 68, -141); wall(88, -141, 92, -141) // yard wall, gate in the middle
     deco({ kind: 'flagpole', x: 78, z: -143.5, variant: 1 })
     // playground
-    for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 66 + i * 7 + rnd() * 3, z: -158 - rnd() * 10, ry: rnd() * 6.28, variant: i % 6, sign: rnd() < 0.3 ? SIGN_TEXTS[(i + 7) % SIGN_TEXTS.length] : undefined })
-    deco({ kind: 'bench', x: 62, z: -166, ry: 1.5 })
+    for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 66 + i * 7 + rnd() * 3, z: -158 - rnd() * 10, ry: rnd() * 6.28, variant: i % 6, sign: rnd() < 0.3 ? SIGNS[(i + 7) % SIGNS.length] : undefined })
+    deco({ kind: 'bench', x: 62, z: -166, ry: 1.5 }); benchBox(62, -166)
     deco({ kind: 'tree', x: 92, z: -166, s: 1.1, variant: 0 })
     box(91.6, 0, -166.4, 92.4, 3, -165.6)
     // homes rows facing the Market Exit cross road
@@ -389,7 +425,9 @@ export function buildWorldDef(): WorldDef {
   landmarks.push({ name: 'Security Checkpoint', x: 0, z: -240 })
   // Guard huts + crates for hiding
   for (let i = 0; i < 5; i++) { deco({ kind: 'crate', x: -30 + i * 13 + rnd() * 4, z: -216 - (i % 3) * 18, ry: rnd() * 1.5, s: 1.2 }); box(-30 + i * 13 - 1, 0, -217 - (i % 3) * 18, -30 + i * 13 + 1, 2.2, -215 - (i % 3) * 18) }
-  for (let i = 0; i < 4; i++) deco({ kind: 'barrier', x: i % 2 ? -14 : 14, z: -228 - i * 10, ry: 0.2, w: 6, d: 2 })
+  // Checkpoint road barriers — v47: these concrete blockers LOOKED solid but had
+  // no collider (free walk-through at the most guarded spot in the city)
+  for (let i = 0; i < 4; i++) { const bx = i % 2 ? -14 : 14, bz = -228 - i * 10; deco({ kind: 'barrier', x: bx, z: bz, ry: 0.2, w: 6, d: 2 }); solidBox(bx, bz, 6.3, 3.2, 1.15) }
   // outer corridor hiding spots (west + east dead-end pockets between fence lines)
   for (let i = 0; i < 3; i++) { const x = -84 - i * 14; const z = -216 + i * 16; deco({ kind: 'crate', x, z, ry: rnd(), s: 1.1 }); box(x - 1, 0, z - 1, x + 1, 2, z + 1) }
   for (let i = 0; i < 3; i++) { const x = 76 + i * 14; const z = -220 + i * 15; deco({ kind: 'crate', x, z, ry: rnd(), s: 1.2 }); box(x - 1.1, 0, z - 1.1, x + 1.1, 2.2, z + 1.1) }
@@ -432,10 +470,10 @@ export function buildWorldDef(): WorldDef {
   for (let i = 0; i < 6; i++) {
     const w = 9 + rnd() * 7, d = 10 + rnd() * 6, h = 12 + rnd() * 10
     const x = -(20 + w / 2), z = -302 - i * 20
-    deco({ kind: 'building', x, z, w, d, h, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 1, sign: SHOP_NAMES[(i * 4) % SHOP_NAMES.length] })
+    deco({ kind: 'building', x, z, w, d, h, color: BLD[Math.floor(rnd() * BLD.length)], variant: 1, sign: SHOPS[(i * 4) % SHOPS.length] })
     box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2)
     const x2 = 20 + w / 2, z2 = -308 - i * 20
-    deco({ kind: 'building', x: x2, z: z2, w, d, h: 10 + rnd() * 12, color: BUILDING_COLORS[Math.floor(rnd() * BUILDING_COLORS.length)], variant: 2, sign: SHOP_NAMES[(i * 4 + 1) % SHOP_NAMES.length] })
+    deco({ kind: 'building', x: x2, z: z2, w, d, h: 10 + rnd() * 12, color: BLD[Math.floor(rnd() * BLD.length)], variant: 2, sign: SHOPS[(i * 4 + 1) % SHOPS.length] })
     box(x2 - w / 2, 0, z2 - d / 2, x2 + w / 2, 12, z2 + d / 2)
   }
   // Flyover: deck + ramps (walkable)
@@ -452,7 +490,9 @@ export function buildWorldDef(): WorldDef {
     box(6, 0, z0 - 1.2, 18, (fy * (s + 1)) / 10, z0, true)
   }
   box(6, fy, -380, 18, fy + 0.6, -368, true) // deck
-  deco({ kind: 'billboard', x: 12, y: fy + 0.6, z: -374, ry: 0, sign: 'AVENUE FLYOVER — USE AT OWN RISK' })
+  // v47 — billboard shifted to x 15.5 so the deck's vote token (12, -374) stays collectable
+  deco({ kind: 'billboard', x: 15.5, y: fy + 0.6, z: -374, ry: 0, sign: 'AVENUE FLYOVER — USE AT OWN RISK' })
+  solidBox(15.5, -374, 4.6, 1.6, 3.4, fy + 0.6) // the flyover hoarding is solid on the deck
   landmarks.push({ name: 'Flyover', x: 12, z: -374 })
   // Roadworks + barriers
   for (let i = 0; i < 6; i++) {
@@ -462,26 +502,65 @@ export function buildWorldDef(): WorldDef {
   }
   for (let i = 0; i < 4; i++) { deco({ kind: 'crate', x: -18 + i * 11, z: -344 - (i % 2) * 22, ry: rnd(), s: 1.1 }); box(-19 + i * 11, 0, -345 - (i % 2) * 22, -17 + i * 11, 2, -343 - (i % 2) * 22) }
   for (let i = 0; i < 5; i++) { const x = i % 2 ? 16 : -16, z = -296 - i * 26; deco({ kind: 'lamp', x, z }) }
-  for (let i = 0; i < 4; i++) deco({ kind: 'hoarding', x: i % 2 ? 15 : -15, z: -316 - i * 24, ry: i % 2 ? -0.4 : 0.4, sign: ['VOTE RESPONSIBLY', 'HONK IF YOU LOVE FORMS', 'SPEED THRILLS BUT PAPERWORK KILLS', 'DEMOTE DAMAD, PROMOTE DEMOCRACY'][i] })
-  for (let i = 0; i < 10; i++) { const x = -18 + rnd() * 36, z = -294 - rnd() * 118; if (Math.abs(x) < 17) continue; if (inCrossRoad(z)) continue; deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.25 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined }) }
+  const HOARD = mapDef.hoardings ?? HOARDING_TEXTS
+  for (let i = 0; i < 4; i++) deco({ kind: 'hoarding', x: i % 2 ? 15 : -15, z: -316 - i * 24, ry: i % 2 ? -0.4 : 0.4, sign: HOARD[i % HOARD.length] })
+  for (let i = 0; i < 10; i++) { const x = -18 + rnd() * 36, z = -294 - rnd() * 118; if (Math.abs(x) < 17) continue; if (inCrossRoad(z)) continue; deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.25 ? SIGNS[Math.floor(rnd() * SIGNS.length)] : undefined }) }
 
-  // Moving vehicles (server + client simulate identically: ping-pong along path)
+  // Moving vehicles (server + client simulate identically: deterministic polyline
+  // ping-pong from shared world time). v37 — routes ROAM: multi-leg paths turn
+  // through junctions and loop around blocks instead of straight left-right shuttles.
+  // Road-network facts this table must respect (see CROSS_ROADS + world.ts):
+  //  - main avenue asphalt x -8.5..8.5 (widening x ±19 in zone D, z -275..-425)
+  //  - cross roads A z=-78 (halfW 4.8), B z=-198 (5), C z=-286 (4), D z=-452 (5),
+  //    each paved the full map width (x ±114)
+  //  - checkpoint gates flank cross roads A and B at x ±8.5 → vehicles on those
+  //    cross roads keep |x| >= 14 and never enter the gate span
+  //  - zone D clutter: barrier rows z -302/-342 (gaps only 11.6 < |x| < 14),
+  //    crates z -344/-366, flyover x 6..18 z -356..-392 → the zone-D loop keeps to
+  //    the clear north half (z -308..-347), lanes x ±12.8 through the roadworks gap
+  //  - boss gate blocks the avenue at z -478 (x -10..10) → car4's grand-avenue
+  //    leg turns around at z -470 on the Parliament Plaza approach
   vehicles.push(
-    { id: 'veh_auto1', kind: 'auto', speed: 7, path: [[-12, -306], [-12, -352]] },
-    { id: 'veh_auto2', kind: 'auto', speed: 7.5, path: [[12, -318], [12, -372]] },
-    { id: 'veh_auto3', kind: 'auto', speed: 8, path: [[-12, -340], [-12, -410]] },
+    // zone-D block loop — the auto circles the north half of the widened avenue
+    // (east side south of z -356 is blocked by the flyover ramp, x 6..18)
+    { id: 'veh_auto1', kind: 'auto', speed: 7.2, path: [[-12.8, -308], [12.8, -308], [12.8, -347], [-12.8, -347]] },
+    // Avenue Cross Road (C, no gate) — full-map crossers through the junction:
+    // car westbound north lane, auto centre lane, bike eastbound south lane
+    { id: 'veh_auto2', kind: 'auto', speed: 6.5, path: [[-100, -286], [100, -286]] },
+    { id: 'veh_auto3', kind: 'auto', speed: 6, path: [[-16, -455.2], [-100, -455.2]] },
     { id: 'veh_bus1', kind: 'bus', speed: 6, path: [[0, -300], [0, -415]] },
     { id: 'veh_cow1', kind: 'cow', speed: 1.2, path: [[-10, -330], [10, -395]] },
-    // cross-street traffic — the side roads feel alive too. Cross roads A and B
-    // carry checkpoint gate pillars at x ±8.5, so those shuttles stay on their
-    // own half and never clip the gates. Cross road D has no gate — the bus crosses.
+    // cross streets A + B carry checkpoint gate pillars at x ±8.5 — roamers stay
+    // on their own half (|x| >= 14) and never clip the gates
     { id: 'veh_auto4', kind: 'auto', speed: 6, path: [[-96, -198], [-14, -198]] },
     { id: 'veh_auto6', kind: 'auto', speed: 6.4, path: [[14, -198], [96, -198]] },
     { id: 'veh_auto5', kind: 'auto', speed: 6.2, path: [[-100, -78], [-14, -78]] },
     { id: 'veh_auto7', kind: 'auto', speed: 6, path: [[14, -78], [96, -78]] },
-    { id: 'veh_bus2', kind: 'bus', speed: 5.5, path: [[-40, -452], [100, -452]] },
+    // Colony Cross Road (D, no gate) — the bus crosses the WHOLE map, the car
+    // turns off the junction and roams down the grand avenue (U-turn before the
+    // boss gate at z -478)
+    { id: 'veh_bus2', kind: 'bus', speed: 5.5, path: [[-100, -452], [100, -452]] },
     { id: 'veh_cow2', kind: 'cow', speed: 1.1, path: [[-96, -44], [-52, -58]] },
+    { id: 'veh_car1', kind: 'car', speed: 10.5, path: [[-88, -79.0], [-16, -79.0]] },    // Plaza Cross Rd westbound (lane north of the row-A shopfront corner)
+    { id: 'veh_car2', kind: 'car', speed: 9.5, path: [[16, -195.5], [94, -195.5]] },     // Market Exit eastbound
+    { id: 'veh_car3', kind: 'car', speed: 9, path: [[-100, -283.5], [100, -283.5]] },    // Avenue Cross Rd westbound — full map
+    { id: 'veh_car4', kind: 'car', speed: 8.6, path: [[-88, -449.4], [-4, -449.4], [-4, -470]] }, // Colony Rd → grand avenue, 90° turn at the junction
+    { id: 'veh_bike1', kind: 'bike', speed: 8.5, path: [[16, -75.5], [92, -75.5]] },     // Plaza Cross Rd eastbound
+    { id: 'veh_bike2', kind: 'bike', speed: 9, path: [[-92, -200.5], [-16, -200.5]] },   // Market Exit westbound
+    { id: 'veh_bike3', kind: 'bike', speed: 8.2, path: [[-100, -288.5], [100, -288.5]] }, // Avenue Cross Rd eastbound — full map
+    { id: 'veh_bike4', kind: 'bike', speed: 7.6, path: [[16, -455.2], [92, -455.2]] },   // Colony Cross Rd eastbound
   )
+
+  // Street trees lining the avenue sidewalks (zones B+C) — every spot verified
+  // clear of all decos/colliders/gates via tests/tree-spot-check.ts
+  const STREET_TREES: Array<[number, number]> = [
+    [11.5, -100], [11.5, -140], [11.5, -164], [11.5, -226], [11.5, -262],
+    [-11.5, -132], [-11.5, -158], [-11.5, -178], [-11.5, -210], [-11.5, -240], [-11.5, -268],
+  ]
+  STREET_TREES.forEach(([x, z], i) => {
+    deco({ kind: 'tree', x, z, s: 1 + (i % 3) * 0.15, variant: i % 2 })
+    box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+  })
 
   items.push(
     { id: 'D_tok_1', type: 'token', x: 12, y: 5.9, z: -374 },   // on flyover deck
@@ -516,20 +595,20 @@ export function buildWorldDef(): WorldDef {
     const aptX = [-104, -78, -52]
     aptX.forEach((x, i) => {
       const w = 14 + rnd() * 4, d = 10, h = 11 + i * 2
-      deco({ kind: 'building', x, z: -314, w, d, h, color: BUILDING_COLORS[(i + 3) % BUILDING_COLORS.length], variant: 2, sign: SHOP_NAMES[(i + 16) % SHOP_NAMES.length] })
+      deco({ kind: 'building', x, z: -314, w, d, h, color: BLD[(i + 3) % BLD.length], variant: 2, sign: SHOPS[(i + 16) % SHOPS.length] })
       box(x - w / 2, 0, -319, x + w / 2, h, -309)
     })
-    for (let i = 0; i < 3; i++) deco({ kind: 'scooter', x: -108 + i * 26, z: -304, ry: rnd() * 6.28 })
+    for (let i = 0; i < 3; i++) { const sx = -108 + i * 26; deco({ kind: 'scooter', x: sx, z: -304, ry: rnd() * 6.28 }); scooterBox(sx, -304) }
     // Neem Park — the green lung of the west city
     for (let i = 0; i < 10; i++) {
       const x = -110 + (i % 5) * 14 + rnd() * 5, z = -332 - Math.floor(i / 5) * 30 - rnd() * 10
       deco({ kind: 'tree', x, z, s: 1 + rnd() * 0.6, variant: i % 2 })
       box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
     }
-    for (let i = 0; i < 5; i++) deco({ kind: 'bench', x: -100 + i * 13, z: -348 - (i % 2) * 26, ry: rnd() * 3 })
-    for (let i = 0; i < 6; i++) deco({ kind: 'planter', x: -106 + i * 12, z: -340 + (i % 2) * 44 })
-    for (let i = 0; i < 6; i++) deco({ kind: 'crowd', x: -108 + i * 12 + rnd() * 5, z: -330 - rnd() * 70, ry: rnd() * 6.28, variant: (i + 1) % 6, sign: rnd() < 0.45 ? SIGN_TEXTS[(i * 4 + 2) % SIGN_TEXTS.length] : undefined })
-    deco({ kind: 'teaKettle', x: -58, z: -380, ry: -1 })
+    for (let i = 0; i < 5; i++) { const bx = -100 + i * 13, bz = -348 - (i % 2) * 26; deco({ kind: 'bench', x: bx, z: bz, ry: rnd() * 3 }); benchBox(bx, bz) }
+    for (let i = 0; i < 6; i++) { const px = -106 + i * 12, pz = -340 + (i % 2) * 44; deco({ kind: 'planter', x: px, z: pz }); planterBox(px, pz) }
+    for (let i = 0; i < 6; i++) deco({ kind: 'crowd', x: -108 + i * 12 + rnd() * 5, z: -330 - rnd() * 70, ry: rnd() * 6.28, variant: (i + 1) % 6, sign: rnd() < 0.45 ? SIGNS[(i * 4 + 2) % SIGNS.length] : undefined })
+    deco({ kind: 'teaKettle', x: -58, z: -380, ry: -1 }); kettleBox(-58, -380)
     // homes row closing the block, facing Colony Cross Road
     for (let k = 0; k < 6; k++) home(-108 + k * 11.4 + rnd(), -416, 6.6 + rnd(), 6.4, 3.4 + rnd() * 1.6, k % 2)
     clothesline(-86, -422.6, 8)
@@ -556,8 +635,8 @@ export function buildWorldDef(): WorldDef {
       box(x - 1.2 * s, 0, z - 1.2 * s, x + 1.2 * s, 2.6 * s, z + 1.2 * s)
     }
     // auto-stand scooter row + chai point
-    for (let i = 0; i < 5; i++) deco({ kind: 'scooter', x: 100, z: -306 - i * 4.4, ry: Math.PI / 2 + rnd() * 0.3 })
-    deco({ kind: 'teaKettle', x: 58, z: -306, ry: Math.PI })
+    for (let i = 0; i < 5; i++) { deco({ kind: 'scooter', x: 100, z: -306 - i * 4.4, ry: Math.PI / 2 + rnd() * 0.3 }); scooterBox(100, -306 - i * 4.4) }
+    deco({ kind: 'teaKettle', x: 58, z: -306, ry: Math.PI }); kettleBox(58, -306)
     deco({ kind: 'stall', x: 92, z: -330, ry: -Math.PI / 2, variant: 2, sign: 'Depot Chai Point' })
     box(90.3, 0, -331.7, 93.7, 2.4, -328.3)
     for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 50 + i * 14 + rnd() * 4, z: -312 - rnd() * 60, ry: rnd() * 6.28, variant: (i + 3) % 6 })
@@ -581,8 +660,10 @@ export function buildWorldDef(): WorldDef {
   })
   // Flag poles + gardens (shifted clear of the Colony Cross Road at z -452)
   for (let i = 0; i < 6; i++) { deco({ kind: 'flagpole', x: i % 2 ? -12 : 12, z: -424 - Math.floor(i / 2) * 10, variant: i % 3 }) }
-  for (let i = 0; i < 8; i++) { const x = i % 2 ? -20 - rnd() * 8 : 20 + rnd() * 8, z = -428 - i * 5; if (inCrossRoad(z)) continue; deco({ kind: 'planter', x, z }) }
-  for (let i = 0; i < 12; i++) { const x = -26 + rnd() * 52, z = -424 - rnd() * 46; if (Math.abs(x) < 10) continue; if (inCrossRoad(z)) continue; deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.5 ? SIGN_TEXTS[Math.floor(rnd() * SIGN_TEXTS.length)] : undefined }) }
+  // v47 — planter ladder starts at -426 (was -428) so the deepest row (-461) stays
+  // ≥0.3 m clear of the azad celebration-stall extras at z -465
+  for (let i = 0; i < 8; i++) { const x = i % 2 ? -20 - rnd() * 8 : 20 + rnd() * 8, z = -426 - i * 5; if (inCrossRoad(z)) continue; deco({ kind: 'planter', x, z }); planterBox(x, z) }
+  for (let i = 0; i < 12; i++) { const x = -26 + rnd() * 52, z = -424 - rnd() * 46; if (Math.abs(x) < 10) continue; if (inCrossRoad(z)) continue; deco({ kind: 'crowd', x, z, ry: rnd() * 6.28, variant: Math.floor(rnd() * 6), sign: rnd() < 0.5 ? SIGNS[Math.floor(rnd() * SIGNS.length)] : undefined }) }
   for (let i = 0; i < 4; i++) { const x = i % 2 ? -14 : 14, z = -430 - i * 8; if (inCrossRoad(z)) continue; deco({ kind: 'lamp', x, z }) }
   // Grand Parliament building backdrop
   deco({ kind: 'monument', x: 0, z: -566, h: 26, w: 70, d: 26, color: '#e2d8c3', sign: 'SANSAD SABHA (FICTIONAL)' })
@@ -646,8 +727,8 @@ export function buildWorldDef(): WorldDef {
       deco({ kind: 'tree', x, z, s: 1 + rnd() * 0.5, variant: i % 2 })
       box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
     }
-    for (let i = 0; i < 4; i++) deco({ kind: 'bench', x: 56 + i * 14, z: -476 - (i % 2) * 18, ry: rnd() * 3 })
-    for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 50 + i * 14 + rnd() * 5, z: -464 - rnd() * 40, ry: rnd() * 6.28, variant: (i + 4) % 6, sign: rnd() < 0.4 ? SIGN_TEXTS[(i * 5 + 3) % SIGN_TEXTS.length] : undefined })
+    for (let i = 0; i < 4; i++) { const bx = 56 + i * 14, bz = -476 - (i % 2) * 18; deco({ kind: 'bench', x: bx, z: bz, ry: rnd() * 3 }); benchBox(bx, bz) }
+    for (let i = 0; i < 5; i++) deco({ kind: 'crowd', x: 50 + i * 14 + rnd() * 5, z: -464 - rnd() * 40, ry: rnd() * 6.28, variant: (i + 4) % 6, sign: rnd() < 0.4 ? SIGNS[(i * 5 + 3) % SIGNS.length] : undefined })
     // colony homes rows facing the park
     for (let k = 0; k < 6; k++) home(50 + k * 11 + rnd(), -518, 6.5 + rnd(), 6.4, 3.3 + rnd() * 1.5, k % 2)
     for (let k = 0; k < 6; k++) home(50 + k * 11 + rnd(), -532, 6.5 + rnd(), 6.2, 3.2 + rnd() * 1.6, (k + 2) % 3)
@@ -664,45 +745,18 @@ export function buildWorldDef(): WorldDef {
   // Boss arena (center z=-520)
   landmarks.push({ name: 'BOSS: Vote Collector', x: 0, z: -520 })
 
-  // ================= Task: solid world pass — no more ghost props =================
-  // Every street prop that renders solid now gets an honest AABB collider sized
-  // to its visual footprint (rotation-tolerant squares for rotated props). A
-  // prop whose center is already covered by an existing collider of sufficient
-  // height (the explicit box() calls above) is skipped — no duplicates.
-  // Low props (bench/planter) are step-up-able; the physics step-up handles
-  // them so they read as climbable street furniture instead of walls.
-  const propSolid: Record<string, { hx: number; hz: number; h: number; walkable?: boolean }> = {
-    stall: { hx: 1.7, hz: 1.7, h: 2.4 },
-    cart: { hx: 1.3, hz: 1.3, h: 1.5 },
-    teaKettle: { hx: 0.95, hz: 0.95, h: 1.7 },
-    bench: { hx: 1.15, hz: 1.15, h: 0.5, walkable: true },
-    scooter: { hx: 0.95, hz: 0.95, h: 0.95 },
-    lamp: { hx: 0.2, hz: 0.2, h: 5 },
-    toilet: { hx: 1.3, hz: 1.15, h: 2.4 },
-    planter: { hx: 0.8, hz: 0.8, h: 0.6, walkable: true },
-    flagpole: { hx: 0.16, hz: 0.16, h: 8 },
-  }
-  for (const d of decorations) {
-    if (d.kind === 'crate') {
-      // crate size scales with d.s (visual 1.6*s cube); dedup against explicit boxes
-      const s = d.s ?? 1
-      const hx = 0.9 * s, h = 1.55 * s
-      const covered = colliders.some(c => d.x >= c.minX && d.x <= c.maxX && d.z >= c.minZ && d.z <= c.maxZ && c.maxY >= h - 0.01)
-      if (!covered) box(d.x - hx, 0, d.z - hx, d.x + hx, h, d.z + hx)
-      continue
+  // ================= v43 LEVEL-MAP EXTRAS — appended strictly AFTER the skeleton =====
+  // Variant-only props: palettes/signage above already differ; these add the
+  // district's landmarks + navigation hazards. Ground colliders here are CLIENT
+  // physics only (the server never validates static collisions), but placements
+  // are still kept clear of the synced skeleton (vehicle lanes, items,
+  // checkpoints) — asserted by tests/maps-test.ts.
+  for (const ex of mapDef.extras) {
+    decorations.push(ex.deco)
+    if (ex.box) {
+      const [minX, minY, minZ, maxX, maxY, maxZ] = ex.box
+      colliders.push({ minX, minY, minZ, maxX, maxY, maxZ })
     }
-    if (d.kind === 'billboard' || d.kind === 'hoarding') {
-      // two thin posts carry the board (board itself sits above head height).
-      // Skip elevated billboards (flyover deck) — their posts stand on the deck, not the street.
-      if (d.y) continue
-      for (const px of [d.x - 1.6, d.x + 1.6]) box(px - 0.2, 0, d.z - 0.2, px + 0.2, 4, d.z + 0.2)
-      continue
-    }
-    const spec = propSolid[d.kind]
-    if (!spec) continue
-    const covered = colliders.some(c => d.x >= c.minX && d.x <= c.maxX && d.z >= c.minZ && d.z <= c.maxZ && c.maxY >= spec.h - 0.01)
-    if (covered) continue
-    box(d.x - spec.hx, 0, d.z - spec.hz, d.x + spec.hx, spec.h, d.z + spec.hz, spec.walkable === true)
   }
 
   return {
@@ -725,5 +779,12 @@ export function buildWorldDef(): WorldDef {
     searchlights, vehicles,
     bossArena: { x: 0, z: -520, radius: 26, gateZ: -478 },
     landmarks,
+    mapId: mapDef.id,
+    mapName: mapDef.name,
+    mapTagline: mapDef.tagline,
+    xpMul: mapDef.xpMul,
+    difficulty: mapDef.difficulty,
+    groundTint: mapDef.ground,
+    roadTint: mapDef.road,
   }
 }

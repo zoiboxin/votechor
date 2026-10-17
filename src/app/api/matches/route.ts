@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ACHIEVEMENTS, VICTORY_TITLES, XP_TABLE, levelFromXp } from '@/game/shared/constants'
+import { mapById, mapForLevel } from '@/game/shared/maps'
 import { dailyForDate, todayKey, dailyContribution, type DailyDef } from '@/lib/daily'
 import { weeklyForDate, weekKey } from '@/lib/weekly'
 
@@ -118,6 +119,11 @@ export async function POST(req: Request) {
     // ---- validate + clamp ----
     const victory = body.victory === true || body.victory === 'true'
     const multiplayer = body.multiplayer === true || body.multiplayer === 'true'
+    // v44 district replay — the client reports which map the solo match actually
+    // played; the server only honors it when the player's OWN level has that
+    // district unlocked (a forged/stale id silently falls back to level-earned).
+    const claimedMap = typeof body.mapId === 'string' ? mapById(body.mapId) : null
+    const playedMapId = !multiplayer && claimedMap && claimedMap.minLevel <= player.level ? claimedMap.id : null
     const distance = clampFloat(body.distance, 0, 20000)
     const checkpoints = clampInt(body.checkpoints, 0, 4)
     const rescues = clampInt(body.rescues, 0, 50)
@@ -125,6 +131,7 @@ export async function POST(req: Request) {
     const itemsCollected = clampInt(body.itemsCollected, 0, 200)
     const bossContribution = clampFloat(body.bossContribution, 0, 30)
     const detentions = clampInt(body.detentions, 0, 50)
+    const arrests = clampInt(body.arrests, 0, 200) // police role: suspects detained this match
     const tokens = clampInt(body.tokens, 0, 16)
     const gifts = clampInt(body.gifts, 0, 50)
     const position = clampInt(body.position, 0, 50)
@@ -145,11 +152,20 @@ export async function POST(req: Request) {
         itemsCollected * XP_TABLE.perItem +
         gifts * XP_TABLE.perGift +
         bossContribution * XP_TABLE.bossHit +
+        arrests * XP_TABLE.perArrest +
         (victory ? XP_TABLE.victoryBonus : 0),
     )
     // +10% of base XP per extra cellmate (max 3 → +30%), multiplayer only
     const solidarityBonus = multiplayer && squadSize > 1 ? Math.round(baseXp * 0.10 * (squadSize - 1)) : 0
-    const xpEarned = baseXp + solidarityBonus
+    // v43 district stakes — solo matches play the campaign map earned by the
+    // player's level; harder districts pay better. The multiplier comes from the
+    // server-side maps registry keyed on the player's OWN level (never trusted
+    // from the client); multiplayer rooms are the classic city (×1.0).
+    // v44 — an unlocked replay selection (mapId) is honored for solo runs.
+    const districtMap = multiplayer
+      ? mapById('classic')
+      : playedMapId ? mapById(playedMapId) : mapForLevel(player.level)
+    const xpEarned = Math.round((baseXp + solidarityBonus) * districtMap.xpMul)
 
     const funnyTitle = VICTORY_TITLES({
       detentions,
@@ -178,6 +194,7 @@ export async function POST(req: Request) {
           itemsCollected,
           bossContribution,
           detentions,
+          arrests,
           tokens,
           xpEarned,
           funnyTitle,
@@ -197,6 +214,7 @@ export async function POST(req: Request) {
               totalRevives: { increment: revives },
               totalItems: { increment: itemsCollected },
               detentions: { increment: detentions },
+              arrests: { increment: arrests },
               bossKills: { increment: victory ? 1 : 0 },
               bestPosition:
                 position > 0 && (prevStats.bestPosition === 0 || position < prevStats.bestPosition)
@@ -215,6 +233,7 @@ export async function POST(req: Request) {
               totalRevives: revives,
               totalItems: itemsCollected,
               detentions,
+              arrests,
               bossKills: victory ? 1 : 0,
               bestPosition: position > 0 ? position : 0,
               totalXp: xpEarned,

@@ -1,23 +1,27 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useGameStore, type Settings } from '@/lib/game-store'
+import { useGameStore, type Settings, DEFAULT_KEYBINDS } from '@/lib/game-store'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor, CloudSun, Gauge, Accessibility } from 'lucide-react'
+import { Volume2, Music, Volume1, MousePointer2, Keyboard, RotateCcw, Monitor, CloudSun, Gauge, Accessibility, PanelRight } from 'lucide-react'
 
 const KEYBIND_LABELS: Record<string, string> = {
   forward: 'Move Forward', back: 'Move Back', left: 'Move Left', right: 'Move Right',
   jump: 'Jump', sprint: 'Sprint', slide: 'Slide', interact: 'Interact / Revive',
-  throw: 'Throw Item', gift: 'Gift Item', emote: 'Emote Wheel', map: 'Big Map', squad: 'Squad Panel', pause: 'Pause',
+  throw: 'Throw Item', gift: 'Gift / Baton (police)', emote: 'Emote Wheel', map: 'Big Map', squad: 'Squad Panel', pause: 'Pause',
   heal: 'Quick Heal (food / medkit)', shout: 'Shout / Whistle',
 }
 
-function prettyKey(code: string): string {
+function prettyKey(code: string | undefined): string {
+  // v34 guard: a persisted settings object from an older build can leave an action
+  // without a key (heal/shout). One undefined binding must never crash the whole
+  // pause menu again — show a placeholder instead of throwing.
+  if (!code) return '—'
   const map: Record<string, string> = {
     ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT',
     AltLeft: 'L-ALT', AltRight: 'R-ALT', Space: 'SPACE', Escape: 'ESC', Tab: 'TAB',
@@ -39,7 +43,10 @@ const DEFAULTS: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  keybinds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE', throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape', gift: 'KeyF' },
+  hiFiModel: false,
+  distanceCulling: false,
+  squadPanel: true,
+  keybinds: { ...DEFAULT_KEYBINDS }, // canonical defaults imported from the store — a private stale copy here once lacked heal/shout and re-crashed the panel via "Reset to Committee Defaults"
 }
 
 function SectionTitle({ icon: Icon, children }: { icon: typeof Volume2; children: React.ReactNode }) {
@@ -175,6 +182,28 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
           </div>
         </section>
 
+        {/* Interface (HUD layout toggles) */}
+        <section>
+          <SectionTitle icon={PanelRight}>Interface</SectionTitle>
+          <div className="space-y-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Squad Panel</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Right-edge squad pane on the HUD · Tab opens the cell manager</div>
+              </div>
+              <Switch
+                checked={settings.squadPanel ?? true}
+                onCheckedChange={(v) => {
+                  update({ squadPanel: v })
+                  // disabling while the Tab manager is open force-closes it (v42)
+                  if (!v) useGameStore.getState().toggleSquad(false)
+                  notify(v ? 'Squad panel on — docked on the right edge of the HUD' : 'Squad panel off — Tab disabled for a cleaner view', 'info')
+                }}
+              />
+            </div>
+          </div>
+        </section>
+
         {/* Performance (quality tier + live perf chip) */}
         <section>
           <SectionTitle icon={Gauge}>Performance</SectionTitle>
@@ -198,10 +227,44 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
             </div>
             <div className="flex items-center justify-between">
               <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Model</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig = your full customized look (hat, hair, shoes…). High-Fi = generic GLB (wardrobe hidden)</div>
+              </div>
+              <Select
+                value={settings.hiFiModel ? 'hifi' : 'classic'}
+                onValueChange={(v) => {
+                  update({ hiFiModel: v === 'hifi' })
+                  notify(v === 'hifi' ? 'High-Fi GLB on — your wardrobe items are hidden on this fixed model' : 'Classic rig on — your full customized look is back', 'info')
+                }}
+              >
+                <SelectTrigger className="w-40 rounded-xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] font-black">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="vc-paper border-2 border-[#1c1a17]/70">
+                  <SelectItem value="hifi" className="font-bold">High-Fi GLB</SelectItem>
+                  <SelectItem value="classic" className="font-bold">Classic Rig</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
                 <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Performance HUD</div>
                 <div className="text-[9px] font-semibold text-[#1c1a17]/50">Live chip: FPS · net · crowd · render res</div>
               </div>
               <Switch checked={settings.perfHud ?? true} onCheckedChange={(v) => update({ perfHud: v })} />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Performance Visibility</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Off = proven stable rendering (everything always drawn). On = big FPS win, auto-disables on fault</div>
+              </div>
+              <Switch
+                checked={settings.distanceCulling ?? false}
+                onCheckedChange={(v) => {
+                  update({ distanceCulling: v })
+                  notify(v ? 'Performance visibility on — distance culling enabled' : 'Performance visibility off — everything always drawn (max compatibility)', 'info')
+                }}
+              />
             </div>
           </div>
         </section>
@@ -213,7 +276,7 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Time of Day</div>
-                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Cycle runs a full 24h in ~7 real minutes</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Full 24h in ~20 real minutes — long mornings, brisk nights</div>
               </div>
               <Select
                 value={settings.timeMode ?? 'cycle'}

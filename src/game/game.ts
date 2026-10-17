@@ -5,6 +5,7 @@ import { Engine } from './engine'
 import type { SkySystem } from './sky'
 import { PhysicsWorld } from './physics'
 import { WorldRenderer } from './world'
+import { WorldDistanceCuller } from './lod'
 import { InputManager } from './input'
 import { ThirdPersonCamera } from './camera'
 import { PlayerController } from './player'
@@ -12,23 +13,47 @@ import { CharacterRig } from './character'
 import { CrowdLod, type CrowdEntry } from './crowd'
 import { NpcSystem, VehicleSystem } from './npcs'
 import { ItemSystem } from './items'
+import { AnimalSystem, type AnimalHandle } from './animals'
 import { BossClient } from './boss'
 import { NetClient, type JoinAck } from './net'
 import { AudioManager } from './audio'
 import { FxSystem } from './fx'
 import { SpeechBubbleSystem } from './bubbles'
 import { buildWorldDef } from './shared/world-def'
+import { mapById, mapForLevel } from './shared/maps'
 import { createNpcStates, tickNpc, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
 import { createBossBrain, tickBoss, grabBallot, depositBallot, registerBossHit, type BossBrain } from './shared/boss-brain'
 import {
   MOVE, TOKENS_NEEDED, DETENTION_SECONDS, MATCH_TIME_LIMIT, ITEM_CONFIG, INVENTORY_MAX,
   archetypeById, XP_TABLE, levelFromXp, CAPTURE_MESSAGES, RANDOM_NOTIFICATIONS, BOSS_NAME,
-  BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES, SHOUT_COOLDOWN_SEC, SHOUT_LINES,
+  BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES, SHOUT_COOLDOWN_SEC, SHOUT_LINES, PLAYER_ROLE, POLICE_STRIKE,
+  FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS,
 } from './shared/constants'
 import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
-import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG } from '@/lib/cosmetics'
+import { SuspectSystem } from './suspects'
+import { GLBAssetManager, type GLBInstance } from './glb'
+import { GLBAnimDriver } from './anim'
+import type { LocoState } from './anim'
+import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
+
+/** A remote protester (human or bot): data always present, rig/GLB attached by budget. */
+interface RemoteEntry {
+  rig: import('./character').CharacterRig | null
+  /** High-Fi GLB model instance (replaces the procedural body; rig keeps the name tag). */
+  glb: { inst: GLBInstance; driver: GLBAnimDriver; loading: boolean } | null
+  target: { x: number; y: number; z: number; ry: number }
+  anim: AnimName
+  name: string
+  health: number
+  detained: boolean
+  archetype: string
+  role?: 'protector' | 'police'
+  cosmetics?: Record<string, string | boolean>
+  lastSeen: number
+  animAcc: number
+}
 
 export const QUICK_MESSAGES = [
   'Chai break, anyone?', 'Follow me!', 'POLICE! Scatter!', 'Nice one!', 'Help! Detained!',
@@ -82,18 +107,22 @@ interface MatchStats {
   gifts: number
   confiscated: number // vote tokens seized by police on detention
   confiscatedItems: number // inventory cards seized by police on detention
+  arrests: number // suspects detained by a police-role player
 }
 
 export class Game {
   private engine!: Engine
   private physics = new PhysicsWorld()
   private worldRenderer!: WorldRenderer
+  /** Static-geometry distance culling — the measured dominant draw-call cost beyond the fog wall. */
+  private culler!: WorldDistanceCuller
   private input!: InputManager
   private camRig!: ThirdPersonCamera
   private player: PlayerController | null = null
   private npcs!: NpcSystem
   private vehicles!: VehicleSystem
   private items!: ItemSystem
+  private animals!: AnimalSystem
   private bossClient = new BossClient()
   private fx = new FxSystem()
   private playerBubbles = new SpeechBubbleSystem()
@@ -101,6 +130,8 @@ export class Game {
   private photoWheelHandler: ((e: WheelEvent) => void) | null = null
   private net = new NetClient()
   private world = buildWorldDef()
+  /** v43 — the district currently built into this.world (rebuilt on map change at match start) */
+  private worldId = 'classic'
 
   private mode: 'solo' | 'multiplayer' | null = null
   private offline = false
@@ -127,11 +158,11 @@ export class Game {
   private gateOpen = false
   private activatedCheckpoints = new Set<number>()
   private inventory: { uid: string; type: ItemType }[] = []
-  private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0 }
+  private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0, arrests: 0 }
   private detainUntil = 0
   private carryingBallot = false
   private carryingBallotId: string | null = null
-  private remotePlayers = new Map<string, { rig: import('./character').CharacterRig | null; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; health: number; detained: boolean; archetype: string; lastSeen: number }>()
+  private remotePlayers = new Map<string, RemoteEntry>()
   private static MAX_RIGS = 24 // rig budget: nearby protesters get full characters, the rest stay as data dots
   private crowd: CrowdLod | null = null // instanced impostors for the rig-less majority
   private lastCrowdSync = 0
@@ -141,10 +172,23 @@ export class Game {
   private serverNpcRys: Record<string, number> = {}
   private lastTokenPos = { x: 0, z: 0 }
   private humorTimer = 30
+  // ---- sprint/slide camera feel (speed FOV kick + slide dip + dust) ----
+  private slideAmt = 0
+  private slideDustT = 0
   // ---- police melee telegraphs (Phase 5 client feel) ----
   private pendingPoliceStrike: { npcId: string; attackAt: number } | null = null
   private lastPoliceDamageAt = 0
   private lastShoutAt = 0 // V-key shout/whistle cooldown gate
+  private lastPauseToggleAt = 0 // v35 — debounce Escape keydown + pointerlockchange double-delivery
+  private squadPanelOffNotified = false // v42 — one gentle reminder when Tab is pressed while the squad panel setting is off
+  private lastArrestAttemptAt = 0 // police-role arrest spam gate (client side)
+  private lastPlayerStrikeAt = 0 // police-role baton strike (F) spam gate — distinct from the NPC telegraph above
+  // ---- High-Fi GLB player model (Step 2/3/4 integration — auto-fallback to procedural) ----
+  private glbMgr = new GLBAssetManager()
+  private hiFiPalette: { shirt: string; pants: string; skin: string; accent: string } | null = null
+  private hiFiGender: 'male' | 'female' = 'male'
+  private role: 'protector' | 'police' = 'protector' // chosen side (profile.role)
+  private suspects: SuspectSystem | null = null // offline police-role arrest targets
   private windupUntil = new Map<string, number>()
   private staggerUntil = new Map<string, number>()
   // engine-level damage vignette (DOM overlay owned here, Hud.tsx untouched)
@@ -177,7 +221,24 @@ export class Game {
   private static RALLY_COOLDOWN_MS = 45000
   private static INVITE_TTL_MS = 20000
 
+  /** Boot entry with a hard failure guarantee: ANY throw during engine/world/NPC
+   *  construction (WebGL unavailable, out-of-memory during city build on a
+   *  low-end device, …) previously died as an unhandled rejection — a silent,
+   *  dead canvas. Now the user gets a visible fatal-error card with the reason
+   *  and a Reload button instead of a mysterious blank/blue screen. */
   async boot(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
+    try {
+      await this.bootUnsafe(canvas, minimap)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error('[VoteChor] FATAL: game boot failed', e)
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      ;(w.__vcDiag ??= []).push({ kind: 'bootFatal', msg: msg.slice(0, 200), t: Date.now() })
+      useGameStore.getState().setFatalError(msg.slice(0, 200))
+    }
+  }
+
+  private async bootUnsafe(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
     this.canvasEl = canvas
     this.engine = new Engine(canvas)
@@ -186,6 +247,31 @@ export class Game {
       const st = useGameStore.getState()
       st.patchHud({ env: { ...st.hud.env, flashAt: Date.now() } })
       window.setTimeout(() => AudioManager.play('thunder'), 260 + Math.random() * 950)
+    }
+    // ---- render-fault telemetry → visible recovery (device-specific GL failures must surface) ----
+    const markGl = (gl: 'ok' | 'lost' | 'error', msg = '') => {
+      const st = useGameStore.getState()
+      if (st.hud.perf.gl !== gl || st.hud.perf.glMsg !== msg) {
+        st.patchHud({ perf: { ...st.hud.perf, gl, glMsg: msg } })
+      }
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      ;(w.__vcDiag ??= []).push({ kind: `gl-${gl}`, msg, t: Date.now() })
+    }
+    /** One guarded auto-reload per 30s window — a lost GL context / collapsed draw
+     *  pipeline recovers far more reliably through a fresh page than in-place. */
+    const guardedReload = (reason: string) => this.guardedReload(reason)
+    this.engine.onError = (phase, message) => {
+      markGl('error', `${phase}: ${message.slice(0, 80)}`)
+      console.error(`[VoteChor] render fault (${phase})`, message)
+    }
+    this.engine.onContextLost = () => {
+      markGl('lost', 'WebGL context lost')
+      this.store.notify('Graphics context lost — reloading…', 'warning')
+      window.setTimeout(() => { if (this.engine.contextLost) guardedReload('webgl context lost') }, 4500)
+    }
+    this.engine.onContextRestored = () => {
+      markGl('ok')
+      this.store.notify('Graphics restored', 'info')
     }
     this.physics.setColliders(this.world.colliders)
     // QA/debug handle — lets test scripts probe the live atmosphere state (window.__sky)
@@ -199,6 +285,20 @@ export class Game {
       ;(window as unknown as { __game?: Game }).__game = this
     }
     this.engine.scene.add(this.worldRenderer.group)
+    this.culler = new WorldDistanceCuller(this.worldRenderer.group, 195) // fog far is 210 — cull just inside it
+    // honor the user's performance-visibility preference (Options → Performance).
+    // Opt-in: default OFF renders the exact proven v25 path (everything always drawn).
+    this.culler.enabled = useGameStore.getState().settings.distanceCulling === true
+    // fail-safe host: if the culler ever mass-hides on this device it has already
+    // restored the world and disabled itself — make it visible + reportable
+    this.culler.onAnomaly = (visibleNear) => {
+      console.warn(`[VoteChor] Distance-culler fail-safe — only ${visibleNear} meshes visible near the player; culling disabled, world fully restored`, {
+        mode: this.mode, offline: this.offline, t: new Date().toISOString(),
+      })
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      ;(w.__vcDiag ??= []).push({ kind: 'cullerFailSafe', visibleNear, t: Date.now(), at: { x: this.player?.pos.x ?? 0, z: this.player?.pos.z ?? 0 } })
+      this.store.notify('Graphics safety: distance culling disabled — world fully restored', 'warning')
+    }
     this.engine.scene.add(this.bossClient.group)
     this.engine.scene.add(this.fx.group)
     this.engine.scene.add(this.playerBubbles.group)
@@ -208,6 +308,7 @@ export class Game {
     this.camRig = new ThirdPersonCamera(this.engine.camera, this.physics)
 
     this.npcs = new NpcSystem(this.world, this.physics, 'high')
+    this.npcs.farLod = useGameStore.getState().settings.distanceCulling === true // opt-in (v25 default: off)
     this.engine.scene.add(this.npcs.group)
     // offline solo: police captures + melee hits come from the local sim
     this.npcs.onLocalCapture = () => {
@@ -218,9 +319,25 @@ export class Game {
       if (!this.player || this.player.isDetained || this.player.isDazed) return
       this.applyDamage(amount, 'police')
     }
-    this.vehicles = new VehicleSystem(this.world)
+    this.vehicles = new VehicleSystem(this.world, this.engine.renderer)
     this.engine.scene.add(this.vehicles.group)
     this.vehicles.onPlayerHit = (kind, x, z, dmg) => this.handleVehicleHit(kind, x, z, dmg)
+
+    // street animals + sky birds — independent client bots with a feed-to-follow
+    // pet mechanic (audio + hearts are self-driven; notifications come via hooks)
+    this.animals = new AnimalSystem(this.physics, this.fx, {
+      onFed: (label, kind, extended) => {
+        const emoji = kind === 'dog' ? '🐕' : kind === 'cat' ? '🐈' : '🐄'
+        this.store.notify(
+          extended
+            ? `${emoji} ${label} is extra happy! Friendship extended (+${PET_FOLLOW_SEC}s)`
+            : `${emoji} ${label} loved the food! It will follow you for ${PET_FOLLOW_SEC}s — feed again to extend`,
+          'squad',
+        )
+      },
+      onPetOver: (label) => this.store.notify(`${label} wanders off — feed again to be friends`, 'info'),
+    })
+    this.engine.scene.add(this.animals.group)
 
     this.items = new ItemSystem(this.world.items, this.physics)
     this.engine.scene.add(this.items.group)
@@ -242,6 +359,15 @@ export class Game {
       onItems: (items) => this.items.applyServerState(items, this.worldTime),
       onBoss: (boss, ballots) => this.onServerBoss(boss, ballots),
       onCapture: (playerId, until, message, lostTokens) => this.onCapture(playerId, until, message, lostTokens),
+      onArrested: (_targetId, targetName, totalArrests) => {
+        // server-confirmed arrest — trust the count, celebrate the cuff
+        this.stats.arrests = totalArrests
+        AudioManager.play('capture')
+        const p = this.player
+        if (p) this.fx.popup(`ARRESTED — ${targetName}`, '#4e7fb5', p.pos.x, 2.2, p.pos.z)
+        this.store.notify(`Suspect ${targetName} detained — ${totalArrests} cuffed this shift.`, 'capture')
+      },
+      onStrike: (fromId, targetId, x, z) => this.onRemoteStrike(fromId, targetId, x, z),
       onRelease: (playerId, x, z) => this.onRelease(playerId, x, z),
       onDropped: (drops) => {
         for (const d of drops) {
@@ -261,6 +387,8 @@ export class Game {
       onProjectile: (p) => this.items.spawnRemoteProjectile(p.id, p.type, p.x, p.y, p.z, p.vx, p.vy, p.vz),
       onEmote: (playerId, emote) => this.playRemoteEmote(playerId, emote),
       onQuickMsg: (playerId, msgId) => this.onRemoteQuickMsg(playerId, msgId),
+      onChat: (playerId, name, text) => this.onRemoteChat(playerId, name, text),
+      onShout: (playerId, x, z, whistle, line) => this.onRemoteShout(playerId, x, z, whistle, line),
       onPlayerLeft: (playerId, name) => {
         this.removeRemote(playerId)
         this.syncRoomRoster()
@@ -270,8 +398,9 @@ export class Game {
           this.store.notify(`${name} left the protest`, 'info')
         }
       },
-      onPlayerJoined: (playerId, name, _archetype, cosmetics) => {
+      onPlayerJoined: (playerId, name, _archetype, cosmetics, role) => {
         if (cosmetics) this.pendingCosmetics.set(playerId, cosmetics)
+        if (role) this.pendingRoles.set(playerId, role)
         this.deferredRosterAdd(playerId, name)
         if (playerId.startsWith('bot_')) {
           useGameStore.getState().patchSeason({ lastEvent: `${name} joined the season`, lastEventAt: Date.now() })
@@ -355,6 +484,7 @@ export class Game {
               archetype: this.archetype,
               roomCode: this.lastRoomCode,
               cosmetics: profile?.cosmetics as Record<string, unknown> | undefined,
+              role: this.role,
             })
             this.offline = false
             this.store.notify('Reconnected to the protest!', 'squad')
@@ -375,13 +505,24 @@ export class Game {
       this.input.keybinds = s.settings.keybinds
       this.input.sensitivity = s.settings.mouseSensitivity
       this.input.invertY = s.settings.invertY
+      // ---- High-Fi GLB model toggle (live swap mid-match) ----
+      if (s.settings.hiFiModel !== prev.settings.hiFiModel) this.applyHiFiSetting(s.settings.hiFiModel)
+      // ---- performance-visibility toggle (live; off = the proven v25 rendering path) ----
+      if (s.settings.distanceCulling !== prev.settings.distanceCulling) {
+        const on = s.settings.distanceCulling === true
+        this.culler.enabled = on
+        if (!on) this.culler.showAll() // turning it off must restore anything currently hidden
+        this.engine.shadowThrottle = on // off = shadows refresh every frame (v25 cadence)
+        if (this.npcs) this.npcs.farLod = on // off = every NPC rig always drawn (v25)
+      }
       // ---- map toggled from ANY source (M key, HUD minimap click, big-map X / backdrop / Escape) ----
-      if (s.mapOpen !== prev.mapOpen) {
-        this.input.suppressed = s.mapOpen
-        this.input.pauseOnUnlock = !s.mapOpen
-        if (s.mapOpen) {
+      if (s.mapOpen !== prev.mapOpen || s.chatOpen !== prev.chatOpen) {
+        const overlay = s.mapOpen || s.chatOpen
+        this.input.suppressed = overlay
+        this.input.pauseOnUnlock = !overlay
+        if (overlay) {
           this.input.clearKeys() // stop mid-stride
-          this.input.releasePointer() // free the mouse for the map UI — no pause side-effect
+          this.input.releasePointer() // free the mouse for the overlay UI — no pause side-effect
         } else if (s.uiMode === 'playing') {
           this.input.clearKeys()
           this.input.setEnabled(true) // re-arm keyboard + pointer lock (fixes frozen controls)
@@ -390,8 +531,8 @@ export class Game {
       // ---- returning to 'playing' from the pause menu must ALWAYS restore input ----
       // (the Resume button only flips uiMode; without this the keyboard stays dead)
       if (s.uiMode !== prev.uiMode && s.uiMode === 'playing' && prev.uiMode === 'paused') {
-        this.input.suppressed = s.mapOpen
-        if (!s.mapOpen) { this.input.clearKeys(); this.input.setEnabled(true) }
+        this.input.suppressed = s.mapOpen || s.chatOpen
+        if (!(s.mapOpen || s.chatOpen)) { this.input.clearKeys(); this.input.setEnabled(true) }
       }
     })
 
@@ -402,6 +543,10 @@ export class Game {
       useGameStore.getState().setFps(fps)
     }
     this.engine.setQuality(this.store.settings.quality)
+    // Shadow-pass throttle + NPC far-LOD are part of the opt-in performance-visibility
+    // package (same switch as distance culling). Default OFF = the exact rendering
+    // cadence of the build the affected device confirmed working (5b08baf / "v25").
+    this.engine.shadowThrottle = this.store.settings.distanceCulling === true
     window.addEventListener('resize', () => this.engine.resize())
 
     registerUIActions({
@@ -419,6 +564,7 @@ export class Game {
         this.sayBubble('me', msg)
         this.store.notify(`You: ${msg}`, 'squad')
       },
+      sendChatMessage: (text) => this.sendChat(text),
       respawnRequest: () => {},
       photoToggle: () => this.togglePhotoMode(),
       photoFilter: () => this.cyclePhotoFilter(),
@@ -502,7 +648,8 @@ export class Game {
     this.gateOpen = false
     this.activatedCheckpoints.clear()
     this.inventory = []
-    this.stats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0 }
+    this.stats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0, arrests: 0 }
+    this.lastArrestAttemptAt = 0
     this.carryingBallot = false
     this.carryingBallotId = null
     this.matchTime = 0
@@ -514,19 +661,61 @@ export class Game {
     this.clearPendingInvite()
     useGameStore.getState().setSquad(null)
 
-    // fresh skies each match: random start hour in 'cycle' mode (07:00–19:00) + reset weather roll
-    this.engine.sky.timeOfDay = 7 + Math.random() * 12
+    // ---- v43 district maps: solo plays the map earned by the profile level ----
+    // Multiplayer rooms stay on the classic city (shared room world). When the
+    // district changes, the client-side world is rebuilt: render group disposed,
+    // colliders swapped, culler re-armed. The SYNCED skeleton (spawn, zones,
+    // checkpoints, items/npcs/vehicles/searchlights ids) is identical in every
+    // variant, so the authoritative server never notices the difference.
+    const mapId = mode === 'solo' ? this.pickSoloMapId(store) : 'classic'
+    if (mapId !== this.worldId) {
+      this.worldId = mapId
+      this.world = buildWorldDef(mapId)
+      this.physics.setColliders(this.world.colliders)
+      this.worldRenderer.dispose()
+      this.worldRenderer = new WorldRenderer(this.world, 'high')
+      this.engine.scene.add(this.worldRenderer.group)
+      ;(window as unknown as { __wr?: WorldRenderer }).__wr = this.worldRenderer
+      this.culler = new WorldDistanceCuller(this.worldRenderer.group, 195) // fog far is 210 — cull just inside it
+    }
+    const district = mapById(this.worldId)
+
+    // fresh skies each match: v38 — every session opens in the MORNING (08:00–09:45)
+    // instead of any hour 07:00–19:00; with the 20-min day + day-skew the player now
+    // gets ~12+ real minutes of daylight before nightfall. + reset weather roll.
+    // v43 — the district pins its own sky window, but ONLY while the player's
+    // settings are on the cycle/auto defaults: an explicit user choice always wins.
+    this.engine.sky.timeOfDay = 8 + Math.random() * 1.75
     this.engine.sky.setWeatherMode('auto')
     this.engine.sky.setTimeMode(useGameStore.getState().settings.timeMode ?? 'cycle')
-    useGameStore.getState().patchHud({ env: { ...useGameStore.getState().hud.env, flashAt: 0 } })
+    const liveSettings = useGameStore.getState().settings
+    if (liveSettings.timeMode === 'cycle' && district.timeOfDay) {
+      this.engine.sky.timeOfDay = district.timeOfDay[0] + Math.random() * (district.timeOfDay[1] - district.timeOfDay[0])
+    }
+    if (liveSettings.weatherMode === 'auto' && district.weather) {
+      this.engine.sky.setWeatherMode(district.weather)
+    }
+    useGameStore.getState().patchHud({ env: { ...useGameStore.getState().hud.env, flashAt: 0 }, mapName: district.name, mapDifficulty: district.difficulty, mapXpMul: district.xpMul })
 
     const profile = store.profile
     this.archetype = profile?.archetype ?? 'student'
     const name = profile?.name ?? 'Protester'
+    // chosen side: profile.role (server-persisted) → localStorage fallback → protector
+    this.role = profile?.role === 'police' ? 'police' : profile?.role === 'protector' ? 'protector' : (() => {
+      try { return localStorage.getItem('votechor_role') === 'police' ? 'police' : 'protector' } catch { return 'protector' as const }
+    })()
     this.refreshUnlockedEmotes()
+    // scrub the role-dependent HUD NOW (the connect window can take seconds —
+    // otherwise the previous match's objective/officer badge lingers on screen)
+    store.patchHud({
+      role: this.role,
+      arrests: 0,
+      objective: this.role === 'police' ? 'Reporting for duty…' : 'Recover the stolen vote tokens!',
+    })
 
     // reset world states
     this.net.leave() // drop any lingering previous-room socket (post-match ghosts)
+    useGameStore.getState().clearChat() // fresh comms feed per match
     this.worldRenderer.setBossGateOpen(false)
     this.bossClient.hideAll()
     this.fx.clear()
@@ -536,18 +725,49 @@ export class Game {
     this.localBoss = createBossBrain(this.world.bossArena)
     this.bossActiveLocal = false
 
-    // fresh player
-    if (this.player) { this.engine.scene.remove(this.player.rig.group) }
+    // fresh player — free the previous rig's GPU resources before rebuilding
+    if (this.player) {
+      if (this.player.glb) {
+        this.engine.scene.remove(this.player.glb.inst.group)
+        this.glbMgr.disposeInstance(this.player.glb.inst)
+        this.player.detachGlb()
+      }
+      this.engine.scene.remove(this.player.rig.group)
+      this.player.rig.dispose()
+    }
     const cosmetics = profile?.cosmetics
+    const gender = cosmetics?.gender === 'female' ? 'female' as const : 'male' as const
+    // High-Fi GLB palette — mirrors PlayerController's color resolution exactly
+    {
+      const arch = archetypeById(this.archetype)
+      const pal = { shirt: arch.colors.shirt, pants: arch.colors.pants, skin: arch.colors.skin, accent: arch.colors.accent }
+      if (cosmetics?.skinTone && typeof cosmetics.skinTone === 'string') pal.skin = cosmetics.skinTone
+      if (this.role === 'police') {
+        const u = policeUniformColors(typeof cosmetics?.policeOutfit === 'string' ? cosmetics.policeOutfit : undefined)
+        pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
+      }
+      this.hiFiPalette = pal
+      this.hiFiGender = gender
+    }
     this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
       hat: cosmetics?.hat as string | undefined,
       glasses: cosmetics?.glasses as boolean | undefined,
-      signText: cosmetics?.signText as string | undefined,
+      gender,
+      hair: cosmetics?.hair as string | undefined,
+      // officer look: the uniform must read cleanly — protest outfit/sign stay home,
+      // dress style comes from the Police Department wardrobe (policeOutfit/policeHat)
+      signText: this.role === 'police' ? undefined : cosmetics?.signText as string | undefined,
       face: cosmetics?.face as string | undefined,
-      outfit: cosmetics?.outfit as string | undefined,
+      build: cosmetics?.build as string | undefined,
+      outfit: this.role === 'police' ? undefined : cosmetics?.outfit as string | undefined,
       footwear: cosmetics?.footwear as string | undefined,
-      gear: cosmetics?.gear as string | undefined,
-      held: cosmetics?.held as string | undefined,
+      gear: this.role === 'police' ? 'none' : cosmetics?.gear as string | undefined,
+      held: this.role === 'police' ? undefined : cosmetics?.held as string | undefined,
+      ...(this.role === 'police' ? {
+        npcType: 'police' as const,
+        policeOutfit: cosmetics?.policeOutfit as string | undefined,
+        policeHat: cosmetics?.policeHat as string | undefined,
+      } : {}),
       cosmetics,
     })
     this.player.onFootstep = (running) => AudioManager.play(running ? 'footstepRun' : 'footstep')
@@ -561,9 +781,42 @@ export class Game {
       p.rig.flip() // quick procedural front-flip flourish
     }
     this.player.onVault = () => AudioManager.play('vault')
-    this.player.onSlide = () => AudioManager.play('slide')
+    this.player.onSlide = () => {
+      AudioManager.play('slide')
+      this.camRig.addShake(0.1) // ground-contact thump as the slide starts
+    }
     this.player.onDazed = () => { AudioManager.play('hit'); this.store.notify(randomOf(RANDOM_NOTIFICATIONS), 'warning') }
+    this.player.onFallRecover = () => {
+      AudioManager.play('land')
+      this.store.notify('Fall recovery — back on solid ground', 'info')
+      this.fx.burst(this.player!.pos.x, this.player!.pos.y + 0.4, this.player!.pos.z, '#f2c14e', 10, 2.6, 0.4)
+    }
+    this.player.onNanRecover = (reason) => {
+      // positional glitch self-healed — tell the player (so a repeat is reportable)
+      // and keep a diagnostic breadcrumb for QA on the live game handle.
+      const g = this.player!
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      if (reason === 'bounds') {
+        // finite-but-outside-the-map position (survives the NaN sentinel) — the
+        // city is left behind beyond the cull radius, reading as a sky-only world
+        console.warn('[VoteChor] Out-of-bounds position recovered — returned to last safe ground', {
+          mode: this.mode, offline: this.offline, worldTime: Math.round(this.worldTime),
+          restoredTo: { x: g.pos.x, y: g.pos.y, z: g.pos.z }, t: new Date().toISOString(),
+        })
+        ;(w.__vcDiag ??= []).push({ kind: 'boundsRecover', t: Date.now(), mode: this.mode, at: { x: g.pos.x, z: g.pos.z } })
+        this.store.notify('You wandered off the map — returned to the protest zone', 'info')
+        return
+      }
+      console.warn('[VoteChor] Numeric glitch recovered — position snapped back to last safe ground', {
+        mode: this.mode, offline: this.offline, worldTime: Math.round(this.worldTime),
+        restoredTo: { x: g.pos.x, y: g.pos.y, z: g.pos.z }, t: new Date().toISOString(),
+      })
+      ;(w.__vcDiag ??= []).push({ kind: 'nanRecover', t: Date.now(), mode: this.mode, at: { x: g.pos.x, z: g.pos.z } })
+      this.store.notify('Recovered from a graphics glitch — world restored', 'warning')
+    }
     this.engine.scene.add(this.player.rig.group)
+    // High-Fi GLB player model (settings toggle; silently skips when the asset fails)
+    if (useGameStore.getState().settings.hiFiModel) void this.tryAttachHiFi()
     this.camRig.yaw = 0 // camera behind player, looking down the road (-z)
 
     // impostor crowd for rig-less remotes — every mode needs it (solo seasons spawn ~99 bots)
@@ -585,6 +838,7 @@ export class Game {
         roomCode: mode === 'multiplayer' ? roomCode : null,
         cosmetics,
         season: mode === 'solo', // solo queue joins a persistent 100-protester Season
+        role: this.role,
       })
       // wait briefly for join ack; ack sets offline=false
       await new Promise<void>((resolve) => {
@@ -602,12 +856,23 @@ export class Game {
       store.patchHud({ connection: 'connected' })
     }
 
+    // police role: swap the suspect roster for the right mode — online has 99 season
+    // bots to cuff; offline gets a local "training day" squad so duty is never empty.
+    if (this.suspects) { this.suspects.dispose(); this.engine.scene.remove(this.suspects.group); this.suspects = null }
+    if (this.role === 'police' && this.offline) {
+      this.suspects = new SuspectSystem(this.world, this.world.colliders)
+      this.engine.scene.add(this.suspects.group)
+    }
+    store.patchHud({ role: this.role, arrests: 0 })
+
     AudioManager.setTheme('ambient')
     AudioManager.setCrowdLevel(0.7)
     store.setUIMode('playing')
     this.input.setEnabled(true)
     this.running = true
-    store.notify('The votes are missing. The protest is on. Everybody run!', 'info')
+    store.notify(this.role === 'police'
+      ? 'Officer on duty — detain rowdy protesters! Walk close and press E.'
+      : 'The votes are missing. The protest is on. Everybody run!', 'info')
     this.maybeOnboard()
   }
 
@@ -659,6 +924,7 @@ export class Game {
   leaveMatch(force = false) {
     if (this.matchEnded && !force) return // normal mid-match quit; the end screen passes force=true
     this.exitPhotoMode(false)
+    this.culler?.showAll() // menu keeps the world group on screen — no cull holes behind the UI
     this.net.leave()
     this.running = false
     this.input.setEnabled(false)
@@ -669,6 +935,8 @@ export class Game {
     this.clearOnboarding()
     this.npcs.bubbles.clear()
     this.playerBubbles.clear()
+    for (const [id] of this.remotePlayers) this.removeRemote(id) // rigs + GLB instances leave with the match
+    if (this.suspects) { this.suspects.dispose(); this.engine.scene.remove(this.suspects.group); this.suspects = null }
     this.crowd?.dispose()
     this.crowd = null
     this.perfRigs = 0
@@ -739,6 +1007,9 @@ export class Game {
       if (p.id === this.net.playerId) continue
       let r = this.remotePlayers.get(p.id)
       if (!r) { r = this.addRemote(p) }
+      // rogue-snapshot shield: a non-finite remote transform would poison this
+      // client's interpolation, name tags and squad rally — drop the sample.
+      if (!Number.isFinite(p.x + p.y + p.z + p.ry)) continue
       r.target = { x: p.x, y: p.y, z: p.z, ry: p.ry }
       r.anim = p.anim
       r.health = p.health
@@ -788,43 +1059,182 @@ export class Game {
         if (!r.rig && created < 4) { this.attachRig(id, r); created++ }
         else if (!r.rig) this.attachRig(id, r)
       } else if (r.rig) {
+        this.detachRemoteGlb(r) // budget eviction — GLB goes with the rig
         this.engine.scene.remove(r.rig.group)
+        r.rig.dispose()
         r.rig = null
       }
       rank++
     }
   }
 
-  private attachRig(id: string, r: { rig: import('./character').CharacterRig | null; target: { x: number; y: number; z: number; ry: number }; anim: AnimName; name: string; archetype: string; cosmetics?: Record<string, string | boolean> }) {
+  private attachRig(id: string, r: RemoteEntry) {
     const c = r.cosmetics
     const skinTone = typeof c?.skinTone === 'string' ? c.skinTone : undefined
+    const police = r.role === 'police'
     const rig = new CharacterRig({
       archetype: r.archetype,
       name: r.name,
       hat: typeof c?.hat === 'string' ? c.hat : undefined,
       glasses: c?.glasses === true,
+      gender: c?.gender === 'female' ? 'female' : 'male',
+      hair: typeof c?.hair === 'string' ? c.hair : undefined,
       signText: typeof c?.signText === 'string' && c.signText ? c.signText : undefined,
       face: typeof c?.face === 'string' ? c.face : undefined,
-      outfit: typeof c?.outfit === 'string' ? c.outfit : undefined,
+      build: typeof c?.build === 'string' ? c.build : undefined,
+      outfit: police ? undefined : typeof c?.outfit === 'string' ? c.outfit : undefined,
       footwear: typeof c?.footwear === 'string' ? c.footwear : undefined,
-      gear: typeof c?.gear === 'string' ? c.gear : undefined,
-      held: typeof c?.held === 'string' ? c.held : undefined,
-      ...(skinTone ? { colors: { ...archetypeById(r.archetype).colors, skin: skinTone } } : {}),
+      gear: police ? 'none' : typeof c?.gear === 'string' ? c.gear : undefined,
+      held: police ? undefined : typeof c?.held === 'string' ? c.held : undefined,
+      ...(police ? {
+        npcType: 'police' as const,
+        policeOutfit: typeof c?.policeOutfit === 'string' ? c.policeOutfit : undefined,
+        policeHat: typeof c?.policeHat === 'string' ? c.policeHat : undefined,
+      } : {}),
+      // uniform palette applies to EVERY police rig (was previously tied to skinTone — fixed in r23)
+      ...((police || skinTone) ? (() => {
+        const u = police ? policeUniformColors(typeof c?.policeOutfit === 'string' ? c.policeOutfit : undefined) : null
+        return {
+          colors: {
+            ...archetypeById(r.archetype).colors,
+            ...(skinTone ? { skin: skinTone } : {}),
+            ...(u ? { shirt: u.shirt, pants: u.pants, accent: u.accent } : {}),
+          },
+        }
+      })() : {}),
     })
     rig.group.position.set(r.target.x, r.target.y, r.target.z)
     rig.group.rotation.y = r.target.ry
     this.engine.scene.add(rig.group)
-    rig.setNameColor(r.name, this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
+    rig.setNameColor(r.name, police ? '#9ecbff' : this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
     r.rig = rig
+    // High-Fi GLB for the remote too (same pipeline as the local player — assets are
+    // cached per URL so N remotes share one download). Fire-and-forget; the procedural
+    // body stays until the instance is ready, then hides behind the name tag.
+    if (this.store.settings.hiFiModel) void this.attachRemoteGlb(id, r)
+  }
+
+  /**
+   * Attach a gender-matching, archetype-tinted GLB to a remote entry. Reuses the
+   * shared GLBAssetManager cache (no duplicate downloads) and never blocks gameplay:
+   * any failure leaves the procedural rig rendering as before.
+   */
+  private async attachRemoteGlb(id: string, r: RemoteEntry) {
+    if (r.glb || !r.rig) return
+    r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
+    const gender = r.cosmetics?.gender === 'female' ? 'female' : 'male'
+    const url = gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
+    const asset = await this.glbMgr.load(url)
+    if (!asset) { r.glb = null; return }
+    // entry may have been pruned / rig budget-evicted / setting flipped mid-load
+    if (this.remotePlayers.get(id) !== r || !r.rig || !this.store.settings.hiFiModel) { r.glb = null; return }
+    const inst = this.glbMgr.instantiate(asset)
+    if (!inst) { r.glb = null; return }
+    // same palette logic as the procedural rig above (archetype colors + skinTone + police uniform)
+    const c = r.cosmetics
+    const arch = archetypeById(r.archetype)
+    const pal = {
+      shirt: arch.colors.shirt, pants: arch.colors.pants, accent: arch.colors.accent,
+      skin: typeof c?.skinTone === 'string' ? c.skinTone : arch.colors.skin,
+    }
+    if (r.role === 'police') {
+      const u = policeUniformColors(typeof c?.policeOutfit === 'string' ? c.policeOutfit : undefined)
+      pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
+    }
+    this.tintGlb(inst, pal)
+    inst.group.visible = true
+    inst.group.position.set(r.target.x, r.target.y, r.target.z)
+    inst.group.rotation.y = r.target.ry
+    this.engine.scene.add(inst.group)
+    const driver = new GLBAnimDriver(inst.mixer, inst.clips)
+    r.rig.setBodyVisible(false) // name tag + alert sprites stay
+    r.glb = { inst, driver, loading: false }
+    // catch the GLB up to wherever interpolation is right now
+    inst.group.position.copy(r.rig.group.position)
+    inst.group.rotation.y = r.rig.group.rotation.y
+    driver.snap(r.detained ? 'detained' : (r.anim === 'dazed' ? 'hit' : r.anim === 'run' ? 'run' : r.anim === 'walk' ? 'walk' : 'idle') as LocoState)
+  }
+
+  /** Dispose one remote entry's GLB instance (scene removal + GPU teardown). */
+  private detachRemoteGlb(r: RemoteEntry) {
+    if (!r.glb) return
+    if (r.glb.inst) { this.engine.scene.remove(r.glb.inst.group); this.glbMgr.disposeInstance(r.glb.inst) }
+    r.glb = null
+    r.rig?.setBodyVisible(true)
+  }
+
+  // ---- High-Fi GLB player model (integration of the GLB pipeline with the player controller) ----
+
+  /**
+   * Load + instantiate the gender-matching GLB and attach it to the local player.
+   * NEVER blocks the match and NEVER throws — any failure leaves the procedural
+   * rig visible (the pipeline's fallback contract).
+   */
+  private async tryAttachHiFi() {
+    const p = this.player
+    if (!p || p.glb || !this.hiFiPalette) return
+    const url = this.hiFiGender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
+    const asset = await this.glbMgr.load(url)
+    if (!asset) return // loader already logged the reason; procedural stays
+    if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load
+    const inst = this.glbMgr.instantiate(asset)
+    if (!inst) return
+    this.tintGlb(inst, this.hiFiPalette)
+    inst.group.visible = true
+    this.engine.scene.add(inst.group)
+    const driver = new GLBAnimDriver(inst.mixer, inst.clips)
+    p.attachGlb(inst, driver)
+  }
+
+  /** Tint the GLB instance to the player's archetype/police palette (clones materials per-instance). */
+  private tintGlb(inst: GLBInstance, pal: { shirt: string; pants: string; skin: string; accent: string }) {
+    const map: Record<string, string> = {
+      TorsoMesh: pal.shirt, ArmLMesh: pal.shirt, ArmRMesh: pal.shirt,
+      LegLMesh: pal.pants, LegRMesh: pal.pants,
+      HeadMesh: pal.skin, ArmLHand: pal.skin, ArmRHand: pal.skin,
+      Sash: pal.accent,
+    }
+    inst.group.traverse((o) => {
+      const m = o as THREE.Mesh
+      if (!m.isMesh) return
+      const color = map[m.name]
+      if (!color) return
+      const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial | undefined
+      if (!mat) return
+      const clone = mat.clone()
+      clone.color = new THREE.Color(color)
+      m.material = clone
+    })
+  }
+
+  /** Live settings toggle — swap between the GLB and procedural rigs mid-match. */
+  private applyHiFiSetting(on: boolean) {
+    const p = this.player
+    if (!p) return
+    if (!on) {
+      if (p.glb) {
+        this.engine.scene.remove(p.glb.inst.group)
+        this.glbMgr.disposeInstance(p.glb.inst)
+        p.detachGlb()
+      }
+      // remotes: restore their procedural bodies, drop the GLB instances
+      for (const [, r] of this.remotePlayers) this.detachRemoteGlb(r)
+    } else {
+      if (!p.glb) void this.tryAttachHiFi()
+      for (const [id, r] of this.remotePlayers) if (r.rig && !r.glb) void this.attachRemoteGlb(id, r)
+    }
   }
 
   /** Wardrobe broadcasts race ahead of the first AOI snapshot — stash them here. */
   private pendingCosmetics = new Map<string, Record<string, string | boolean>>()
+  /** Same for the chosen side (join events carry role; 10Hz snapshots omit it). */
+  private pendingRoles = new Map<string, 'protector' | 'police'>()
 
   private addRemote(p: import('./shared/types').PlayerNetState) {
     // data-only entry — the rig budget pass (ensureRemoteRigs) attaches real characters
     const cosmetics = p.cosmetics ?? this.pendingCosmetics.get(p.id)
-    const r = { rig: null as import('./character').CharacterRig | null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, cosmetics, lastSeen: Date.now() }
+    const role = p.role ?? this.pendingRoles.get(p.id)
+    const r: RemoteEntry = { rig: null as import('./character').CharacterRig | null, glb: null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, role, cosmetics, lastSeen: Date.now(), animAcc: 0 }
     this.remotePlayers.set(p.id, r)
     return r
   }
@@ -832,7 +1242,8 @@ export class Game {
   private removeRemote(id: string) {
     const r = this.remotePlayers.get(id)
     if (r) {
-      if (r.rig) this.engine.scene.remove(r.rig.group)
+      this.detachRemoteGlb(r) // frees the GLB instance (mixer + GPU memory)
+      if (r.rig) { this.engine.scene.remove(r.rig.group); r.rig.dispose() }
       this.remotePlayers.delete(id)
     }
   }
@@ -863,6 +1274,15 @@ export class Game {
     } else {
       store.patchBoss({ active: false })
     }
+  }
+
+  /** Offline police duty: a training-day suspect was cuffed (local honesty — same shape as game:arrested). */
+  private onLocalArrest(name: string) {
+    this.stats.arrests++
+    AudioManager.play('capture')
+    const p = this.player
+    if (p) this.fx.popup(`ARRESTED — ${name}`, '#4e7fb5', p.pos.x, 2.2, p.pos.z)
+    this.store.notify(`You detained ${name}. Paperwork pending, obviously.`, 'capture')
   }
 
   private onCapture(playerId: string, until: number, message: string, lostTokens = 0) {
@@ -1000,7 +1420,9 @@ export class Game {
     }
     if (!best) { store.notify('No free cellmate to rally to — everyone is detained!', 'warning'); return }
     this.player.teleport(best.x, best.z)
-    this.player.pos.y = best.y
+    // only trust a finite, world-plausible remote altitude (a rogue/glitched remote
+    // snapshot must never poison the local position — see numeric-glitch sentinel)
+    if (Number.isFinite(best.y) && best.y >= -2 && best.y <= 16) this.player.pos.y = best.y
     this.camRig.yaw = 0
     this.rallyReadyAt = Date.now() + Game.RALLY_COOLDOWN_MS
     useGameStore.getState().patchHud({ rallyReadyAt: this.rallyReadyAt })
@@ -1010,6 +1432,33 @@ export class Game {
   }
 
   // ================= gifting (§11 eligible item sharing) =================
+
+  /**
+   * Feed a nearby street animal (F key, both roles) — consumes one food item
+   * (chai / snack / samosa), drops it as a crumb, and the animal walks over,
+   * eats, then follows the player as a pet for PET_FOLLOW_SEC. Feeding a
+   * current pet again extends the friendship. Works offline AND online (the
+   * animal bots are client-side, like the birds).
+   */
+  private feedAnimal(a: AnimalHandle) {
+    if (!this.player || !this.running) return
+    if (this.player.isDetained || this.player.isDazed) { this.store.notify('Cannot feed while detained or dazed', 'warning'); return }
+    const idx = this.inventory.findIndex((i) => FEED_FOODS.includes(i.type))
+    if (idx === -1) {
+      this.store.notify(`No food to share — ${a.label} loves chai, snacks & samosas!`, 'info')
+      return
+    }
+    const food = this.inventory[idx]
+    this.inventory.splice(idx, 1)
+    const res = this.animals.feed(a.idx, this.worldTime, { x: this.player.pos.x, z: this.player.pos.z })
+    if (!res) return
+    this.player.playAnim('heal', 0.35) // offering gesture
+    AudioManager.play('paperRustle', 0.5) // unwrapping the snack
+    const foodName = ITEM_CONFIG[food.type as ItemType]?.name ?? food.type
+    this.fx.popup(`${res.kind === 'dog' ? '🐕' : res.kind === 'cat' ? '🐈' : '🐄'} ${foodName}!`, '#f2c14e', this.player.pos.x, 2.1, this.player.pos.z)
+    if (res.extended) this.store.notify(`${res.label} perks up — friendship extended!`, 'squad')
+    this.syncHud()
+  }
 
   /**
    * Gift the most useful inventory item to the nearest live teammate (F key).
@@ -1064,6 +1513,8 @@ export class Game {
     this.inventory.splice(idx, 1)
     this.net.gift(targetId, pick.type)
     this.player.playAnim('heal', 0.35)
+    const tr = this.remotePlayers.get(targetId)?.target
+    if (tr) this.fx.burst(tr.x, 1.2, tr.z, '#f2c14e', 12, 2.4, 0.55) // gift sparkle at the receiver
     this.fx.popup(`🎁 GIFT → ${targetName}`, '#f2c14e', this.player.pos.x, 2.2, this.player.pos.z)
     this.sayBubble('me', randomOf(GIFT_QUIPS))
     AudioManager.play('pickup')
@@ -1220,19 +1671,63 @@ export class Game {
   private handleOneShot(a: string) {
     const store = useGameStore.getState()
     switch (a) {
-      case 'pause':
+      case 'pause': {
         // while the big map is open, Escape closes the map instead of pausing
         if (store.mapOpen) { store.toggleMap(false); break }
-        if (store.uiMode === 'playing') { this.exitPhotoMode(false); store.setUIMode('paused'); this.input.setEnabled(false) }
-        else if (store.uiMode === 'paused') { store.setUIMode('playing'); this.input.setEnabled(true) }
+        // v44 — same contract for the T comms panel: Escape closes chat, not the game
+        if (store.chatOpen) { store.toggleChat(false); break }
+        // v35 debounce — some browsers deliver BOTH the Escape keydown and the
+        // pointer-lock change for one physical press; without this latch the toggle
+        // would open+close the modal in the same frame and it would never show.
+        const now = performance.now()
+        if (now - this.lastPauseToggleAt < 350) break
+        this.lastPauseToggleAt = now
+        if (store.uiMode === 'playing') {
+          this.exitPhotoMode(false)
+          store.setUIMode('paused')
+          this.input.setEnabled(false)
+          // v35 — guarantee a visible cursor for the menu buttons even if the
+          // browser kept the pointer locked through the keydown path. releasePointer
+          // latches pauseOnUnlock=false to suppress the unlock event we ourselves
+          // trigger, so re-arm immediately: the unlock (if any) is already gated by
+          // enabled=false, and FUTURE user-initiated unlocks must still pause.
+          this.input.releasePointer()
+          this.input.pauseOnUnlock = true
+        } else if (store.uiMode === 'paused') {
+          store.setUIMode('playing')
+          this.input.setEnabled(true)
+        }
         break
+      }
       case 'jump': this.pendingOneShot = 'jump'; break
       case 'slide': this.pendingOneShot = 'slide'; break
       case 'throw': this.doThrow(); break
       case 'emote': store.toggleEmoteWheel(); break
       case 'map': store.toggleMap(); break
-      case 'squad': store.toggleSquad(); break
-      case 'gift': this.giftNearest(); break
+      case 'squad':
+        // v42 — Options → Interface can disable the squad panel entirely. Tab then
+        // does nothing except ONE gentle per-session reminder, so a dead key is
+        // never a mystery (re-enable from the pause menu → Options → Interface).
+        if (store.settings.squadPanel === false) {
+          if (!this.squadPanelOffNotified) {
+            this.squadPanelOffNotified = true
+            store.notify('Squad panel is off — enable it in Options → Interface', 'info')
+          }
+          break
+        }
+        store.toggleSquad()
+        break
+      case 'gift': {
+        // context-sensitive F — feeding a street animal always wins (works for
+        // both roles: kind officers feed strays too)
+        const hungry = this.animals?.nearestFeedable(this.player!.pos.x, this.player!.pos.z, FEED_RADIUS)
+        if (hungry) { this.feedAnimal(hungry); break }
+        // officers swing the lathi, protesters gift supplies
+        if (this.role === 'police') this.doBatonStrike()
+        else this.giftNearest()
+        break
+      }
+      case 'strike': this.doBatonStrike(); break // touch button — police role only
       case 'shout': this.doShout(); break
       case 'heal': this.quickHeal(); break
     }
@@ -1253,6 +1748,12 @@ export class Game {
     const impact = (ix: number, _iy: number, iz: number) => {
       AudioManager.play('impact')
       this.stats.distractions++
+      // The thrown item SURVIVES the landing — it becomes a ground pickup that
+      // anyone (including the thrower) can grab again. Offline: spawn locally.
+      // Online: the server drop registry is the single source of truth — report
+      // the landing spot and the relayed game:dropped spawns it for everyone.
+      if (this.offline) this.spawnLandedItem(item.type, ix, iz)
+      else this.net.dropItem(item.type, ix, iz)
       if (this.offline) {
         this.npcs.distraction(ix, iz, this.archetype === 'strategist' ? 9 : 5.5)
       } else {
@@ -1287,12 +1788,14 @@ export class Game {
         p.heal(10)
         p.stamina = p.maxStamina
         p.speedBoostUntil = this.worldTime + 6
+        this.fx.burst(p.pos.x, p.pos.y + 0.9, p.pos.z, '#7de3a8', 10, 2.2, 0.5)
         AudioManager.play('heal')
         this.fx.popup('+10 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
         this.store.notify('Chai break! +10 HP, stamina restored. Zindagi ek baar milta hai.', 'info')
         break
       case 'firstaid':
         p.heal(50)
+        this.fx.burst(p.pos.x, p.pos.y + 0.9, p.pos.z, '#7de3a8', 14, 2.6, 0.55)
         AudioManager.play('heal')
         this.fx.popup('+50 HP', '#ff8fa3', p.pos.x, 1.9, p.pos.z)
         this.store.notify('Patched up with one (1) band-aid.', 'info')
@@ -1300,6 +1803,7 @@ export class Game {
       case 'snack':
         p.heal(5)
         p.speedBoostUntil = this.worldTime + 8
+        this.fx.burst(p.pos.x, p.pos.y + 0.9, p.pos.z, '#7de3a8', 7, 1.8, 0.45)
         AudioManager.play('pickup')
         this.fx.popup('+5 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
         this.store.notify('Sugar rush! +5 HP and speed boost for 8s.', 'info')
@@ -1307,6 +1811,7 @@ export class Game {
       case 'joke': {
         const jokes = ['Delicious. Illegal. Worth it.', 'The samosa was filled with classified documents.', 'You feel oddly empowered.', '+10 confidence. -2 health code compliance.']
         p.heal(10)
+        this.fx.burst(p.pos.x, p.pos.y + 0.9, p.pos.z, '#7de3a8', 10, 2.2, 0.5)
         AudioManager.play('cash')
         this.fx.popup('+10 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
         this.store.notify(randomOf(jokes), 'info')
@@ -1330,7 +1835,9 @@ export class Game {
     }
     const missing = this.player.maxHealth - this.player.health
     const has = (t: ItemType) => this.inventory.find((i) => i.type === t)
-    const pick = (missing >= 45 ? has('firstaid') : undefined) ?? has('chai') ?? has('joke') ?? has('snack') ?? has('firstaid')
+    // pick ladder: big wounds take the first-aid kit; scrapes take the smallest
+    // snack so nothing is wasted on overkill; then chai / joke / snack / kit
+    const pick = (missing >= 45 ? has('firstaid') : undefined) ?? (missing <= 6 ? has('snack') : undefined) ?? has('chai') ?? has('joke') ?? has('snack') ?? has('firstaid')
     if (!pick) {
       this.store.notify('Pockets empty — no chai, samosa or first-aid. Collect food to heal!', 'warning')
       return
@@ -1355,7 +1862,119 @@ export class Game {
       this.npcs.distraction(p.pos.x, p.pos.z, 6)
     } else {
       this.net.noiseEvent(p.pos.x, p.pos.z)
+      // v45 — the rest of the room HEARS the shout/whistle from where it came
+      this.net.shoutEvent(p.pos.x, p.pos.z, whistle, line)
     }
+  }
+
+  /**
+   * v45 — a team-mate's V-shout/whistle arrived: spatial voice (pan + distance
+   * falloff), their rig does the matching pose, and the bubble shows the same
+   * line the shouter saw. This is the "other players can hear you" half of the
+   * noise system — previously game:noise only steered NPC police attention.
+   */
+  private onRemoteShout(playerId: string, x: number, z: number, whistle: boolean, line: string) {
+    if (playerId === this.net.playerId || !this.player) return // server relays to the whole room, incl. sender
+    const r = this.remotePlayers.get(playerId)
+    if (r) {
+      r.anim = whistle ? 'throw' : 'celebrate' // hand-to-mouth whistle vs arms-up yell
+      this.sayBubble(playerId, line || (whistle ? '*shrill whistle*' : 'AAZADII!'))
+    }
+    const p = this.player
+    AudioManager.playAt(whistle ? 'whistle' : 'shout', x, z, p.pos.x, p.pos.z, this.camRig.yaw, 55, 1.15)
+    if (Math.hypot(x - p.pos.x, z - p.pos.z) < 32) {
+      this.fx.burst(x, (r ? r.target.y : p.pos.y) + 1.4, z, '#f2c14e', 10, 4.2, 0.6)
+    }
+  }
+
+  /** Random officer bark shown above the striker when a baton hit connects. */
+  private static STRIKE_LINES = ['Stand down!', 'Move along!', 'Committee business here!', 'You are detained… almost.', 'Order! ORDER!']
+
+  /**
+   * F (police role) — baton strike. Officers swing the lathi at the nearest
+   * protester / training-day suspect within POLICE_STRIKE.range.
+   * Offline: suspects take a knockback + stagger (no HP bars on training day).
+   * Online: `game:policeHit` → the server re-validates role/range/cooldown and
+   * applies POLICE_STRIKE.dmg through damagePlayer (the victim's own client then
+   * plays the full police hit feel from the `game:damage` event, kind 'police').
+   */
+  private doBatonStrike() {
+    if (!this.player || this.player.isDetained || this.player.isDazed) return
+    if (this.role !== 'police') return // baton is officers-only (touch button safety)
+    const now = performance.now()
+    if (now - this.lastPlayerStrikeAt < POLICE_STRIKE.cooldownMs) return
+    this.lastPlayerStrikeAt = now
+    const p = this.player
+    p.playAnim('throw', 1.1) // lathi swing
+    AudioManager.play('throw') // whoosh
+
+    // v47 — ELEVATION-AWARE REACH: protesters used to perch on carts, the stage,
+    // the fountain rim or containers where the officer's collider could not get
+    // within the flat 2.6 m lathi range — a free camp-and-taunt spot. The lathi
+    // now reaches UP: effective horizontal range grows with the target's height
+    // above the officer (same formula the server validates in room.ts).
+    const lathiReach = (targetY: number) => POLICE_STRIKE.range + Math.min(Math.max(0, targetY - p.pos.y) * 0.75, 2.2)
+
+    if (this.offline) {
+      const s = this.suspects?.nearest(p.pos.x, p.pos.z, lathiReach(1.2)) // suspects are ground-bound; 1.2 covers a step-up perch
+      if (!s) { this.fx.popup('whiff…', '#9c948a', p.pos.x, 2.0, p.pos.z); return }
+      const hit = this.suspects?.hit(s.id, p.pos.x, p.pos.z, Date.now())
+      if (!hit) return
+      AudioManager.play('hit')
+      this.addShake(0.22) // baton connect weight
+      this.fx.burst(hit.x, p.pos.y + 1.1, hit.z, '#f2c14e', 8, 2.6, 0.4)
+      this.fx.popup(`THWACK — ${hit.name}`, '#c9482e', hit.x, 2.1, hit.z)
+      this.sayBubble('me', randomOf(Game.STRIKE_LINES))
+      return
+    }
+
+    // online: nearest cuffable protester within lathi reach (height-aware — v47)
+    let best: { id: string; name: string; d: number } | null = null
+    for (const [id, r] of this.remotePlayers) {
+      if (r.detained || r.role === 'police') continue
+      const d = Math.hypot(r.target.x - p.pos.x, r.target.z - p.pos.z)
+      if (d <= lathiReach(r.target.y) && (!best || d < best.d)) best = { id, name: r.name, d }
+    }
+    if (!best) { this.fx.popup('whiff…', '#9c948a', p.pos.x, 2.0, p.pos.z); return }
+    this.net.strike(best.id) // server confirms via game:damage on the victim + game:strike broadcast
+    AudioManager.play('hit')
+    this.addShake(0.22) // baton connect weight
+    const r = this.remotePlayers.get(best.id)
+    if (r) {
+      this.fx.burst(r.target.x, 1.1, r.target.z, '#f2c14e', 8, 2.6, 0.4)
+      this.fx.popup(`THWACK — ${r.name}`, '#c9482e', p.pos.x, 2.3, p.pos.z)
+    }
+    this.sayBubble('me', randomOf(Game.STRIKE_LINES))
+  }
+
+  /** Room-wide baton FX: someone (possibly me) just connected a strike. */
+  private onRemoteStrike(fromId: string, targetId: string, x: number, z: number) {
+    // my own strikes already played their local prediction FX in doBatonStrike
+    if (fromId === this.net.playerId) return
+    const from = this.remotePlayers.get(fromId)
+    if (from?.rig) {
+      // one-shot swing pose — state updates at 12Hz would overwrite r.anim, so force it
+      from.rig.forceAnim = 'throw'
+      setTimeout(() => { if (from.rig) from.rig.forceAnim = null }, 380)
+    }
+    // victim handles their own damage feel via game:damage; everyone nearby hears the thwack
+    if (targetId === this.net.playerId || !this.player) return
+    const d = Math.hypot(x - this.player.pos.x, z - this.player.pos.z)
+    if (d < 26) {
+      AudioManager.play('hit')
+      this.fx.burst(x, 1.1, z, '#f2c14e', 8, 2.6, 0.4)
+    }
+  }
+
+  /** A landed (thrown) or dropped item becomes a shared world pickup. Offline
+   *  helper — online the server's game:dropped relay spawns it for everyone. */
+  private spawnLandedItem(type: ItemType, x: number, z: number) {
+    const y = this.physics.groundHeight(x, z, 2) + 0.1
+    this.items.spawnDropped({
+      id: `drop_${Date.now().toString(36)}_${Math.floor(Math.random() * 46656).toString(36)}l`,
+      type, x, y, z,
+      respawn: 0, // one-shot: taken = gone (no infinite item fountain)
+    })
   }
 
   private dropInventoryItem(uid: string) {
@@ -1363,12 +1982,16 @@ export class Game {
     if (idx === -1 || !this.player) return
     const item = this.inventory[idx]
     this.inventory.splice(idx, 1)
-    // respawn as world item near player
-    const spawnDef = this.world.items.find(d => d.type === item.type)
-    if (spawnDef) {
-      const def = { ...spawnDef, id: `drop_${Date.now().toString(36)}`, x: this.player.pos.x + (Math.random() - 0.5) * 2, y: this.physics.groundHeight(this.player.pos.x, this.player.pos.z, 2) + 0.2, z: this.player.pos.z + (Math.random() - 0.5) * 2, respawn: 25 }
-      this.items.spawnDropped(def)
+    if (this.offline) {
+      // world drop beside the player — visible, pickable, one-shot
+      this.spawnLandedItem(item.type, this.player.pos.x + (Math.random() - 0.5) * 1.6, this.player.pos.z + (Math.random() - 0.5) * 1.6)
+      AudioManager.play('paperRustle')
+    } else {
+      // server registers the drop + relays game:dropped to the room (us included)
+      this.net.dropItem(item.type, this.player.pos.x, this.player.pos.z)
+      AudioManager.play('paperRustle')
     }
+    this.store.notify(`${ITEM_CONFIG[item.type]?.name ?? item.type} dropped — anyone can pick it up`, 'info')
     this.syncHud()
   }
 
@@ -1413,6 +2036,47 @@ export class Game {
     if (r) this.sayBubble(playerId, msg)
     // bots chat constantly — bubbles only (nearby rigs), no toast spam
     if (!playerId.startsWith('bot_')) this.store.notify(`${r?.name ?? 'Protester'}: ${msg}`, 'squad')
+  }
+
+  // ================= v44 — T comms: free-text chat + coordinate sharing =================
+
+  private chatSeq = 1
+
+  /** Free-text chat from the comms panel: relay, bubble and log locally (offline too). */
+  sendChat(raw: string) {
+    const text = raw.replace(/\s+/g, ' ').trim().slice(0, 90)
+    if (!text) return
+    const store = useGameStore.getState()
+    const name = this.store.profile?.name ?? 'Protester'
+    store.pushChat({ id: this.chatSeq++, name, text, at: Date.now(), mine: true, bot: false })
+    this.sayBubble('me', text)
+    this.net.chat(text)
+  }
+
+  private onRemoteChat(playerId: string, name: string, text: string) {
+    if (playerId === this.net.playerId) return // server relays to the whole room, incl. sender
+    const clean = String(text ?? '').slice(0, 90)
+    if (!clean) return
+    const bot = playerId.startsWith('bot_')
+    const r = this.remotePlayers.get(playerId)
+    const shown = r?.name ?? name ?? 'Protester'
+    useGameStore.getState().pushChat({ id: this.chatSeq++, name: shown, text: clean, at: Date.now(), mine: false, bot })
+    if (r) this.sayBubble(playerId, clean)
+    // coordinates shared by humans get a toast so they're hard to miss
+    if (!bot && /\bX\s*-?\d/i.test(clean)) this.store.notify(`${shown}: ${clean}`, 'squad')
+  }
+
+  /**
+   * v44 — which district does THIS solo match play? `selectedMapId` (Play screen
+   * picker) wins when it is still unlocked by the current profile level; anything
+   * stale/locked falls back to the level-earned district. Multiplayer is untouched
+   * (rooms are the classic city — the shared room world).
+   */
+  private pickSoloMapId(store: { profile?: { level?: number } | null; selectedMapId?: string | null }): string {
+    const level = store.profile?.level ?? 1
+    const sel = store.selectedMapId ? mapById(store.selectedMapId) : null
+    if (sel && sel.minLevel <= level) return sel.id
+    return mapForLevel(level).id
   }
 
   private handleVehicleHit(kind: string, x: number, z: number, dmg: number) {
@@ -1621,20 +2285,28 @@ export class Game {
     // offline NPC sim + capture (8s spawn grace so players can orient)
     if (this.offline) {
       const pv: NpcPlayerView = {
-        id: 'me', x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z,
+        id: 'me', x: this.player.pos.x, z: this.player.pos.z,
         detained: this.player.isDetained, dazed: this.player.isDazed,
         hidden: this.matchTime < 8 && Math.hypot(this.player.pos.x - this.world.spawn.x, this.player.pos.z - this.world.spawn.z) < 16,
+        police: this.role === 'police', // fellow officers never chase the officer-player
       }
       this.npcs.simulateLocal(dt, pv, this.world.colliders, Date.now())
       // searchlight rotation local
       for (const sl of this.world.searchlights) {
         this.localSearchlightAngles[sl.id] += sl.speed * dt
       }
+      // offline police duty: wandering suspects to detain
+      if (this.suspects) this.suspects.update(dt, this.player.pos.x, this.player.pos.z, Date.now())
+    } else if (this.suspects && this.suspects.group.visible) {
+      this.suspects.group.visible = false // went online mid-match — season bots take over
     }
 
     // vehicles (clock synced to server when online so damage matches visuals)
     const vehicleTime = this.offline || !this.serverMatchStart ? this.matchTime : (Date.now() - this.serverMatchStart) / 1000
     this.vehicles.update(vehicleTime, dt, this.player.pos, true)
+
+    // street animals + birds — independent bots, frozen with the rest of the sim when paused
+    this.animals.update(dt, this.worldTime, this.player.pos, Math.hypot(this.player.vel.x, this.player.vel.z), this.camRig.yaw)
 
     // solid vehicles: feed their current AABBs to physics at ~10Hz so players
     // cannot walk through buses/autos (defensive optional chain — if the vehicle
@@ -1713,6 +2385,69 @@ export class Game {
           }
         } else this.net.bossDeposit(this.player.pos.x, this.player.pos.z)
       }
+      // ---- police role: arrest the nearest suspect ----
+      // online: any non-detained protester (human or bot) within 2.8 m — server re-validates
+      // role, range and cooldown; offline: the local training-day suspect squad.
+      if (this.role === 'police' && !this.player.isDetained && !this.player.isDazed && !prompt &&
+          Date.now() - this.lastArrestAttemptAt > PLAYER_ROLE.arrestCooldownMs) {
+        let target: { id: string; name: string } | null = null
+        if (this.offline) {
+          const s = this.suspects?.nearest(this.player.pos.x, this.player.pos.z)
+          if (s) target = { id: s.id, name: s.name }
+        } else {
+          // v47 — elevation-aware arrest range (mirrors the server check in room.ts):
+          // perching on objects no longer puts suspects out of cuffing reach
+          let bestD = Infinity
+          for (const [id, r] of this.remotePlayers) {
+            if (r.detained || r.role === 'police') continue
+            const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
+            const reach = PLAYER_ROLE.arrestRange + Math.min(Math.max(0, r.target.y - this.player.pos.y) * 0.75, 2.2)
+            if (d < reach && d < bestD) { bestD = d; target = { id, name: r.name } }
+          }
+        }
+        if (target) {
+          prompt = `E — Arrest ${target.name}`
+          if (this.input.state.interact && !this.interacting) {
+            this.interacting = true
+            this.lastArrestAttemptAt = Date.now()
+            if (this.offline) {
+              const name = this.suspects?.arrest(target.id, Date.now())
+              if (name) this.onLocalArrest(name)
+            } else {
+              this.net.arrest(target.id) // confirmation arrives via game:arrested
+            }
+          }
+        }
+      }
+      // ---- police role: baton prompt (F) — shows whenever a protester is in lathi
+      // reach but the E-arrest prompt is not up (arrest takes priority: cuffing,
+      // not clubbing, is the win condition). F works regardless of this prompt.
+      if (this.role === 'police' && !this.player.isDetained && !this.player.isDazed && !prompt) {
+        let strikeTarget: string | null = null
+        if (this.offline) {
+          const s = this.suspects?.nearest(this.player.pos.x, this.player.pos.z, POLICE_STRIKE.range)
+          if (s) strikeTarget = s.name
+        } else {
+          let bestD = POLICE_STRIKE.range + 2.2 // v47 — upper bound; per-target reach checked below
+          for (const [, r] of this.remotePlayers) {
+            if (r.detained || r.role === 'police') continue
+            const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
+            const reach = POLICE_STRIKE.range + Math.min(Math.max(0, r.target.y - this.player.pos.y) * 0.75, 2.2)
+            if (d <= reach && d <= bestD) { bestD = d; strikeTarget = r.name }
+          }
+        }
+        if (strikeTarget) prompt = `F — Baton ${strikeTarget}`
+      }
+      // ---- feed prompt (F) — a hungry street animal nearby beats every other hint
+      if (!prompt && !this.player.isDetained && !this.player.isDazed) {
+        const hungry = this.animals?.nearestFeedable(this.player.pos.x, this.player.pos.z, FEED_RADIUS)
+        if (hungry) {
+          const hasFood = this.inventory.some((i) => FEED_FOODS.includes(i.type))
+          prompt = hasFood
+            ? `F — feed the ${hungry.kind}`
+            : `${hungry.label.replace(/^The /, 'The ')} looks hungry — bring chai or snacks`
+        }
+      }
       if (this.store.hud.interactPrompt !== prompt) this.store.patchHud({ interactPrompt: prompt })
     }
 
@@ -1721,7 +2456,7 @@ export class Game {
     if (this.stateSendAccum >= 1 / 12) {
       this.stateSendAccum = 0
       if (!this.offline && this.net.connected && !this.matchEnded) {
-        const anim = this.player.rig.anim
+        const anim = this.player.netAnim // state-machine output — correct for BOTH animation backends
         this.net.sendState(this.player.pos.x, this.player.pos.y, this.player.pos.z, this.player.ry, anim, {
           tokens: this.tokens,
           carrying: this.carryingBallot,
@@ -1875,7 +2610,31 @@ export class Game {
       while (d < -Math.PI) d += Math.PI * 2
       r.rig.group.rotation.y += d * Math.min(1, dt * 8)
       const hSpeed = r.anim === 'run' ? 9 : r.anim === 'walk' ? 5 : 0
-      r.rig.update(dt, r.detained ? 'detained' : r.anim, hSpeed)
+      // ---- anim LOD: distant rigs (>45m) update their pose at ~15Hz instead of 60Hz ----
+      const rDist = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
+      let animDt = 0
+      if (rDist > 45) {
+        r.animAcc += dt
+        if (r.animAcc < 0.066) continue
+        animDt = r.animAcc
+        r.animAcc = 0
+      } else {
+        animDt = dt
+      }
+      r.rig.update(animDt, r.detained ? 'detained' : r.anim, hSpeed)
+      // High-Fi backend for remotes: the GLB mirrors the interpolated transform and
+      // plays the SAME networked anim state (no bone streaming — state names only)
+      if (r.glb?.driver) {
+        const loco: LocoState = r.detained ? 'detained' : r.anim === 'dazed' ? 'hit' : (r.anim as LocoState)
+        r.glb.driver.play(loco, {
+          grounded: true, vy: 0, hSpeed,
+          sliding: false, dazed: r.anim === 'dazed', detained: r.detained,
+          landTimer: 0, recoverTimer: 0, jumpsUsed: 0,
+        })
+        r.glb.driver.update(animDt)
+        r.glb.inst.group.position.copy(pos)
+        r.glb.inst.group.rotation.y = r.rig.group.rotation.y
+      }
     }
 
     // impostor crowd — cheap silhouettes for rig-less remotes; matrices refreshed at ~10Hz
@@ -1895,6 +2654,27 @@ export class Game {
       this.items.update(dt, this.worldTime, this.worldTime)
     } else {
       this.npcs.update(dt, 1, this.worldTime)
+    }
+
+    // ---- sprint/slide camera feel ----
+    // speed FOV kick: walking = baseline, sprint +~3.5°, slide +~6° (hSpeed 12+)
+    const hSpeed = Math.hypot(this.player.vel.x, this.player.vel.z)
+    const targetFov = 62 + Math.min(6.5, Math.max(0, (hSpeed - 5.4) * 0.9))
+    if (Math.abs(this.engine.camera.fov - targetFov) > 0.04) {
+      this.engine.camera.fov += (targetFov - this.engine.camera.fov) * Math.min(1, dt * 5)
+      this.engine.camera.updateProjectionMatrix()
+    }
+    // slide dip: the camera sinks toward the road while sliding (lerped both ways)
+    const slideTarget = this.player.state === 'sliding' ? 1 : 0
+    this.slideAmt += (slideTarget - this.slideAmt) * Math.min(1, dt * 7)
+    if (this.slideAmt > 0.001) this.camRig.offset.y = 1.55 - this.slideAmt * 0.42
+    // slide dust — small puffs kicked up behind the glide
+    if (this.player.state === 'sliding' && this.player.grounded) {
+      this.slideDustT -= dt
+      if (this.slideDustT <= 0) {
+        this.slideDustT = 0.07
+        this.fx.burst(this.player.pos.x, this.player.pos.y + 0.14, this.player.pos.z, '#cfc4b0', 3, 1.8, 0.4)
+      }
     }
 
     // camera — spectate a live teammate while detained; photo mode orbits the player
@@ -1940,22 +2720,89 @@ export class Game {
         st.patchHud({ env: { ...prev, ...info } })
       }
       // perf chip — 1Hz, patched only when a value actually changed (HUD re-render cost matters)
+      const es = this.engine.stats
+      const prevPerf = st.hud.perf
       const perf = {
         fps: Math.round(this.lastFps),
+        frameMs: Math.round(es.frameMs * 10) / 10,
+        drawCalls: es.drawCalls,
+        trisK: Math.round(es.triangles / 1000),
         kbps: Math.round((this.net.bytesPerSec / 1024) * 10) / 10,
         crowd: this.crowd?.visibleCount ?? 0,
         rigs: this.perfRigs,
         res: Math.round(this.engine.effectivePixelRatio * 100) / 100,
+        gl: prevPerf.gl, // preserve the engine hooks' GL health flag across 1Hz patches
+        glMsg: prevPerf.glMsg,
       }
-      const prevPerf = st.hud.perf
       if (perf.fps !== prevPerf.fps || perf.kbps !== prevPerf.kbps || perf.crowd !== prevPerf.crowd ||
-        perf.rigs !== prevPerf.rigs || perf.res !== prevPerf.res) {
+        perf.rigs !== prevPerf.rigs || perf.res !== prevPerf.res ||
+        perf.drawCalls !== prevPerf.drawCalls || perf.trisK !== prevPerf.trisK ||
+        Math.abs(perf.frameMs - prevPerf.frameMs) >= 0.5) {
         st.patchHud({ perf })
+      }
+      // ---- draw-call collapse watchdog (1Hz): while actively playing, a healthy scene
+      // submits hundreds of draw calls. A persistent near-zero count means the world is
+      // silently not rendering on this device (exotic driver fault) — the exact "blue
+      // world, no buildings or roads" report. Surface it, then auto-recover via reload.
+      if (st.uiMode === 'playing' && !this.engine.contextLost) {
+        if (es.drawCalls > 0 && es.drawCalls < 8) {
+          this.lowDcStreak++
+          if (this.lowDcStreak === 1) {
+            console.warn('[VoteChor] draw-call collapse detected — attempting recovery')
+            st.notify('Rendering problem detected — attempting recovery…', 'warning')
+            const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+            ;(w.__vcDiag ??= []).push({ kind: 'drawCallCollapse', t: Date.now(), dc: es.drawCalls, at: { x: focus.x, z: focus.z } })
+          }
+          if (this.lowDcStreak >= 3) this.guardedReload('draw-call collapse')
+        } else {
+          this.lowDcStreak = 0
+        }
+        // a frame-phase exception firing continuously (GL draw faults) → same recovery path
+        const err = this.engine.lastError
+        if (err && Date.now() - err.at < 1500) {
+          this.errStreak++
+          if (this.errStreak >= 3) this.guardedReload(`persistent ${err.phase} fault: ${err.message.slice(0, 60)}`)
+        } else {
+          this.errStreak = 0
+        }
+        // ---- empty-world watchdog (1Hz): the built city holds thousands of meshes.
+        // If the group somehow carries almost nothing while playing (failed build,
+        // mass disposal, exotic fault), the screen shows ONLY sky — the exact "blue
+        // world, no buildings or roads" report. Recover like every other collapse.
+        const worldChildren = this.worldRenderer?.group.children.length ?? 0
+        if (worldChildren < 100) {
+          this.emptyWorldStreak++
+          if (this.emptyWorldStreak === 1) {
+            console.warn(`[VoteChor] world group nearly empty (${worldChildren} meshes) — attempting recovery`)
+            st.notify('World failed to load — attempting recovery…', 'warning')
+            const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+            ;(w.__vcDiag ??= []).push({ kind: 'emptyWorld', t: Date.now(), children: worldChildren, at: { x: focus.x, z: focus.z } })
+          }
+          if (this.emptyWorldStreak >= 3) this.guardedReload('world group nearly empty')
+        } else {
+          this.emptyWorldStreak = 0
+        }
+      } else {
+        this.lowDcStreak = 0
+        this.errStreak = 0
+        this.emptyWorldStreak = 0
       }
     }
 
     // world animation
     this.worldRenderer.update(dt, this.worldTime, this.offline ? this.localSearchlightAngles : this.serverNpcRys)
+    // static-geometry distance cull (internally sweeps at 2Hz) — measured dominant draw-call cost
+    this.culler.update(dt, focus.x, focus.z)
+
+    // ---- world-render watchdog: the world group must NEVER stay hidden while playing
+    // (a stale toggle / exotic fault would leave only sky+fog on screen — the "blue
+    // world" report). Forcing it back is a one-instruction no-op when healthy.
+    if (playing && !this.worldRenderer.group.visible) {
+      this.worldRenderer.group.visible = true
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      ;(w.__vcDiag ??= []).push({ kind: 'worldGroupForcedVisible', t: Date.now(), at: { x: focus.x, z: focus.z } })
+      console.warn('[VoteChor] world group was hidden mid-match — restored')
+    }
 
     // zone ambience + music switching
     const zone = this.world.zones.find(z => focus.z <= z.zStart && focus.z > z.zEnd)
@@ -1968,8 +2815,12 @@ export class Game {
         if (idx === 2) AudioManager.play('whistleFar')
       }
     }
-    // adaptive music: chase when chased — also drives the WANTED alert
-    const chased = this.npcs.nearestChaserDistance(focus.x, focus.z) < 18
+    // adaptive music: chase when chased — also drives the WANTED alert.
+    // Round 25 fix: only chase states that target THIS player count. A Season officer
+    // chasing a bot across town must not flash WANTED on unrelated screens, and a
+    // police-role player is never the quarry at all (officer immunity).
+    const meId = this.offline ? 'me' : this.net.playerId
+    const chased = this.role !== 'police' && this.npcs.nearestChaserDistance(focus.x, focus.z, meId) < 18
     if (chased !== this.lastHunted) {
       this.lastHunted = chased
       if (!this.player.isDetained) useGameStore.getState().patchHud({ hunted: chased })
@@ -1981,6 +2832,22 @@ export class Game {
   }
   private lastZoneIdx = -1
   private envTick = 0 // 1s cadence for the HUD environment chip
+  private lowDcStreak = 0 // consecutive 1Hz samples with a collapsed draw-call count
+  private errStreak = 0 // consecutive 1Hz samples while a frame-phase fault keeps firing
+  private emptyWorldStreak = 0 // consecutive 1Hz samples with a near-empty world group
+
+  /** One auto-reload per 30s window — a lost GL context / collapsed draw pipeline
+   *  recovers far more reliably through a fresh page than in-place. */
+  private guardedReload(reason: string) {
+    try {
+      const key = 'vc_gl_reload_at'
+      const last = Number(sessionStorage.getItem(key) ?? 0)
+      if (Date.now() - last < 30_000) return
+      sessionStorage.setItem(key, String(Date.now()))
+      console.warn(`[VoteChor] Auto-reload (${reason})`)
+      location.reload()
+    } catch { /* sessionStorage unavailable — reload anyway */ location.reload() }
+  }
 
   /**
    * Crowd impostor feed — one entry per remote protester; full-rig entries are flagged
@@ -2046,9 +2913,16 @@ export class Game {
     const p = this.player
     const zone = this.world.zones.find(z => p.pos.z <= z.zStart && p.pos.z > z.zEnd)
     const store = useGameStore.getState()
-    let objective = 'Recover the stolen vote tokens!'
-    if (this.tokens >= this.tokensNeeded) objective = 'Enter the Government District — defeat the Vote Collector!'
-    else if (this.activatedCheckpoints.size >= 4) objective = `Collect vote tokens (${this.tokens}/${this.tokensNeeded}) to open the boss gate`
+    let objective: string
+    if (this.role === 'police') {
+      objective = this.offline
+        ? `Duty: E to cuff, F to baton — detain suspects (${this.stats.arrests} cuffed)`
+        : `Duty: detain rowdy protesters — E to cuff, F to baton (${this.stats.arrests} cuffed)`
+    } else {
+      objective = 'Recover the stolen vote tokens!'
+      if (this.tokens >= this.tokensNeeded) objective = 'Enter the Government District — defeat the Vote Collector!'
+      else if (this.activatedCheckpoints.size >= 4) objective = `Collect vote tokens (${this.tokens}/${this.tokensNeeded}) to open the boss gate`
+    }
     const squad = [...this.remotePlayers.entries()]
       .map(([id, r]) => ({
         id, name: r.name, health: r.health, detained: r.detained, dazed: r.anim === 'dazed', archetype: '', distance: Math.hypot(r.target.x - p.pos.x, r.target.z - p.pos.z),
@@ -2122,7 +2996,9 @@ export class Game {
       dazed: p.isDazed,
       squad, matchTime: this.matchTime, distance: Math.round(p.distance),
       speedBoostUntil: p.speedBoostUntil, carryingBallot: this.carryingBallot,
-      score: Math.max(0, this.stats.tokens - this.stats.confiscated) * 45 + this.stats.checkpoints * 60,
+      score: Math.max(0, this.stats.tokens - this.stats.confiscated) * 45 + this.stats.checkpoints * 60 + this.stats.arrests * PLAYER_ROLE.scorePerArrest,
+      role: this.role,
+      arrests: this.stats.arrests,
       compass: { yawDeg, markers },
       spectating: p.isDetained ? this.spectateName : null,
       mapX: Math.round(p.pos.x * 2) / 2,
@@ -2362,18 +3238,21 @@ export class Game {
       itemsCollected: serverPayload?.itemsCollected ?? this.stats.itemsCollected,
       bossContribution: serverPayload?.bossContribution ?? this.stats.bossHits,
       detentions,
+      arrests: this.stats.arrests,
       confiscated: this.stats.confiscated,
       confiscatedItems: this.stats.confiscatedItems,
       gifts: this.stats.gifts,
     }
-    // XP calculation (client display)
+    // XP calculation (client display) — v43: solo district stakes multiply the
+    // estimate; the server recomputes authoritatively with the same mapForLevel rule
+    const xpMul = this.mode === 'solo' ? (this.world.xpMul ?? 1) : 1
     const xp = Math.round(
-      XP_TABLE.participation + stats.distance * XP_TABLE.perMeter +
+      (XP_TABLE.participation + stats.distance * XP_TABLE.perMeter +
       stats.checkpoints * XP_TABLE.perCheckpoint + stats.tokens * XP_TABLE.perToken +
       stats.rescues * XP_TABLE.perRescue + stats.revives * XP_TABLE.perRevive +
       stats.itemsCollected * XP_TABLE.perItem + stats.gifts * XP_TABLE.perGift +
-      stats.bossContribution * XP_TABLE.bossHit +
-      (victory ? XP_TABLE.victoryBonus : 0),
+      stats.bossContribution * XP_TABLE.bossHit + stats.arrests * XP_TABLE.perArrest +
+      (victory ? XP_TABLE.victoryBonus : 0)) * xpMul,
     )
     const { VICTORY_TITLES } = await import('./shared/constants')
     const title = VICTORY_TITLES({ detentions, rescues: stats.rescues, revives: stats.revives, items: stats.itemsCollected, distance: stats.distance, victory, gifts: stats.gifts })
@@ -2382,6 +3261,8 @@ export class Game {
     let leveledUp = false
     let newLevel = store.profile?.level ?? 1
     let xpEarned = xp
+    // v43 EndScreen unlock teaser — the district tier before this match
+    const prevLevel = store.profile?.level ?? 1
     let dailyBonus = 0
     let dailyDesc: string | undefined
     let dailyJustCompleted = false
@@ -2403,8 +3284,12 @@ export class Game {
             victory, distance: stats.distance, checkpoints: stats.checkpoints,
             rescues: stats.rescues, revives: stats.revives, itemsCollected: stats.itemsCollected,
             bossContribution: stats.bossContribution, detentions, tokens: stats.tokens,
+            arrests: stats.arrests,
             gifts: stats.gifts,
             position: stats.position, multiplayer: !this.offline,
+            // v44 — which district this match actually played; the server validates
+            // it against the profile level before honoring the XP stakes
+            mapId: this.mode === 'solo' ? this.worldId : undefined,
             squadSize: this.offline ? 1 : Math.min(4, Math.max(1, this.squad.memberIds.size || 1)),
           }),
         })
@@ -2462,7 +3347,14 @@ export class Game {
         }
       } catch { /* offline persistence failure is fine */ }
     }
-    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted, streak, streakUp, solidarityBonus, squadSize }
+    // v43 EndScreen unlock teaser — solo district earned by the level jump
+    const unlockedMap = (() => {
+      if (this.mode !== 'solo') return undefined
+      const before = mapForLevel(prevLevel)
+      const after = mapForLevel(newLevel)
+      return after.id !== before.id ? { name: after.name, tagline: after.tagline, minLevel: after.minLevel } : undefined
+    })()
+    const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted, streak, streakUp, solidarityBonus, squadSize, xpMul, unlockedMap }
     store.setMatchSummary(summary)
     store.setUIMode('ended')
     AudioManager.setTheme('menu')
@@ -2556,6 +3448,9 @@ export class Game {
   private takeSnapshot() {
     if (!this.photoMode || !this.engine) return
     try {
+      // preserveDrawingBuffer is ON again (v25 parity) — the explicit re-render is now
+      // belt-and-braces so the snapshot always shows the freshest composed frame
+      this.engine.renderer.render(this.engine.scene, this.engine.camera)
       const url = this.engine.renderer.domElement.toDataURL('image/png')
       const a = document.createElement('a')
       a.href = url
@@ -2574,6 +3469,7 @@ export class Game {
     this.net.leave()
     this.crowd?.dispose()
     this.crowd = null
+    if (this.animals) { this.animals.dispose(); this.engine?.scene.remove(this.animals.group) }
     this.input?.dispose()
     this.engine?.dispose()
     if (this.dmgFlashTimer) clearTimeout(this.dmgFlashTimer)
@@ -2608,7 +3504,7 @@ export function touchBridge() {
       input.touchMove = { x: 0, y: 0 }
       input.sync()
     },
-    btn: (name: 'sprint' | 'jump' | 'slide' | 'interact' | 'throw' | 'shout' | 'heal', down: boolean) => {
+    btn: (name: 'sprint' | 'jump' | 'slide' | 'interact' | 'throw' | 'shout' | 'heal' | 'strike', down: boolean) => {
       const input = g['input'] as InputManager | undefined
       if (!input) return
       input.touchButtons[name] = down
@@ -2618,6 +3514,14 @@ export function touchBridge() {
       if (down && name === 'slide') input.onOneShot?.('slide')
       if (down && name === 'shout') input.onOneShot?.('shout')
       if (down && name === 'heal') input.onOneShot?.('heal')
+      if (down && name === 'strike') input.onOneShot?.('strike')
+    },
+    // v46 — one-shot system actions for the touch utility row. Routing through the
+    // SAME handleOneShot path as the keyboard means pause keeps its map/chat-close
+    // contract + debounce, and squad keeps the Options→Interface off-latch.
+    oneShot: (name: 'pause' | 'squad' | 'emote') => {
+      const input = g['input'] as InputManager | undefined
+      input?.onOneShot?.(name)
     },
     setMinimap: (c: HTMLCanvasElement | null) => g.setMinimapCanvas(c),
   }

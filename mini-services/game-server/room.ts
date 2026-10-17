@@ -28,6 +28,8 @@ import {
   archetypeById,
   GIFT_TYPES,
   POLICE_ATTACK,
+  POLICE_STRIKE,
+  PLAYER_ROLE,
   INVENTORY_MAX,
   ITEM_CONFIG,
 } from '../../src/game/shared/constants'
@@ -137,14 +139,14 @@ const DROP_TTL_MS = 150000
 /** Ring layout for confiscated loot scattering around the capture spot. */
 const DROP_RING_RADIUS = 1.5
 const VEHICLE_HIT_COOLDOWN_MS = 1200
-const VEHICLE_RADIUS: Record<string, number> = { auto: 1.7, bus: 2.6, cow: 1.4 }
-const VEHICLE_DAMAGE: Record<string, number> = { auto: 35, bus: 40, cow: 8 }
+const VEHICLE_RADIUS: Record<string, number> = { auto: 1.7, bus: 2.6, cow: 1.4, car: 1.8, bike: 1.0 }
+const VEHICLE_DAMAGE: Record<string, number> = { auto: 35, bus: 40, cow: 8, car: 35, bike: 22 }
 const TICK_MS = 100
 const PLAYERS_BROADCAST_MS = 83 // ~12 Hz
 const RATE_LIMIT_WINDOW_MS = 1000
 const RATE_LIMIT_MAX = 5
 
-const ANIMS: AnimName[] = ['idle', 'walk', 'run', 'jump', 'slide', 'dazed', 'detained', 'celebrate', 'throw', 'heal', 'down']
+const ANIMS: AnimName[] = ['idle', 'walk', 'run', 'jump', 'fall', 'land', 'recover', 'slide', 'dazed', 'detained', 'celebrate', 'throw', 'heal', 'down']
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
@@ -178,9 +180,14 @@ export interface PlayerState {
   giftTimes: number[]
   inviteTimes: number[]
   kudosTimes: number[]
+  chatTimes: number[]
   lastReleaseId: string | null // anti-repeat: avoid releasing to the same point twice in a row
   confiscatedFor: number // detainUntil marker — one inventory confiscation per detention
   cosmetics?: Record<string, string | boolean> // wardrobe — sent on join ack + playerjoined only
+  role: 'protector' | 'police' // chosen side — police players get arrest powers + officer immunity
+  arrests: number // validated suspects detained by this officer
+  lastArrestAt: number // arrest spam gate
+  lastStrikeAt: number // baton-strike (F) spam gate — police-role only
 }
 
 export interface ItemState {
@@ -263,7 +270,7 @@ export class Room {
 
   // ---------- players ----------
 
-  addPlayer(socketId: string, name: string, archetype: string, opts?: { bot?: boolean; x?: number; z?: number; cosmetics?: Record<string, string | boolean> }): PlayerState {
+  addPlayer(socketId: string, name: string, archetype: string, opts?: { bot?: boolean; x?: number; z?: number; cosmetics?: Record<string, string | boolean>; role?: 'protector' | 'police' }): PlayerState {
     const arch = archetypeById(archetype)
     const now = Date.now()
     const maxHealth = 100 + arch.stats.healthBonus
@@ -274,6 +281,10 @@ export class Room {
       name,
       archetype: arch.id,
       cosmetics: opts?.cosmetics,
+      role: opts?.role === 'police' ? 'police' : 'protector',
+      arrests: 0,
+      lastArrestAt: 0,
+      lastStrikeAt: 0,
       bot: opts?.bot ?? false,
       x,
       y: 0,
@@ -297,6 +308,7 @@ export class Room {
       giftTimes: [],
       inviteTimes: [],
       kudosTimes: [],
+      chatTimes: [],
       lastReleaseId: null,
       confiscatedFor: 0,
     }
@@ -431,7 +443,7 @@ export class Room {
   }
 
   /** Rate limiter: max 5 events/s per player per channel. */
-  rateLimit(p: PlayerState, channel: 'noiseTimes' | 'emoteTimes' | 'giftTimes' | 'inviteTimes' | 'kudosTimes'): boolean {
+  rateLimit(p: PlayerState, channel: 'noiseTimes' | 'emoteTimes' | 'giftTimes' | 'inviteTimes' | 'kudosTimes' | 'chatTimes'): boolean {
     const now = Date.now()
     const arr = p[channel]
     while (arr.length && now - arr[0] > RATE_LIMIT_WINDOW_MS) arr.shift()
@@ -589,6 +601,67 @@ export class Room {
   }
 
   /**
+   * Police-role arrest (player officer): cuff a suspect on E.
+   * Server validates: issuer is police, target exists + is a protester (never a
+   * fellow officer / self), within PLAYER_ROLE.arrestRange (2.8 m), not already
+   * detained/dazed, and the issuer's 1.4 s arrest cooldown. On success the target
+   * goes through the SAME capturePlayer pipeline (token confiscation, loot drop,
+   * release timer) and the officer gets a personal `game:arrested` confirmation.
+   */
+  arrest(issuerId: string, targetId: unknown, now: number): boolean {
+    const officer = this.players.get(issuerId)
+    if (!officer || officer.role !== 'police' || officer.detained || officer.dazed) return false
+    if (typeof targetId !== 'string' || targetId === issuerId) return false
+    if (now - officer.lastArrestAt < PLAYER_ROLE.arrestCooldownMs) return false
+    const target = this.players.get(targetId)
+    if (!target || target.role === 'police') return false
+    if (target.detained || target.dazed) return false
+    // v47 — elevation-aware reach: officers can cuff UP onto objects (carts, the
+    // stage, the fountain rim, containers) — horizontal range grows with the
+    // target's height above the officer, mirroring the client's game.ts formula.
+    const dyUp = Math.max(0, (target.y ?? 0) - (officer.y ?? 0))
+    const reach = PLAYER_ROLE.arrestRange + Math.min(dyUp * 0.75, 2.2)
+    if (dist2d(officer.x, officer.z, target.x, target.z) > reach ** 2) return false
+    officer.lastArrestAt = now
+    officer.arrests++
+    this.capturePlayer(targetId, now)
+    // personal confirmation → the officer's client counts the arrest honestly
+    this.io.to(issuerId).emit('game:arrested', targetId, target.name, officer.arrests)
+    return true
+  }
+
+  /**
+   * Police-role baton strike (F): lathi-hit a protester. Server validates: issuer
+   * is a live officer (police, not detained/dazed), target is a protester (never a
+   * fellow officer / self), within POLICE_STRIKE.range + 0.6 m latency grace, not
+   * detained/dazed, and the issuer's 1.1 s swing cooldown. On success the target
+   * takes POLICE_STRIKE.dmg through the SAME damagePlayer pipeline NPC officers use
+   * (game:damage kind 'police' + game:health, 0 hp → dazed), and the whole room gets
+   * a `game:strike` FX broadcast (swing anim on the officer rig + impact burst).
+   */
+  strike(issuerId: string, targetId: unknown, now: number): boolean {
+    const officer = this.players.get(issuerId)
+    if (!officer || officer.role !== 'police' || officer.detained || officer.dazed) return false
+    if (typeof targetId !== 'string' || targetId === issuerId) return false
+    if (now - officer.lastStrikeAt < POLICE_STRIKE.cooldownMs) return false
+    const target = this.players.get(targetId)
+    if (!target || target.role === 'police') return false // officers never strike fellow officers
+    if (target.detained || target.dazed) return false
+    // v47 — elevation-aware lathi (mirrors the client's game.ts formula): the
+    // reach grows with the target's height above the officer, capped at +2.2 m
+    const dyUp = Math.max(0, (target.y ?? 0) - (officer.y ?? 0))
+    const reach = POLICE_STRIKE.range + Math.min(dyUp * 0.75, 2.2) + 0.6 // +0.6 latency grace (unchanged)
+    if (dist2d(officer.x, officer.z, target.x, target.z) > reach ** 2) return false
+    officer.lastStrikeAt = now
+    // server-owned health — identical channel to the NPC melee (victim client plays
+    // the full police hit feel: knockback, red vignette, stagger, thwack audio)
+    this.damagePlayer(targetId, POLICE_STRIKE.dmg, 'police', now)
+    // room-wide FX: swing anim + impact burst (cheap, event-driven, no polling)
+    this.emitRoom('game:strike', issuerId, targetId, round2(target.x), round2(target.z))
+    return true
+  }
+
+  /**
    * Detainee's client reports its inventory cards for confiscation (one shot per
    * detention). Server validates: player really is detained, not already
    * confiscated for this detention, type whitelist, cap at INVENTORY_MAX — then
@@ -636,6 +709,48 @@ export class Room {
     return { x: cx, z: cz }
   }
 
+  /** Per-player rate limit for player-initiated drops (game:dropItem). */
+  private lastDropAt = new Map<string, number>()
+  /** Max throw arc range — landed/dropped items beyond this are clamped to the ring edge. */
+  private static DROP_MAX_DIST = 16
+
+  /**
+   * Player-initiated ground drop: a deliberately dropped inventory item (HUD
+   * right-click) or a thrown item's landing spot. Same trust model as gifting —
+   * client-reported coords — but validated here: known non-token type, dropper
+   * not detained, per-player rate limit, and landing clamped to a ring around
+   * the dropper. Registered in the SAME drop registry as confiscation loot, so
+   * pickup (game:pickup), TTL expiry (game:dropGone) and match reset all work
+   * with zero extra code. The game:dropped relay reaches the whole room
+   * including the dropper — clients treat the relay as the single spawn source.
+   */
+  dropItem(socketId: string, type: unknown, x: unknown, z: unknown): boolean {
+    const p = this.players.get(socketId)
+    if (!p || p.detained) return false
+    const t = String(type)
+    if (t === 'token' || !(t in ITEM_CONFIG)) return false
+    const now = Date.now()
+    if (now - (this.lastDropAt.get(socketId) ?? 0) < 400) return false // drop/throw spam guard
+    this.lastDropAt.set(socketId, now)
+    let dx = Number(x)
+    let dz = Number(z)
+    if (!Number.isFinite(dx) || !Number.isFinite(dz)) return false
+    const ddx = dx - p.x
+    const ddz = dz - p.z
+    const dist = Math.hypot(ddx, ddz)
+    if (dist > Room.DROP_MAX_DIST) {
+      const s = Room.DROP_MAX_DIST / dist
+      dx = p.x + ddx * s
+      dz = p.z + ddz * s
+    }
+    const pos = this.nudgeDrop(dx, dz, p.x, p.z)
+    const id = `drop_${now.toString(36)}_${Math.floor(Math.random() * 46656).toString(36)}d`
+    const drop: DroppedItem = { id, type: t as ItemType, x: pos.x, y: 0.1, z: pos.z, ownerId: p.id, expiresAt: now + DROP_TTL_MS }
+    this.droppedItems.set(id, drop)
+    this.emitRoom('game:dropped', [{ id: drop.id, type: drop.type, x: drop.x, y: drop.y, z: drop.z, expiresAt: drop.expiresAt }])
+    return true
+  }
+
   /**
    * Release to a random validated point (Phase 6): never the same point twice in a
    * row, ≥30 m from non-detained squadmates while alternatives remain, never inside
@@ -675,7 +790,7 @@ export class Room {
     for (const p of this.players.values()) {
       if (!p.detained && !p.dazed) {
         const grace = now - p.joinedAt < 10000 && dist2d(p.x, p.z, WORLD.spawn.x, WORLD.spawn.z) < 16
-        const view: NpcPlayerView = { id: p.id, x: p.x, y: p.y, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot, health: p.health }
+        const view: NpcPlayerView = { id: p.id, x: p.x, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot, health: p.health, police: p.role === 'police' }
         views.push(view)
         if (!p.bot) bossViews.push(view)
       }
@@ -857,6 +972,10 @@ export class Room {
     const now = Date.now()
     for (const n of this.npcs) {
       const net: NpcNetState = { id: n.id, x: round2(n.x), z: round2(n.z), ry: round2(n.ry), state: n.state, alert: round2(n.alert) }
+      // who this officer is chasing — clients need it so the WANTED alarm only fires
+      // when YOU are the quarry (police players and bystanders no longer see it
+      // because some officer across town is chasing a bot)
+      if (n.state === 'chase' && n.targetId) net.target = n.targetId
       // Phase 5 telegraph fields — only sent while meaningful (keeps the 10 Hz payload small):
       // 'windup' + attackAt (absolute server ms the strike lands → client times impact FX),
       // or 'stagger' for the 0.35 s window after a landed strike.
@@ -940,22 +1059,34 @@ export function playerNet(p: PlayerState, includeCosmetics = false): PlayerNetSt
     tokens: p.tokens,
     carrying: p.carrying,
   } as PlayerNetState
-  if (includeCosmetics && p.cosmetics) net.cosmetics = p.cosmetics
+  if (includeCosmetics) {
+    if (p.cosmetics) net.cosmetics = p.cosmetics
+    net.role = p.role
+  }
   return net
 }
 
-// ---------- deterministic vehicles (mirrors client VehicleSystem ping-pong) ----------
+// ---------- deterministic vehicles (mirrors client VehicleSystem polyline ping-pong) ----------
 
-/** 2-point linear ping-pong — identical formula to client npcs.ts VehicleSystem. */
+/** Polyline ping-pong — identical formula to client npcs.ts VehicleSystem.update (v37).
+ *  Constant speed along the waypoint chain, bouncing at the ends; a 2-point path
+ *  reduces exactly to the legacy shuttle math. */
 function vehiclePosition(path: Array<[number, number]>, speed: number, worldTime: number): [number, number] {
-  const a = path[0]
-  const b = path[path.length - 1]
-  const len = Math.hypot(b[0] - a[0], b[1] - a[1])
-  const period = (len / speed) * 2
+  if (!path || path.length === 0) return [0, 0]
+  if (path.length === 1) return [path[0][0], path[0][1]]
+  const cum: number[] = [0]
+  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]))
+  const total = cum[cum.length - 1]
+  if (!(total > 0)) return [path[0][0], path[0][1]]
+  const period = (total / speed) * 2
   const phase = ((worldTime % period) + period) % period
   const half = period / 2
-  const t = phase < half ? phase / half : 2 - phase / half // ping-pong 0..1..0
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+  const s = (phase < half ? phase : period - phase) * speed // metres along the chain
+  let i = 0
+  while (i < path.length - 2 && s > cum[i + 1]) i++
+  const segLen = cum[i + 1] - cum[i]
+  const t = segLen > 0 ? Math.min(1, Math.max(0, (s - cum[i]) / segLen)) : 0
+  return [path[i][0] + (path[i + 1][0] - path[i][0]) * t, path[i][1] + (path[i + 1][1] - path[i][1]) * t]
 }
 
 function round2(v: number): number {

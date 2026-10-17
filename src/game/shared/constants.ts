@@ -24,9 +24,12 @@ export const MOVE = {
   coyoteTime: 0.1,      // grace window after leaving a ledge (s)
   jumpBuffer: 0.12,     // early-press buffering window (s)
   gravity: 21,
-  slideBoost: 11.5,
-  slideFriction: 6.5,
-  slideDuration: 0.85,
+  // ---- slide (C) — tuned for a 4-5 step glide (~5 m): v0 12.2 m/s decaying
+  // under friction 2.4 for 1.5 s ≈ 12.2/2.4 · (1−e^(−3.6)) ≈ 4.95 m, with a
+  // brief get-up window afterwards (player.ts) so the rise reads on the body
+  slideBoost: 12.2,
+  slideFriction: 2.4,
+  slideDuration: 1.5,
   staminaMax: 100,
   staminaDrain: 20,
   staminaRegen: 13,
@@ -62,6 +65,27 @@ export const POLICE_ATTACK = {
   fallbackDmg: 13,          // unknown NPC types
   weakenedHealth: 30,       // below this HP the capture hold time is halved
   weakenedCaptureMul: 0.5,
+}
+
+// ---------- Player role (protector | police) ----------
+// Protector = the classic protester experience. Police = play ON the other side:
+// a uniformed officer with arrest powers whom NPC officers treat as a colleague.
+export const PLAYER_ROLE = {
+  arrestRange: 2.8,       // how close an officer-player must be to cuff a suspect
+  arrestCooldownMs: 1400, // per-player arrest spam gate (server re-validates)
+  arrestXp: 40,           // mirror of XP_TABLE.perArrest (HUD score math)
+  scorePerArrest: 120,    // HUD score contribution per arrest
+}
+
+// Police-role baton strike (F key) — officer-players can lathi-hit protesters.
+// Damage is server-authoritative online; offline training-day suspects get a
+// knockback + stagger instead (they carry no HP bar).
+export const POLICE_STRIKE = {
+  range: 2.6,       // lathi reach — mirrors POLICE_ATTACK.strikeRange
+  cooldownMs: 1100, // per-officer swing gate (client + server both enforce)
+  dmg: 13,          // mirrors POLICE_ATTACK.dmgByType.police — the officer baton is the officer baton
+  knockback: 2.2,   // offline suspect shove distance (m)
+  staggerMs: 900,   // offline suspect stumble time before they bolt
 }
 
 // ---------- Items ----------
@@ -168,6 +192,7 @@ export const XP_TABLE = {
   perItem: 4,
   perGift: 18,
   bossHit: 12,
+  perArrest: 40, // police role: XP per suspect detained
   victoryBonus: 400,
   participation: 50,
 }
@@ -178,6 +203,11 @@ export const GIFT_TYPES: string[] = ['chai', 'firstaid', 'snack', 'joke', 'bottl
 
 export const levelFromXp = (xp: number): number => Math.max(1, Math.floor(Math.sqrt(xp / 120)) + 1)
 export const xpForLevel = (level: number): number => Math.pow(level - 1, 2) * 120
+
+// ---------- Street animals (feed-to-follow pets) ----------
+export const FEED_RADIUS = 3.4           // how close you must stand to offer food
+export const PET_FOLLOW_SEC = 90         // follow time earned per feeding
+export const FEED_FOODS: string[] = ['chai', 'snack', 'joke'] // first-aid is medical, not food
 
 // ---------- Achievements (server seeds these) ----------
 export const ACHIEVEMENTS = [

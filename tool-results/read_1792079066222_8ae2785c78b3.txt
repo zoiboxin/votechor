@@ -1,0 +1,702 @@
+    30→    30→  coneBand: new THREE.CylinderGeometry(0.105, 0.125, 0.045, 10),
+    31→    31→  crownBand: new THREE.CylinderGeometry(0.155, 0.17, 0.09, 8),
+    32→    32→  crownSpike: new THREE.ConeGeometry(0.045, 0.09, 4),
+    33→    33→  garland: new THREE.TorusGeometry(0.17, 0.04, 6, 14),
+    34→    34→  // ---- wardrobe expansion geometry ----
+    35→    35→  bandana: new THREE.SphereGeometry(0.166, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.6),
+    36→    36→  bandanaKnot: new THREE.BoxGeometry(0.06, 0.05, 0.03),
+    37→    37→  hardhat: new THREE.SphereGeometry(0.175, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+    38→    38→  hardhatBrim: new THREE.CylinderGeometry(0.21, 0.21, 0.02, 12),
+    39→    39→  hardhatRidge: new THREE.BoxGeometry(0.03, 0.05, 0.28),
+    40→    40→  moustache: new THREE.BoxGeometry(0.13, 0.028, 0.03),
+    41→    41→  warpaint: new THREE.BoxGeometry(0.055, 0.018, 0.02),
+    42→    42→  scar: new THREE.BoxGeometry(0.016, 0.09, 0.02),
+    43→    43→  kurtaSkirt: new THREE.CylinderGeometry(0.21, 0.26, 0.3, 8),
+    44→    44→  kurtaHem: new THREE.TorusGeometry(0.255, 0.018, 5, 14),
+    45→    45→  hood: new THREE.SphereGeometry(0.15, 8, 6, 0, Math.PI * 2, Math.PI / 2.6, Math.PI / 2),
+    46→    46→  pocket: new THREE.BoxGeometry(0.24, 0.12, 0.05),
+    47→    47→  vestBody: new THREE.BoxGeometry(0.45, 0.4, 0.27),
+    48→    48→  vestStripe: new THREE.BoxGeometry(0.46, 0.05, 0.28),
+    49→    49→  bootCuff: new THREE.CylinderGeometry(0.075, 0.08, 0.08, 6),
+    50→    50→  chappal: new THREE.BoxGeometry(0.14, 0.04, 0.24),
+    51→    51→  strap: new THREE.BoxGeometry(0.05, 0.5, 0.03),
+    52→    52→  sideBag: new THREE.BoxGeometry(0.2, 0.16, 0.08),
+    53→    53→  bannerRoll: new THREE.CylinderGeometry(0.05, 0.05, 0.56, 8),
+    54→    54→  dhol: new THREE.CylinderGeometry(0.14, 0.16, 0.3, 10),
+    55→    55→  dholRim: new THREE.TorusGeometry(0.15, 0.02, 5, 12),
+    56→    56→  umbrellaStick: new THREE.CylinderGeometry(0.015, 0.015, 0.66, 6),
+    57→    57→  umbrellaFold: new THREE.CylinderGeometry(0.035, 0.015, 0.2, 6),
+    58→    58→  umbrellaHandle: new THREE.TorusGeometry(0.05, 0.014, 5, 10, Math.PI),
+    59→    59→  bannerCloth: new THREE.PlaneGeometry(0.94, 0.24),
+    60→    60→  flagPole: new THREE.CylinderGeometry(0.012, 0.012, 0.85, 5),
+    61→    61→  flagCloth: new THREE.PlaneGeometry(0.3, 0.2),
+    62→    62→  bat: new THREE.CylinderGeometry(0.028, 0.052, 0.6, 7),
+    63→    63→  batKnob: new THREE.CylinderGeometry(0.036, 0.036, 0.03, 7),
+    64→    64→  shoppingBag: new THREE.BoxGeometry(0.2, 0.22, 0.1),
+    65→    65→  bagHandle: new THREE.TorusGeometry(0.05, 0.012, 5, 10, Math.PI),
+    66→    66→  megaCone: new THREE.CylinderGeometry(0.028, 0.11, 0.2, 10),
+    67→    67→  megaBody: new THREE.CylinderGeometry(0.032, 0.032, 0.14, 8),
+    68→    68→  megaHandle: new THREE.TorusGeometry(0.045, 0.014, 5, 9, Math.PI),
+    69→    69→  // ---- round 23: realistic faces, hair styles, police department ----
+    70→    70→  eye: new THREE.SphereGeometry(0.0245, 8, 6),
+    71→    71→  pupil: new THREE.SphereGeometry(0.0115, 6, 5),
+    72→    72→  brow: new THREE.BoxGeometry(0.052, 0.013, 0.016),
+    73→    73→  nose: new THREE.SphereGeometry(0.021, 6, 5),
+    74→    74→  mouth: new THREE.BoxGeometry(0.062, 0.014, 0.02),
+    75→    75→  lip: new THREE.BoxGeometry(0.07, 0.021, 0.026),
+    76→    76→  bun: new THREE.SphereGeometry(0.078, 8, 6),
+    77→    77→  ponyTail: new THREE.CylinderGeometry(0.028, 0.048, 0.34, 6),
+    78→    78→  tailTip: new THREE.SphereGeometry(0.044, 6, 5),
+    79→    79→  hairBack: new THREE.SphereGeometry(0.15, 10, 8),
+    80→    80→  curl: new THREE.SphereGeometry(0.062, 8, 6),
+    81→    81→  braidLink: new THREE.SphereGeometry(0.05, 6, 5),
+    82→    82→  // ---- round 24: face v2 (ears/iris/lashes/blush) + hair v2 ----
+    83→    83→  ear: new THREE.SphereGeometry(0.036, 6, 5),
+    84→    84→  iris: new THREE.SphereGeometry(0.0155, 8, 6),
+    85→    85→  spec: new THREE.SphereGeometry(0.0052, 4, 3),
+    86→    86→  lash: new THREE.BoxGeometry(0.06, 0.011, 0.013),
+    87→    87→  blush: new THREE.SphereGeometry(0.032, 6, 5),
+    88→    88→  nostril: new THREE.SphereGeometry(0.008, 4, 3),
+    89→    89→  noseBridge: new THREE.BoxGeometry(0.021, 0.08, 0.018),
+    90→    90→  fringe: new THREE.BoxGeometry(0.2, 0.05, 0.05),
+    91→    91→  hairTie: new THREE.TorusGeometry(0.034, 0.013, 5, 8),
+    92→    92→  strand: new THREE.BoxGeometry(0.055, 0.3, 0.05),
+    93→    93→  tailSeg: new THREE.CylinderGeometry(0.036, 0.028, 0.18, 6),
+    94→    94→  peakDome: new THREE.SphereGeometry(0.165, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+    95→    95→  peakTop: new THREE.CylinderGeometry(0.168, 0.168, 0.026, 10),
+    96→    96→  peakBand: new THREE.CylinderGeometry(0.166, 0.169, 0.05, 10, 1, true),
+    97→    97→  badge: new THREE.CylinderGeometry(0.028, 0.028, 0.014, 8),
+    98→    98→  beretBody: new THREE.SphereGeometry(0.155, 10, 6),
+    99→    99→  beretStalk: new THREE.CylinderGeometry(0.018, 0.026, 0.05, 6),
+   100→   100→  turbanWrap: new THREE.TorusGeometry(0.115, 0.056, 8, 14),
+   101→   101→  turbanTop: new THREE.SphereGeometry(0.09, 8, 6),
+   102→   102→  helmet: new THREE.SphereGeometry(0.185, 10, 8, 0, Math.PI * 2, 0, Math.PI / 1.75),
+   103→   103→  helmetRim: new THREE.TorusGeometry(0.172, 0.022, 6, 14),
+   104→   104→  helmetVisor: new THREE.BoxGeometry(0.26, 0.1, 0.02),
+   105→   105→  tie: new THREE.BoxGeometry(0.075, 0.3, 0.02),
+   106→   106→  medalBar: new THREE.BoxGeometry(0.1, 0.032, 0.018),
+   107→   107→  beltStrip: new THREE.BoxGeometry(0.445, 0.055, 0.26),
+   108→   108→  vestStripeThin: new THREE.BoxGeometry(0.3, 0.035, 0.02),
+   109→   109→}
+   110→   110→
+   111→   111→export interface RigOptions {
+   112→   112→  archetype?: string
+   113→   113→  colors?: { shirt: string; pants: string; skin: string; hair: string; accent: string }
+   114→   114→  scale?: number
+   115→   115→  name?: string
+   116→   116→  nameColor?: string
+   117→   117→  hat?: string // 'cap' | 'topi' | 'cone' | 'crown' | 'garland' | 'bandana' | 'hardhat' | 'none'
+   118→   118→  glasses?: boolean
+   119→   119→  signText?: string
+   120→   120→  npcType?: 'police' | 'security' | 'guard'
+   121→   121→  isBoss?: boolean
+   122→   122→  // ---- round 23: identity + police department slots ----
+   123→   123→  gender?: 'male' | 'female'
+   124→   124→  hair?: string      // 'default' | 'buzz' | 'bald' | 'bun' | 'ponytail' | 'curly' | 'long' | 'braid'
+   125→   125→  policeOutfit?: string // POLICE_UNIFORMS key — only read when npcType === 'police'
+   126→   126→  policeHat?: string    // 'peak' | 'beret' | 'turban' | 'helmet' | 'none' — only when npcType === 'police'
+   127→   127→  // hair default: female rigs get a ponytail, male rigs the classic cut
+   128→   128→  // ---- wardrobe expansion slots (default when omitted) ----
+   129→   129→  face?: string     // 'clean' | 'beard' | 'moustache' | 'warpaint' | 'scar'
+   130→   130→  outfit?: string   // 'classic' | 'kurta' | 'hoodie' | 'highvis'
+   131→   131→  footwear?: string // 'shoes' | 'boots' | 'chappal' | 'glow'
+   132→   132→  gear?: string     // 'none' | 'backpack' | 'jhola' | 'bannerroll' | 'dhol' | 'umbrella'
+   133→   133→  held?: string     // 'none' | 'sign' | 'banner' | 'flag' | 'bat' | 'lathi' | 'shoppingbag' | 'megaphone'
+   134→   134→  build?: string // 'regular' | 'slim' | 'sturdy' — body shape (normalized inside the rig)
+   135→   135→}
+   136→   136→
+   137→   137→function mat(color: string, flat = true): THREE.MeshStandardMaterial {
+   138→   138→  return new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.02, flatShading: flat })
+   139→   139→}
+   140→   140→
+   141→   141→/** Lighten/darken a hex color by ±0-255 per channel (string in, string out). */
+   142→   142→function shade(hex: string, amt: number): string {
+   143→   143→  const c = new THREE.Color(hex)
+   144→   144→  const f = (v: number) => Math.max(0, Math.min(1, v + amt / 255))
+   145→   145→  return `#${new THREE.Color(f(c.r), f(c.g), f(c.b)).getHexString()}`
+   146→   146→}
+   147→   147→
+   148→   148→// ---- realistic face features (round 23) ----
+   149→   149→// Eyes + brows + nose + mouth are merged into ONE vertex-colored geometry per
+   150→   150→// unique (skin, hair, gender) triple — a single extra draw call per rig.
+   151→   151→function tintedClone(geo: THREE.BufferGeometry, color: string): THREE.BufferGeometry {
+   152→   152→  const c = new THREE.Color(color)
+   153→   153→  const src = geo.clone()
+   154→   154→  const count = src.attributes.position.count
+   155→   155→  const arr = new Float32Array(count * 3)
+   156→   156→  for (let i = 0; i < count; i++) {
+   157→   157→    arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b
+   158→   158→  }
+   159→   159→  src.setAttribute('color', new THREE.BufferAttribute(arr, 3))
+   160→   160→  return src
+   161→   161→}
+   162→   162→
+   163→   163→const faceGeoCache = new Map<string, THREE.BufferGeometry>()
+   164→   164→let faceFeatureMat: THREE.MeshStandardMaterial | null = null
+   165→   165→
+   166→   166→/** Geometries shared across every rig — rig.dispose() must never free these. */
+   167→   167→const sharedGeo = new WeakSet<THREE.BufferGeometry>()
+   168→   168→for (const g of Object.values(G)) sharedGeo.add(g)
+   169→   169→
+   170→   170→function faceMaterialShared(): THREE.MeshStandardMaterial {
+   171→   171→  if (!faceFeatureMat) {
+   172→   172→    faceFeatureMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.05 })
+   173→   173→  }
+   174→   174→  return faceFeatureMat
+   175→   175→}
+   176→   176→
+   177→   177→/** Build (or fetch from cache) the merged face-features geometry for a look. */
+   178→   178→function faceGeometryFor(skinHex: string, hairHex: string, female: boolean): THREE.BufferGeometry {
+   179→   179→  const key = `${skinHex}|${hairHex}|${female ? 'f' : 'm'}`
+   180→   180→  const hit = faceGeoCache.get(key)
+   181→   181→  if (hit) return hit
+   182→   182→  const parts: THREE.BufferGeometry[] = []
+   183→   183→  const place = (
+   184→   184→    geo: THREE.BufferGeometry, color: string,
+   185→   185→    px: number, py: number, pz: number,
+   186→   186→    sx = 1, sy = 1, sz = 1, rz = 0,
+   187→   187→  ) => {
+   188→   188→    const g = tintedClone(geo, color)
+   189→   189→    const m = new THREE.Matrix4()
+   190→   190→    m.compose(
+   191→   191→      new THREE.Vector3(px, py, pz),
+   192→   192→      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, rz)),
+   193→   193→      new THREE.Vector3(sx, sy, sz),
+   194→   194→    )
+   195→   195→    g.applyMatrix4(m)
+   196→   196→    parts.push(g)
+   197→   197→  }
+   198→   198→  const dark = '#241a12'
+   199→   199→  // ears — subtle skin-shaded shells on the sides (all genders)
+   200→   200→  for (const side of [1, -1]) {
+   201→   201→    place(G.ear, shade(skinHex, -22), side * 0.15, 0.1, -0.008, 0.55, 0.82, 0.62)
+   202→   202→  }
+   203→   203→  // eyes — almond white + brown iris + dark pupil + tiny catchlight dot.
+   204→   204→  // Pushed proud of the (now smooth) head sphere so they read at any quality.
+   205→   205→  for (const side of [1, -1]) {
+   206→   206→    place(G.eye, '#f7f3ea', side * 0.056, 0.112, 0.142, 1, 0.82, 0.5)
+   207→   207→    place(G.iris, '#4a2c16', side * 0.056, 0.112, 0.152, 1, 1, 0.55)
+   208→   208→    place(G.pupil, dark, side * 0.056, 0.112, 0.158, 1, 1, 0.6)
+   209→   209→    place(G.spec, '#ffffff', side * 0.05 + side * -0.008, 0.118, 0.1635)
+   210→   210→    // lash line — thin dark arc hugging the top of the eye
+   211→   211→    place(G.lash, dark, side * 0.056, 0.1325, 0.146, 1.05, 1, 1, side * -0.1)
+   212→   212→  }
+   213→   213→  // brows — two segments per side forming a gentle expressive arch
+   214→   214→  for (const side of [1, -1]) {
+   215→   215→    place(G.brow, shade(hairHex, 10), side * 0.036, 0.156, 0.144, 1, female ? 0.85 : 1, 1, side * -0.07)
+   216→   216→    place(G.brow, shade(hairHex, 4), side * 0.076, 0.161, 0.138, 0.82, female ? 0.8 : 0.95, 1, side * 0.3)
+   217→   217→  }
+   218→   218→  // female-only: soft cheek blush baked as a skin/rose blend (vertex colors only)
+   219→   219→  if (female) {
+   220→   220→    const blushCol = new THREE.Color(skinHex).lerp(new THREE.Color('#d46a6a'), 0.38).getStyle()
+   221→   221→    for (const side of [1, -1]) {
+   222→   222→      place(G.blush, blushCol, side * 0.088, 0.068, 0.118, 1, 0.62, 0.42)
+   223→   223→    }
+   224→   224→  }
+   225→   225→  // nose — bridge + snub tip + nostril hints
+   226→   226→  place(G.noseBridge, shade(skinHex, -16), 0, 0.115, 0.142, 1, 1, 0.85)
+   227→   227→  place(G.nose, shade(skinHex, -26), 0, 0.082, 0.156, 0.9, 1.2, 0.85)
+   228→   228→  for (const side of [1, -1]) {
+   229→   229→    place(G.nostril, shade(skinHex, -60), side * 0.015, 0.072, 0.152, 1, 0.8, 0.7)
+   230→   230→  }
+   231→   231→  // mouth — fuller two-tone lips for female, thinner shaded line for male
+   232→   232→  if (female) {
+   233→   233→    place(G.lip, '#a34e5e', 0, 0.043, 0.149, 1, 0.6, 0.8)
+   234→   234→    place(G.lip, '#c96a76', 0, 0.029, 0.15, 0.94, 0.8, 0.85)
+   235→   235→  } else {
+   236→   236→    place(G.mouth, shade(skinHex, -48), 0, 0.04, 0.149, 1, 1, 0.8)
+   237→   237→  }
+   238→   238→  const merged = mergeGeometries(parts, false) ?? new THREE.BufferGeometry()
+   239→   239→  for (const p of parts) p.dispose()
+   240→   240→  sharedGeo.add(merged)
+   241→   241→  faceGeoCache.set(key, merged)
+   242→   242→  return merged
+   243→   243→}
+   244→   244→
+   245→   245→// ---- realistic body build (v32) ----
+   246→   246→// The original body was plain boxes with legs that stopped 0.335 units short of
+   247→   247→// the ground (every character visibly hovered). These builders produce shaped,
+   248→   248→// merged geometries with real proportions: tapered ribcage + waist + deltoids,
+   249→   249→// pelvis, neck, two-segment arms, full-length legs that ACTUALLY reach y=0.
+   250→   250→// Everything is cached per (part, gender, build) — ONE draw call per part.
+   251→   251→function xg(
+   252→   252→  geo: THREE.BufferGeometry,
+   253→   253→  px: number, py: number, pz: number,
+   254→   254→  sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0,
+   255→   255→): THREE.BufferGeometry {
+   256→   256→  const g = geo.clone() // never mutate shared G.* geometry
+   257→   257→  const m = new THREE.Matrix4().compose(
+   258→   258→    new THREE.Vector3(px, py, pz),
+   259→   259→    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
+   260→   260→    new THREE.Vector3(sx, sy, sz),
+   261→   261→  )
+   262→   262→  g.applyMatrix4(m)
+   263→   263→  return g
+   264→   264→}
+   265→   265→
+   266→   266→const bodyGeoCache = new Map<string, THREE.BufferGeometry>()
+   267→   267→function cachedMerged(key: string, buildParts: () => THREE.BufferGeometry[]): THREE.BufferGeometry {
+   268→   268→  const hit = bodyGeoCache.get(key)
+   269→   269→  if (hit) return hit
+   270→   270→  const parts = buildParts()
+   271→   271→  const merged = mergeGeometries(parts, false) ?? new THREE.BufferGeometry()
+   272→   272→  for (const p of parts) p.dispose()
+   273→   273→  sharedGeo.add(merged)
+   274→   274→  bodyGeoCache.set(key, merged)
+   275→   275→  return merged
+   276→   276→}
+   277→   277→
+   278→   278→interface BodyProfile {
+   279→   279→  shoulder: number; chest: number; waist: number
+   280→   280→  hipTop: number; hipBottom: number
+   281→   281→  armW: number; legW: number
+   282→   282→}
+   283→   283→
+   284→   284→function bodyProfile(female: boolean, build: BodyBuild): BodyProfile {
+   285→   285→  const p: BodyProfile = female
+   286→   286→    ? // hourglass: narrower shoulders/chest, pinched waist, wider hips
+   287→   287→      { shoulder: 0.19, chest: 0.163, waist: 0.143, hipTop: 0.148, hipBottom: 0.182, armW: 0.86, legW: 0.9 }
+   288→   288→    : // classic V: broad shoulders tapering to the waist
+   289→   289→      { shoulder: 0.225, chest: 0.185, waist: 0.163, hipTop: 0.166, hipBottom: 0.156, armW: 1, legW: 1 }
+   290→   290→  if (build === 'slim') {
+   291→   291→    p.shoulder *= 0.92; p.chest *= 0.92; p.waist *= 0.9
+   292→   292→    p.hipTop *= 0.92; p.hipBottom *= 0.92; p.armW *= 0.94; p.legW *= 0.92
+   293→   293→  } else if (build === 'sturdy') {
+   294→   294→    p.shoulder = Math.max(p.shoulder * 1.08, 0.235)
+   295→   295→    p.chest *= 1.14; p.waist *= 1.2
+   296→   296→    p.hipTop *= 1.1; p.hipBottom *= 1.08; p.armW *= 1.12; p.legW *= 1.12
+   297→   297→  }
+   298→   298→  return p
+   299→   299→}
+   300→   300→
+   301→   301→/** Ribcage + waist taper + deltoid caps merged (shirt material, torsoPivot space). */
+   302→   302→function torsoGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
+   303→   303→  const p = bodyProfile(female, build)
+   304→   304→  return cachedMerged(`torso|${female ? 'f' : 'm'}|${build}`, () => {
+   305→   305→    const parts = [
+   306→   306→      xg(new THREE.CylinderGeometry(p.shoulder, p.chest, 0.3, 12), 0, 0.33, 0, 1, 1, 0.58), // ribcage
+   307→   307→      xg(new THREE.CylinderGeometry(p.chest - 0.008, p.waist, 0.2, 12), 0, 0.08, 0, 1, 1, 0.58), // waist
+   308→   308→    ]
+   309→   309→    for (const s of [1, -1]) {
+   310→   310→      parts.push(xg(new THREE.SphereGeometry(0.07, 8, 6), s * (p.shoulder - 0.038), 0.435, 0, 1, 0.85, 0.92)) // deltoids
+   311→   311→    }
+   312→   312→    if (female) {
+   313→   313→      parts.push(xg(new THREE.SphereGeometry(0.08, 8, 6), 0, 0.335, 0.058, 1.45, 0.6, 0.6)) // subtle chest form
+   314→   314→    }
+   315→   315→    return parts
+   316→   316→  })
+   317→   317→}
+   318→   318→
+   319→   319→/** Pelvis/hips bridging torso bottom to the leg pivots (pants material, torsoPivot space). */
+   320→   320→function pelvisGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
+   321→   321→  const p = bodyProfile(female, build)
+   322→   322→  return cachedMerged(`pelvis|${female ? 'f' : 'm'}|${build}`, () => [
+   323→   323→    xg(new THREE.CylinderGeometry(p.hipTop, p.hipBottom, 0.2, 12), 0, -0.12, 0, 1, 1, 0.62),
+   324→   324→  ])
+   325→   325→}
+   326→   326→
+   327→   327→/** Neck cylinder bridging the torso top to the head (skin material, torsoPivot space). */
+   328→   328→function neckGeometry(): THREE.BufferGeometry {
+   329→   329→  return cachedMerged('neck', () => [
+   330→   330→    xg(new THREE.CylinderGeometry(0.05, 0.062, 0.14, 8), 0, 0.52, 0),
+   331→   331→  ])
+   332→   332→}
+   333→   333→
+   334→   334→/** Deltoid + sleeve merged (shirt material, arm-pivot space). */
+   335→   335→function sleeveGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
+   336→   336→  const p = bodyProfile(female, build)
+   337→   337→  return cachedMerged(`sleeve|${female ? 'f' : 'm'}|${build}`, () => [
+   338→   338→    xg(new THREE.SphereGeometry(0.068, 8, 6), 0, -0.015, 0, 1, 0.95, 1),
+   339→   339→    xg(new THREE.CylinderGeometry(0.062 * p.armW, 0.05 * p.armW, 0.24, 10), 0, -0.14, 0),
+   340→   340→  ])
+   341→   341→}
+   342→   342→
+   343→   343→/** Forearm + fist merged (skin material, arm-pivot space; fist center stays at y -0.46). */
+   344→   344→function forearmGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
+   345→   345→  const p = bodyProfile(female, build)
+   346→   346→  return cachedMerged(`forearm|${female ? 'f' : 'm'}|${build}`, () => [
+   347→   347→    xg(new THREE.CylinderGeometry(0.047 * p.armW, 0.038 * p.armW, 0.21, 10), 0, -0.345, 0),
+   348→   348→    xg(G.hand, 0, -0.46, 0, 1.05, 0.9, 1.05),
+   349→   349→  ])
+   350→   350→}
+   351→   351→
+   352→   352→/** Thigh + calf merged (pants material, leg-pivot space; spans y 0 → -0.84). */
+   353→   353→function legGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
+   354→   354→  const p = bodyProfile(female, build)
+   355→   355→  return cachedMerged(`leg|${female ? 'f' : 'm'}|${build}`, () => [
+   356→   356→    xg(new THREE.CylinderGeometry(0.088 * p.legW, 0.07 * p.legW, 0.44, 10), 0, -0.22, 0), // thigh
+   357→   357→    xg(new THREE.CylinderGeometry(0.064 * p.legW, 0.05 * p.legW, 0.4, 10), 0, -0.64, 0), // calf
+   358→   358→  ])
+   359→   359→}
+   360→   360→
+   361→   361→/**
+   362→   362→ * Full shoe — ONE vertex-colored merged geometry (leg-pivot space).
+   363→   363→ * The sole bottom sits at y -0.9 == world ground (leg pivot is at 0.9).
+   364→   364→ * Sneaker anatomy: white midsole + rounded toe, colored upper + toe cap + heel
+   365→   365→ * collar, lace rows, side stripes, heel pull tab. The upper takes the ACCENT
+   366→   366→ * color so shoes stay customizable through the existing palette system.
+   367→   367→ */
+   368→   368→function shoeGeometry(footwear: string, accent: string): THREE.BufferGeometry {
+   369→   369→  return cachedMerged(`shoe|${footwear}|${accent}`, () => {
+   370→   370→    const parts: THREE.BufferGeometry[] = []
+   371→   371→    const add = (
+   372→   372→      geo: THREE.BufferGeometry, color: string,
+   373→   373→      px: number, py: number, pz: number,
+   374→   374→      sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0,
+   375→   375→    ) => parts.push(xg(tintedClone(geo, color), px, py, pz, sx, sy, sz, rx, ry, rz))
+   376→   376→    const white = '#efe9dc', cream = '#e6e0d2', dark = '#241d15'
+   377→   377→    if (footwear === 'boots') {
+   378→   378→      add(G.hand, '#4a3626', 0, -0.745, 0, 1.5, 2.1, 1.3)      // leather shaft
+   379→   379→      add(G.hand, '#5c4632', 0, -0.635, 0, 1.62, 0.6, 1.42)    // folded cuff
+   380→   380→      add(G.hand, '#3a2a1c', 0, -0.858, 0.05, 1.32, 0.85, 2.2) // foot body
+   381→   381→      add(G.foot, '#241b12', 0, -0.882, 0.05, 1.13, 0.5, 1.2)  // lug sole
+   382→   382→      add(G.moustache, accent, 0, -0.7, 0, 1.35, 0.95, 3.9)    // buckle strap
+   383→   383→      add(G.moustache, accent, 0, -0.8, 0, 1.35, 0.95, 3.9)    // buckle strap 2
+   384→   384→    } else if (footwear === 'chappal') {
+   385→   385→      add(G.chappal, '#7a4a2c', 0, -0.878, 0.05)               // leather sole
+   386→   386→      add(G.hand, '#7a4a2c', 0, -0.878, 0.135, 1.2, 0.55, 1.5) // rounded toe
+   387→   387→      add(G.moustache, '#6b3f24', 0, -0.882, -0.075, 1.15, 1.3, 1.7) // heel block
+   388→   388→      add(G.moustache, '#5c3820', 0.042, -0.852, 0.05, 0.34, 0.8, 5.4, 0, -0.38, 0) // V-strap L
+   389→   389→      add(G.moustache, '#5c3820', -0.042, -0.852, 0.05, 0.34, 0.8, 5.4, 0, 0.38, 0)  // V-strap R
+   390→   390→      add(G.hand, '#4a2c18', 0, -0.845, 0.155, 0.42, 0.42, 0.42) // toe knob
+   391→   391→    } else {
+   392→   392→      // sneaker (also the 'glow' base, in night colors)
+   393→   393→      const glow = footwear === 'glow'
+   394→   394→      const upper = glow ? '#20242e' : accent
+   395→   395→      const soleC = glow ? '#16181d' : white
+   396→   396→      const laceC = glow ? '#0d0e12' : dark
+   397→   397→      add(G.foot, soleC, 0, -0.875, 0.05, 1.07, 0.55, 1.15)            // midsole
+   398→   398→      add(G.hand, soleC, 0, -0.875, 0.13, 1.3, 0.9, 1.6)               // rounded toe
+   399→   399→      add(G.foot, upper, 0, -0.812, -0.005, 1.0, 0.95, 0.85)           // upper
+   400→   400→      add(G.hand, glow ? '#2a3038' : cream, 0, -0.822, 0.1, 1.28, 0.62, 1.5) // toe cap
+   401→   401→      add(G.hand, glow ? '#181c24' : shade(accent, -34), 0, -0.762, -0.075, 1.3, 0.72, 1.15) // heel collar
+   402→   402→      add(G.moustache, white, 0, -0.728, -0.112, 0.4, 1.5, 0.9)        // heel pull tab
+   403→   403→      for (let i = 0; i < 3; i++) {
+   404→   404→        add(G.moustache, laceC, 0, -0.757, 0.005 + i * 0.038, 0.72, 0.55, 1.0) // lace rows
+   405→   405→      }
+   406→   406→      add(G.moustache, glow ? '#39d0ff' : white, 0.079, -0.83, 0.0, 0.17, 0.7, 3.6)  // side stripe R
+   407→   407→      add(G.moustache, glow ? '#39d0ff' : white, -0.079, -0.83, 0.0, 0.17, 0.7, 3.6) // side stripe L
+   408→   408→    }
+   409→   409→    return parts
+   410→   410→  })
+   411→   411→}
+   412→   412→
+   413→   413→export class CharacterRig {
+   414→   414→  group = new THREE.Group()
+   415→   415→  private torsoPivot = new THREE.Group()
+   416→   416→  private headPivot = new THREE.Group()
+   417→   417→  private armL = new THREE.Group()
+   418→   418→  private armR = new THREE.Group()
+   419→   419→  private legL = new THREE.Group()
+   420→   420→  private legR = new THREE.Group()
+   421→   421→  private signGroup: THREE.Group | null = null
+   422→   422→  private lathi: THREE.Group | null = null
+   423→   423→  private heldProp: THREE.Group | null = null
+   424→   424→  private armBlockR = false
+   425→   425→  private armBlockL = false
+   426→   426→  private flagClothRef: THREE.Mesh | null = null
+   427→   427→  private bannerClothRef: THREE.Mesh | null = null
+   428→   428→  private phase = Math.random() * 10
+   429→   429→  anim: AnimName = 'idle'
+   430→   430→  /** External pose override (e.g. police wind-up telegraph) — wins over the anim arg. */
+   431→   431→  forceAnim: AnimName | null = null
+   432→   432→  /** Double-jump flourish: remaining seconds of a procedural front-flip (0 = off). */
+   433→   433→  private flipTimer = 0
+   434→   434→  private flipDur = 0.45
+   435→   435→  speedRatio = 0
+   436→   436→  private nameSprite: THREE.Sprite | null = null
+   437→   437→  private alertIndicator: THREE.Sprite | null = null
+   438→   438→  private scaleMul: number
+   439→   439→  private baseY = 0
+   440→   440→
+   441→   441→  constructor(opts: RigOptions) {
+   442→   442→    const colors = opts.colors ?? archetypeById(opts.archetype ?? 'student').colors
+   443→   443→    this.scaleMul = opts.scale ?? (opts.archetype ? archetypeById(opts.archetype).stats.scale : 1)
+   444→   444→
+   445→   445→    const shirt = mat(colors.shirt)
+   446→   446→    const pants = mat(colors.pants)
+   447→   447→    const skin = mat(colors.skin)
+   448→   448→    // head gets its own smooth-shaded skin (soft sheen = living surface vs flat low-poly body)
+   449→   449→    const skinHead = new THREE.MeshStandardMaterial({ color: colors.skin, roughness: 0.58, metalness: 0 })
+   450→   450→    // smooth hair with a slight sheen (flat caps read like plastic helmets)
+   451→   451→    const hair = new THREE.MeshStandardMaterial({ color: colors.hair, roughness: 0.55, metalness: 0.05 })
+   452→   452→    const isFemale = opts.gender === 'female'
+   453→   453→    const build: BodyBuild = opts.build === 'slim' || opts.build === 'sturdy' ? opts.build : 'regular'
+   454→   454→
+   455→   455→    // hierarchy: group -> torsoPivot (contains torso, head, arms) ; legs on group
+   456→   456→    this.group.add(this.torsoPivot)
+   457→   457→    this.torsoPivot.position.y = 0.98
+   458→   458→
+   459→   459→    // shaped torso: ribcage + waist + deltoids merged into ONE mesh (was a plain box)
+   460→   460→    const torso = new THREE.Mesh(torsoGeometry(isFemale, build), shirt)
+   461→   461→    torso.castShadow = true
+   462→   462→    this.torsoPivot.add(torso)
+   463→   463→
+   464→   464→    // pelvis (pants) bridges the torso bottom to the leg pivots — kills the old
+   465→   465→    // gap between shirt hem and trouser tops
+   466→   466→    const pelvis = new THREE.Mesh(pelvisGeometry(isFemale, build), pants)
+   467→   467→    this.torsoPivot.add(pelvis)
+   468→   468→    // neck (skin) — no more floating-head look under the hairline
+   469→   469→    this.torsoPivot.add(new THREE.Mesh(neckGeometry(), skin))
+   470→   470→
+   471→   471→    // accent stripe (protest sash)
+   472→   472→    const sash = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.22), mat(colors.accent))
+   473→   473→    sash.position.set(0.06, 0.26, 0.02)
+   474→   474→    sash.rotation.z = 0.4
+   475→   475→    if (isFemale) sash.scale.x = 0.9
+   476→   476→    this.torsoPivot.add(sash)
+   477→   477→
+   478→   478→    // police department extras — badge on every officer, kit per uniform
+   479→   479→    if (opts.npcType === 'police') {
+   480→   480→      const u = policeUniformColors(opts.policeOutfit)
+   481→   481→      const chestBadge = new THREE.Mesh(G.badge, mat('#d4a017', false))
+   482→   482→      chestBadge.material.metalness = 0.55
+   483→   483→      chestBadge.material.roughness = 0.35
+   484→   484→      chestBadge.rotation.x = Math.PI / 2
+   485→   485→      chestBadge.position.set(0.1, 0.38, 0.132)
+   486→   486→      this.torsoPivot.add(chestBadge)
+   487→   487→      if (u.id === 'swat') {
+   488→   488→        // riot kit: heavy black vest over the dark uniform
+   489→   489→        const vest = new THREE.Mesh(G.vestBody, mat('#1b1d21', false))
+   490→   490→        vest.position.y = 0.27
+   491→   491→        vest.castShadow = true
+   492→   492→        this.torsoPivot.add(vest)
+   493→   493→        const plate = new THREE.Mesh(G.vestStripe, mat('#3a3f46', false))
+   494→   494→        plate.position.y = 0.33
+   495→   495→        this.torsoPivot.add(plate)
+   496→   496→      } else if (u.id === 'commandant') {
+   497→   497→        // medal bars above the left pocket
+   498→   498→        for (let i = 0; i < 2; i++) {
+   499→   499→          const bar = new THREE.Mesh(G.medalBar, mat(i === 0 ? '#8c1f28' : '#2e6e4e', false))
+   500→   500→          bar.position.set(-0.1 + i * 0.115, 0.42, 0.134)
+   501→   501→          this.torsoPivot.add(bar)
+   502→   502→        }
+   503→   503→      } else if (u.id === 'plain') {
+   504→   504→        // detective: shirt + tie under charcoal suit
+   505→   505→        const collar = new THREE.Mesh(G.vestStripeThin, mat('#f5efdc', false))
+   506→   506→        collar.position.set(0, 0.47, 0.13)
+   507→   507→        this.torsoPivot.add(collar)
+   508→   508→        const tie = new THREE.Mesh(G.tie, mat(u.accent, false))
+   509→   509→        tie.position.set(0, 0.3, 0.132)
+   510→   510→        this.torsoPivot.add(tie)
+   511→   511→      } else if (u.id === 'navy') {
+   512→   512→        // parade belt + buckle
+   513→   513→        const belt = new THREE.Mesh(G.beltStrip, mat('#10151f', false))
+   514→   514→        belt.position.y = 0.02
+   515→   515→        this.torsoPivot.add(belt)
+   516→   516→        const buckle = new THREE.Mesh(G.badge, mat('#d4a017', false))
+   517→   517→        buckle.material.metalness = 0.55
+   518→   518→        buckle.position.set(0, 0.02, 0.128)
+   519→   519→        this.torsoPivot.add(buckle)
+   520→   520→      } else if (u.id === 'traffic') {
+   521→   521→        // high-visibility shoulder bands for intersection duty
+   522→   522→        for (const y of [0.4, 0.14]) {
+   523→   523→          const band = new THREE.Mesh(G.vestStripeThin, mat('#f2c14e', false))
+   524→   524→          band.position.set(0.13, y, 0.132)
+   525→   525→          this.torsoPivot.add(band)
+   526→   526→        }
+   527→   527→      }
+   528→   528→    }
+   529→   529→
+   530→   530→    // head
+   531→   531→    this.headPivot.position.y = 0.62
+   532→   532→    this.torsoPivot.add(this.headPivot)
+   533→   533→    const head = new THREE.Mesh(G.head, skinHead)
+   534→   534→    head.position.y = 0.1
+   535→   535→    head.castShadow = true
+   536→   536→    this.headPivot.add(head)
+   537→   537→
+   538→   538→    // ---- hair styles (round 24) — 'bald' skips the cap entirely ----
+   539→   539→    // default is gender-aware: female rigs wear a ponytail, male rigs the classic cut
+   540→   540→    const hairSlot = opts.hair ?? (isFemale ? 'ponytail' : 'default')
+   541→   541→    if (hairSlot !== 'bald') {
+   542→   542→      const cap = new THREE.Mesh(G.hair, hair)
+   543→   543→      if (hairSlot === 'buzz') {
+   544→   544→        cap.scale.set(1.005, 0.62, 1.005)
+   545→   545→        cap.position.y = 0.128
+   546→   546→      } else {
+   547→   547→        cap.position.y = 0.13
+   548→   548→      }
+   549→   549→      this.headPivot.add(cap)
+   550→   550→      // swept fringe for the feminine gathered styles (bun / ponytail / long / braid)
+   551→   551→      const femaleStyle = hairSlot === 'bun' || hairSlot === 'ponytail' || hairSlot === 'long' || hairSlot === 'braid'
+   552→   552→      if (femaleStyle) {
+   553→   553→        const fringe = new THREE.Mesh(G.fringe, hair)
+   554→   554→        fringe.position.set(0, 0.122, 0.132)
+   555→   555→        fringe.rotation.x = 0.62
+   556→   556→        fringe.scale.set(0.95, 0.9, 0.8)
+   557→   557→        this.headPivot.add(fringe)
+   558→   558→      }
+   559→   559→      if (hairSlot === 'bun') {
+   560→   560→        const bun = new THREE.Mesh(G.bun, hair)
+   561→   561→        bun.position.set(0, 0.24, -0.12)
+   562→   562→        bun.castShadow = true
+   563→   563→        this.headPivot.add(bun)
+   564→   564→      } else if (hairSlot === 'ponytail') {
+   565→   565→        // v2: rounded crown segment + scrunchie ring + tapered tail + tip
+   566→   566→        const crown = new THREE.Mesh(G.tailSeg, hair)
+   567→   567→        crown.position.set(0, 0.16, -0.13)
+   568→   568→        crown.rotation.x = -0.9
+   569→   569→        const tail = new THREE.Mesh(G.ponyTail, hair)
+   570→   570→        tail.position.set(0, 0.08, -0.19)
+   571→   571→        tail.rotation.x = 0.5
+   572→   572→        tail.castShadow = true
+   573→   573→        const tie = new THREE.Mesh(G.hairTie, mat(colors.accent, false))
+   574→   574→        tie.position.set(0, 0.155, -0.16)
+   575→   575→        tie.rotation.x = Math.PI / 2 - 0.45
+   576→   576→        const tip = new THREE.Mesh(G.tailTip, hair)
+   577→   577→        tip.position.set(0, -0.09, -0.28)
+   578→   578→        this.headPivot.add(crown, tail, tie, tip)
+   579→   579→      } else if (hairSlot === 'long') {
+   580→   580→        const back = new THREE.Mesh(G.hairBack, hair)
+   581→   581→        back.scale.set(1.02, 1.5, 0.55)
+   582→   582→        back.position.set(0, -0.1, -0.09)
+   583→   583→        back.castShadow = true
+   584→   584→        this.headPivot.add(back)
+   585→   585→        // front strands framing the face
+   586→   586→        for (const side of [1, -1]) {
+   587→   587→          const strand = new THREE.Mesh(G.strand, hair)
+   588→   588→          strand.position.set(side * 0.138, 0.02, 0.055)
+   589→   589→          strand.rotation.z = side * -0.07
+   590→   590→          strand.castShadow = true
+   591→   591→          this.headPivot.add(strand)
+   592→   592→        }
+   593→   593→      } else if (hairSlot === 'curly') {
+   594→   594→        const offs: [number, number, number][] = [
+   595→   595→          [0, 0.21, 0], [0.11, 0.17, 0.06], [-0.11, 0.17, 0.06], [0.09, 0.16, -0.11], [-0.09, 0.16, -0.11],
+   596→   596→        ]
+   597→   597→        for (const [x, y, z] of offs) {
+   598→   598→          const curl = new THREE.Mesh(G.curl, hair)
+   599→   599→          curl.position.set(x, y, z)
+   600→   600→          this.headPivot.add(curl)
+   601→   601→        }
+   602→   602→      } else if (hairSlot === 'braid') {
+   603→   603→        for (let i = 0; i < 3; i++) {
+   604→   604→          const link = new THREE.Mesh(G.braidLink, hair)
+   605→   605→          link.position.set(0.105, 0.19 - i * 0.078, -0.12 - i * 0.012)
+   606→   606→          this.headPivot.add(link)
+   607→   607→        }
+   608→   608→        const band = new THREE.Mesh(G.moustache, mat(colors.accent))
+   609→   609→        band.scale.setScalar(0.62)
+   610→   610→        band.position.set(0.105, 0.005, -0.15)
+   611→   611→        this.headPivot.add(band)
+   612→   612→      }
+   613→   613→    }
+   614→   614→
+   615→   615→    // ---- realistic face features: eyes, brows, nose, mouth (one merged mesh) ----
+   616→   616→    const faceFeatures = new THREE.Mesh(faceGeometryFor(colors.skin, colors.hair, isFemale), faceMaterialShared())
+   617→   617→    this.headPivot.add(faceFeatures)
+   618→   618→
+   619→   619→    if (opts.npcType) {
+   620→   620→      // ---- police & guard headgear (round 23): peaked cap / beret / turban / helmet / none ----
+   621→   621→      const ph = opts.policeHat ?? 'peak'
+   622→   622→      const capCol = policeUniformColors(opts.policeOutfit).capColor
+   623→   623→      const badgeGold = () => {
+   624→   624→        const b = new THREE.Mesh(G.badge, mat('#d4a017', false))
+   625→   625→        b.material.metalness = 0.55
+   626→   626→        b.material.roughness = 0.35
+   627→   627→        b.rotation.x = Math.PI / 2
+   628→   628→        return b
+   629→   629→      }
+   630→   630→      if (ph === 'peak') {
+   631→   631→        const dome = new THREE.Mesh(G.peakDome, mat(capCol))
+   632→   632→        dome.scale.set(1, 0.82, 1)
+   633→   633→        dome.position.y = 0.16
+   634→   634→        const top = new THREE.Mesh(G.peakTop, mat(shade(capCol, -14), false))
+   635→   635→        top.position.y = 0.295
+   636→   636→        const band = new THREE.Mesh(G.peakBand, mat(shade(capCol, -30), false))
+   637→   637→        band.position.y = 0.185
+   638→   638→        const visor = new THREE.Mesh(G.capBrim, mat('#15130f', false))
+   639→   639→        visor.position.set(0, 0.162, 0.155)
+   640→   640→        const badge = badgeGold()
+   641→   641→        badge.position.set(0, 0.235, 0.15)
+   642→   642→        this.headPivot.add(dome, top, band, visor, badge)
+   643→   643→      } else if (ph === 'beret') {
+   644→   644→        const b = new THREE.Mesh(G.beretBody, mat(capCol))
+   645→   645→        b.scale.set(1.06, 0.42, 1.06)
+   646→   646→        b.position.set(0.012, 0.218, -0.012)
+   647→   647→        b.rotation.z = 0.17
+   648→   648→        const stalk = new THREE.Mesh(G.beretStalk, mat(capCol))
+   649→   649→        stalk.position.set(0.012, 0.272, -0.012)
+   650→   650→        const badge = badgeGold()
+   651→   651→        badge.position.set(0.05, 0.22, 0.135)
+   652→   652→        this.headPivot.add(b, stalk, badge)
+   653→   653→      } else if (ph === 'turban') {
+   654→   654→        const w1 = new THREE.Mesh(G.turbanWrap, mat(capCol))
+   655→   655→        w1.position.y = 0.185
+   656→   656→        w1.rotation.x = Math.PI / 2
+   657→   657→        w1.rotation.z = Math.PI / 2
+   658→   658→        const w2 = new THREE.Mesh(G.turbanWrap, mat(shade(capCol, 16)))
+   659→   659→        w2.position.y = 0.23
+   660→   660→        w2.scale.setScalar(0.86)
+   661→   661→        w2.rotation.x = Math.PI / 2
+   662→   662→        w2.rotation.z = Math.PI / 2
+   663→   663→        const knot = new THREE.Mesh(G.turbanTop, mat(capCol))
+   664→   664→        knot.position.y = 0.3
+   665→   665→        const badge = badgeGold()
+   666→   666→        badge.position.set(0, 0.205, 0.145)
+   667→   667→        this.headPivot.add(w1, w2, knot, badge)
+   668→   668→      } else if (ph === 'helmet') {
+   669→   669→        const dome = new THREE.Mesh(G.helmet, mat(capCol, false))
+   670→   670→        dome.position.y = 0.12
+   671→   671→        dome.castShadow = true
+   672→   672→        const rim = new THREE.Mesh(G.helmetRim, mat(shade(capCol, -22), false))
+   673→   673→        rim.rotation.x = Math.PI / 2
+   674→   674→        rim.position.y = 0.15
+   675→   675→        const visor = new THREE.Mesh(G.helmetVisor, new THREE.MeshStandardMaterial({ color: '#141d27', roughness: 0.25, metalness: 0.35 }))
+   676→   676→        visor.position.set(0, 0.09, 0.152)
+   677→   677→        this.headPivot.add(dome, rim, visor)
+   678→   678→      }
+   679→   679→      // 'none' → bare head; hair still renders
+   680→   680→    } else if (opts.hat === 'cap') {
+   681→   681→      const cap = new THREE.Mesh(G.cap, mat(colors.accent))
+   682→   682→      cap.position.y = 0.17
+   683→   683→      this.headPivot.add(cap)
+   684→   684→      const brim = new THREE.Mesh(G.capBrim, mat('#14251c'))
+   685→   685→      brim.position.set(0, 0.17, 0.16)
+   686→   686→      this.headPivot.add(brim)
+   687→   687→    } else if (opts.hat === 'topi') {
+   688→   688→      const hat = new THREE.Mesh(G.hat, mat('#f0e6d2'))
+   689→   689→      hat.position.y = 0.24
+   690→   690→      this.headPivot.add(hat)
+   691→   691→    } else if (opts.hat === 'cone') {
+   692→   692→      // Traffic Cone of Shame — earned through 10 glorious detentions
+   693→   693→      const cone = new THREE.Mesh(G.cone, mat('#e8641c'))
+   694→   694→      cone.position.y = 0.3
+   695→   695→      cone.castShadow = true
+   696→   696→      this.headPivot.add(cone)
+   697→   697→      const band = new THREE.Mesh(G.coneBand, mat('#f5efdc'))
+   698→   698→      band.position.y = 0.26
+   699→   699→      this.headPivot.add(band)
+   700→   700→      const base = new THREE.Mesh(G.coneBand, mat('#c8500f'))
+   701→   701→      base.position.y = 0.19
+   702→   702→      base.scale.set(1.15, 0.6, 1.15)
+   703→   703→      this.headPivot.add(base)
+   704→   704→    } else if (opts.hat === 'crown') {
+   705→   705→      // Crown of Chaos — gold with jewels, for committee dissolvers
+   706→   706→      const band = new THREE.Mesh(G.crownBand, mat('#d4a017', false))
+   707→   707→      band.material.metalness = 0.55
+   708→   708→      band.material.roughness = 0.35
+   709→   709→      band.position.y = 0.24
+   710→   710→      band.castShadow = true
+   711→   711→      this.headPivot.add(band)
+   712→   712→      for (let i = 0; i < 5; i++) {
+   713→   713→        const a = (i / 5) * Math.PI * 2
+   714→   714→        const spike = new THREE.Mesh(G.crownSpike, mat('#d4a017', false))
+   715→   715→        spike.material.metalness = 0.55
+   716→   716→        spike.material.roughness = 0.35
+   717→   717→        spike.position.set(Math.cos(a) * 0.13, 0.3, Math.sin(a) * 0.13)
+   718→   718→        this.headPivot.add(spike)
+   719→   719→        const jewel = new THREE.Mesh(G.hand, mat(i % 2 ? '#8c1f28' : '#2e6e4e', false))
+   720→   720→        jewel.scale.setScalar(0.55)
+   721→   721→        jewel.position.set(Math.cos(a) * 0.165, 0.24, Math.sin(a) * 0.165)
+   722→   722→        this.headPivot.add(jewel)
+   723→   723→      }
+   724→   724→    } else if (opts.hat === 'bandana') {
+   725→   725→      // Rebel Bandana — snug cap + knot at the back
+   726→   726→      const band = new THREE.Mesh(G.bandana, mat(colors.accent))
+   727→   727→      band.position.y = 0.15
+   728→   728→      this.headPivot.add(band)
+   729→   729→      const knot = new THREE.Mesh(G.bandanaKnot, mat(colors.accent))
+
+[showing lines 30-729 of 1422; use offset=730 with limit to continue reading]

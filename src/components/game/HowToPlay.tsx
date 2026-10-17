@@ -1,7 +1,7 @@
 'use client'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { BookOpen, Keyboard, Crown, ScrollText, Megaphone, Users, Flame, Sparkles, Globe, CloudSun, Gauge } from 'lucide-react'
+import { BookOpen, Keyboard, Crown, ScrollText, Megaphone, Users, Flame, Sparkles, Globe, CloudSun, Gauge, Siren } from 'lucide-react'
 import { BOSS_NAME, BOSS_PHASE_NAMES } from '@/game/shared/constants'
 
 const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
@@ -14,7 +14,7 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['Q'], action: 'Throw Item', note: 'Bottles distract patrols. The bottle is fine.' },
   { keys: ['V'], action: 'Shout / Whistle', note: 'Free distraction — nearby patrols walk over to investigate (2.5s cooldown). Great for pulling cops away from a checkpoint.' },
   { keys: ['H'], action: 'Quick Heal', note: 'Eats the smartest food in your pockets: chai +10 HP, samosa +10, snack +5, first-aid +50 when badly hurt' },
-  { keys: ['F'], action: 'Gift Item', note: 'Hand your best item to the nearest teammate — support points + Good Samaritan medal at 3 gifts' },
+  { keys: ['F'], action: 'Gift / Baton', note: 'Protesters: hand your best item to the nearest teammate (Good Samaritan medal at 3 gifts). Police: lathi strike — 13 damage + knockback, 1.1s cooldown.' },
   { keys: ['G'], action: 'Emote Wheel', note: '4 unlocked by default — level up & earn medals for the rest' },
   { keys: ['T'], action: 'Quick Messages' },
   { keys: ['M'], action: 'Big Map', note: 'Also sets your minimap zoom — slider + live preview on the map' },
@@ -103,6 +103,18 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
               </div>
             ))}
           </div>
+        </section>
+
+        {/* Roles: Protector vs Police */}
+        <section className="rounded-2xl border-2 border-[#3d5a80]/60 bg-[#e2ecf5]/70 p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.22em] text-[#3d5a80]">
+            <Siren className="h-3.5 w-3.5" /> Two Sides, One City — Choose in Customize
+          </div>
+          <ul className="space-y-1 text-[10px] font-semibold leading-snug text-[#1c1a17]/80">
+            <li>• <b className="font-black text-[#2e6e4e]">PROTECTOR</b> (default): the classic protest — recover votes, dodge batons, save squadmates.</li>
+            <li>• <b className="font-black text-[#3d5a80]">POLICE</b>: you wear the khaki &amp; lathi. NPC officers treat you as a colleague — no WANTED alarm, no chase music — protesters run on sight, and <b>E near a suspect makes the arrest</b> (+40 XP each, tracked on your record). <b>F swings the lathi</b>: 13 damage, knockback, 1.1 s cooldown — soften a runner, then cuff them. Your job: keep the streets “orderly” — or enjoy the world&apos;s most sarcastic duty roster.</li>
+            <li>• Switching sides is free and instant — your wardrobe, XP and ID card stay the same. The badge just changes.</li>
+          </ul>
         </section>
 
         {/* Survival tips */}

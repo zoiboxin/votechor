@@ -1,10 +1,108 @@
 // VoteChor world renderer — builds the 3D city from shared WorldDef data.
 // Procedural canvas textures, instanced crowd, animated props. No external assets.
 import * as THREE from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { WorldDef, Deco } from './shared/types'
 
 const ZONE_COLORS = ['#c96f4a', '#b85c3e', '#7f9a8c', '#c9a86a', '#9a7b5f']
+
+// ---- v37 realistic trees: one merged vertex-colored geometry per variant (cached,
+// ~1 draw call per tree vs 3 before) — tapered leaning trunk, branches reaching into
+// a layered canopy of foliage clumps with per-vertex color variation. ----
+const treeGeoCache = new Map<number, THREE.BufferGeometry>()
+const treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 })
+
+/** Fill a geometry's color attribute from a per-vertex color function (x,y,z → color). */
+function treePaint(g: THREE.BufferGeometry, fn: (x: number, y: number, z: number) => THREE.Color): THREE.BufferGeometry {
+  const pos = g.attributes.position
+  const arr = new Float32Array(pos.count * 3)
+  for (let i = 0; i < pos.count; i++) {
+    const col = fn(pos.getX(i), pos.getY(i), pos.getZ(i))
+    arr[i * 3] = col.r; arr[i * 3 + 1] = col.g; arr[i * 3 + 2] = col.b
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(arr, 3))
+  g.deleteAttribute('uv')
+  return g
+}
+/** Deterministic foliage jitter (hash of position) so cached geometry is stable. */
+function jitterColor(base: THREE.Color, x: number, y: number, z: number, amt: number): THREE.Color {
+  const h = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453
+  const f = 1 + ((h - Math.floor(h)) - 0.5) * amt
+  return new THREE.Color(
+    Math.min(1, base.r * f),
+    Math.min(1, base.g * f),
+    Math.min(1, base.b * f),
+  )
+}
+
+function getTreeGeo(variant: number): THREE.BufferGeometry {
+  const hit = treeGeoCache.get(variant)
+  if (hit) return hit
+  const parts: THREE.BufferGeometry[] = []
+  const barkLo = new THREE.Color('#43301f')
+  const barkHi = new THREE.Color('#6f5138')
+  // trunk — tapered, slight lean, vertical bark gradient
+  const tall = variant === 1
+  const trunkH = tall ? 3.0 : 2.5
+  const trunk = new THREE.CylinderGeometry(tall ? 0.11 : 0.13, tall ? 0.22 : 0.26, trunkH, 7)
+  trunk.translate(0, trunkH / 2, 0)
+  trunk.rotateZ(tall ? -0.04 : 0.03)
+  parts.push(treePaint(trunk, (_x, y) => barkLo.clone().lerp(barkHi, Math.min(1, Math.max(0, y / trunkH)))))
+  // branches reaching into the canopy
+  const branchSpec: Array<[number, number, number, number]> = tall
+    ? [[0.5, 0.09, 0.28, trunkH * 0.78], [-0.62, 0.1, -0.2, trunkH * 0.62]]           // rz, rx, z offset, y
+    : [[0.55, 0.12, 0.3, trunkH * 0.8], [-0.6, 0.14, -0.25, trunkH * 0.72], [0.1, -0.5, 0.45, trunkH * 0.68]]
+  for (const [rz, rx, zoff, by] of branchSpec) {
+    const br = new THREE.CylinderGeometry(0.05, 0.085, 1.15, 5)
+    br.translate(0, 0.575, 0)
+    br.rotateZ(rz); br.rotateX(rx)
+    br.translate(0, by, zoff)
+    parts.push(treePaint(br, () => barkHi.clone().multiplyScalar(0.9)))
+  }
+  // layered canopy — foliage clumps, darker low / lighter high, squashed vertically
+  const leafLo = new THREE.Color(tall ? '#4a7440' : '#4e7a42')
+  const leafMid = new THREE.Color(tall ? '#5c8a4e' : '#5c8a4e')
+  const leafHi = new THREE.Color(tall ? '#86a05a' : '#6e9a58')
+  const blobs: Array<[number, number, number, number, THREE.Color]> = tall
+    ? [
+        [0, 4.05, 0, 1.0, leafMid],
+        [0.58, 3.5, 0.18, 0.68, leafLo],
+        [-0.56, 3.62, -0.22, 0.74, leafLo],
+        [0.05, 4.75, -0.05, 0.72, leafHi],
+      ]
+    : [
+        [0, 3.45, 0, 1.28, leafMid],
+        [0.92, 3.0, 0.32, 0.84, leafLo],
+        [-0.86, 3.05, -0.26, 0.9, leafLo],
+        [0.1, 3.1, -0.95, 0.8, leafLo],
+        [-0.26, 3.2, 0.92, 0.74, leafMid],
+        [0.05, 4.28, -0.05, 0.9, leafHi],
+      ]
+  for (const [bx, by, bz, r, col] of blobs) {
+    const blob = new THREE.IcosahedronGeometry(r, 1)
+    blob.scale(1, 0.85, 1)
+    blob.translate(bx, by, bz)
+    parts.push(treePaint(blob, (x, y, z) => jitterColor(col, x, y, z, 0.14)))
+  }
+  const norm = parts.map(p => (p.index ? p : (mergeVertices(p, 1e-4) ?? p)))
+  const geo = mergeGeometries(norm, false) ?? parts[0]
+  if (geo !== parts[0]) for (const p of norm) p.dispose()
+  geo.computeVertexNormals()
+  treeGeoCache.set(variant, geo)
+  geo.userData.vcShared = true // v43: survives WorldRenderer.dispose() — reused by rebuilt worlds
+  return geo
+}
+
+// v43 district tinting: the canvas textures stay the classic colors — a multiply
+// color on the material shifts them per map without new texture uploads.
+function tintRatio(hex: string, base: string): THREE.Color {
+  const t = new THREE.Color(hex), b = new THREE.Color(base)
+  return new THREE.Color(
+    Math.min(2, Math.max(0.05, t.r / Math.max(0.01, b.r))),
+    Math.min(2, Math.max(0.05, t.g / Math.max(0.01, b.g))),
+    Math.min(2, Math.max(0.05, t.b / Math.max(0.01, b.b))),
+  )
+}
 
 function canvasTex(w: number, h: number, draw: (ctx: CanvasRenderingContext2D) => void, repeatX = 1, repeatY = 1): THREE.CanvasTexture {
   const c = document.createElement('canvas')
@@ -14,6 +112,11 @@ function canvasTex(w: number, h: number, draw: (ctx: CanvasRenderingContext2D) =
   t.colorSpace = THREE.SRGBColorSpace
   t.wrapS = t.wrapT = THREE.RepeatWrapping
   t.repeat.set(repeatX, repeatY)
+  // crisp texture filtering: trilinear mipmaps + anisotropic sampling kills the
+  // smeary blur on roads/ground at grazing angles (three clamps to device max)
+  t.magFilter = THREE.LinearFilter
+  t.minFilter = THREE.LinearMipmapLinearFilter
+  t.anisotropy = 8
   return t
 }
 
@@ -144,8 +247,46 @@ export class WorldRenderer {
     this.buildLightPool(quality)
   }
 
+  /**
+   * v43 world swaps — free every GPU resource this renderer built. The module
+   * cached tree geometries are tagged `vcShared` and survive (the next build
+   * reuses them); everything else (geometries, materials, per-build canvas
+   * textures) is disposed. All scene content lives inside this.group.
+   */
+  dispose() {
+    this.group.removeFromParent()
+    this.group.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (mesh.geometry && !mesh.geometry.userData?.vcShared) mesh.geometry.dispose()
+      const mat = mesh.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[] | undefined
+      if (Array.isArray(mat)) {
+        for (const m of mat) { m.map?.dispose(); m.dispose() }
+      } else if (mat) {
+        mat.map?.dispose()
+        const emi = (mat as THREE.MeshStandardMaterial).emissiveMap
+        if (emi && emi !== mat.map) emi.dispose()
+        mat.dispose()
+      }
+    })
+    this.animated = []
+    this.searchlightCones = []
+    this.searchlightGroups = []
+    this.searchlightMats = []
+    this.bossGate = null
+    this.fountainParticles = null
+    this.flags = []
+    this.crowdBodies = null
+    this.crowdHeads = null
+    this.crowdSigns = []
+    this.lampHeadMats = []
+    this.windowMats = []
+    this.lightPositions = []
+    this.lightPool = []
+  }
+
   private buildGround() {
-    // Base ground — dusty warm earth
+    // Base ground — dusty warm earth (v43: tinted per district via material color ratio)
+    const tint = this.world.groundTint ?? '#c9a97c'
     const tex = canvasTex(256, 256, (ctx) => {
       ctx.fillStyle = '#c9a97c'
       ctx.fillRect(0, 0, 256, 256)
@@ -156,7 +297,7 @@ export class WorldRenderer {
     }, 86, 60)
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(260, 640),
-      new THREE.MeshStandardMaterial({ map: tex, roughness: 1 }),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 1, color: tintRatio(tint, '#c9a97c') }),
     )
     ground.rotation.x = -Math.PI / 2
     ground.position.set(0, -0.02, -280)
@@ -179,7 +320,7 @@ export class WorldRenderer {
     }, 1, 60)
     const road = new THREE.Mesh(
       new THREE.PlaneGeometry(17, 620),
-      new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95 }),
+      new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95, color: tintRatio(this.world.roadTint ?? '#6d675f', '#6d675f') }),
     )
     road.rotation.x = -Math.PI / 2
     road.position.set(0, 0.01, -275)
@@ -189,7 +330,7 @@ export class WorldRenderer {
     // Avenue widening (zone D)
     const road2 = new THREE.Mesh(
       new THREE.PlaneGeometry(38, 150),
-      new THREE.MeshStandardMaterial({ map: roadTex.clone(), roughness: 0.95 }),
+      new THREE.MeshStandardMaterial({ map: roadTex.clone(), roughness: 0.95, color: tintRatio(this.world.roadTint ?? '#6d675f', '#6d675f') }),
     )
     ;(road2.material as THREE.MeshStandardMaterial).map!.repeat.set(2, 16)
     road2.rotation.x = -Math.PI / 2
@@ -216,12 +357,13 @@ export class WorldRenderer {
     }
 
     // East-west cross streets — asphalt + sidewalks, split around the main road
+    const roadTint = tintRatio(this.world.roadTint ?? '#6d675f', '#6d675f')
     for (const cr of this.world.crossRoads) {
       const tex = roadTex.clone()
       tex.repeat.set(1, 22)
       const road = new THREE.Mesh(
         new THREE.PlaneGeometry(cr.halfW * 2, 228),
-        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 }),
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, color: roadTint }),
       )
       road.rotation.x = -Math.PI / 2
       road.rotation.z = Math.PI / 2 // lay the strip's length (and its dashes) along X
@@ -373,15 +515,10 @@ export class WorldRenderer {
       }
       case 'tree': {
         const s = d.s ?? 1
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * s, 0.3 * s, 2.6 * s, 7), new THREE.MeshStandardMaterial({ color: '#6b4f35', flatShading: true }))
-        trunk.position.y = 1.3 * s
-        const crownColor = d.variant ? '#5c8a4e' : '#6e9a58'
-        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.4 * s, 0), new THREE.MeshStandardMaterial({ color: crownColor, flatShading: true }))
-        crown.position.y = 3.1 * s
-        const crown2 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.0 * s, 0), new THREE.MeshStandardMaterial({ color: crownColor, flatShading: true }))
-        crown2.position.set(0.6 * s, 2.6 * s, 0.3 * s)
-        trunk.castShadow = crown.castShadow = shadow
-        g.add(trunk, crown, crown2)
+        const tree = new THREE.Mesh(getTreeGeo(d.variant ?? 0), treeMat)
+        tree.scale.setScalar(s)
+        tree.castShadow = shadow
+        g.add(tree)
         break
       }
       case 'bench': {
@@ -455,6 +592,133 @@ export class WorldRenderer {
         const sway = Math.random() * 10
         this.animated.push((t) => { cloth.rotation.z = Math.sin(t * 1.4 + sway) * 0.06; cloth.position.y = h - 0.8 + Math.sin(t * 1.1 + sway) * 0.05 })
         g.add(rope, cloth)
+        break
+      }
+      // ---- v43 level-map landmark props (district variants) ----
+      case 'stringLights': {
+        // festival lights strung between two poles across the road; bulbs dim by
+        // day and glow at night via the shared lamp-head registry
+        const len = d.w ?? 19.6
+        const poleMat = new THREE.MeshStandardMaterial({ color: '#4a4038', roughness: 0.9 })
+        const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 5.2, 6), poleMat)
+        p1.position.set(-len / 2, 2.6, 0)
+        p1.castShadow = true
+        const p2 = p1.clone(); p2.position.x = len / 2
+        const bulbMat = new THREE.MeshStandardMaterial({ color: '#fff6dd', emissive: d.color ?? '#ffbe55', emissiveIntensity: 0.9 })
+        this.lampHeadMats.push({ m: bulbMat, base: 0.9 })
+        const bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 6, 5), bulbMat, 24)
+        const m4 = new THREE.Matrix4()
+        for (let i = 0; i < 24; i++) {
+          const f = (i + 0.5) / 24
+          m4.setPosition(-len / 2 + f * len, 4.9 - Math.sin(f * Math.PI) * 0.55, 0) // gentle sag
+          bulbs.setMatrixAt(i, m4)
+        }
+        const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, len, 4), new THREE.MeshBasicMaterial({ color: '#2c2620' }))
+        wire.rotation.z = Math.PI / 2
+        wire.position.y = 4.9
+        g.add(p1, p2, wire, bulbs)
+        break
+      }
+      case 'archGate': {
+        // welcome arch straddling the avenue: legs off the asphalt, banner span overhead
+        const w = d.w ?? 20.4, h = d.h ?? 6.2
+        const col = d.color ?? '#b23a48'
+        const legMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 })
+        const leg1 = new THREE.Mesh(new THREE.BoxGeometry(0.8, h, 0.9), legMat)
+        leg1.position.set(-w / 2, h / 2, 0)
+        leg1.castShadow = true
+        const leg2 = leg1.clone(); leg2.position.x = w / 2
+        const span = new THREE.Mesh(new THREE.BoxGeometry(w, 1.1, 1.2), legMat)
+        span.position.y = h + 0.4
+        span.castShadow = true
+        const face = new THREE.Mesh(
+          new THREE.PlaneGeometry(Math.min(w - 4, 14), 0.9),
+          new THREE.MeshBasicMaterial({ map: signTexture(d.sign ?? 'WELCOME', col, '#f5efdc'), side: THREE.DoubleSide }),
+        )
+        face.position.set(0, h + 0.42, 0.65)
+        const trim = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, 0.16, 1.4), new THREE.MeshStandardMaterial({ color: '#f2c14e', emissive: '#c98a2a', emissiveIntensity: 0.25 }))
+        trim.position.y = h + 1.0
+        g.add(leg1, leg2, span, face, trim)
+        break
+      }
+      case 'ferrisWheel': {
+        // THE finale landmark — a lit ferris wheel, cabins staying upright as it turns
+        const R = 11
+        const col = d.color ?? '#b23a48'
+        const wheelG = new THREE.Group() // spins in its own plane
+        wheelG.position.y = 13
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(R, 0.32, 8, 30), new THREE.MeshStandardMaterial({ color: col, roughness: 0.7 }))
+        const rim2 = new THREE.Mesh(new THREE.TorusGeometry(R, 0.1, 6, 30), new THREE.MeshStandardMaterial({ color: '#f2c14e', emissive: '#c98a2a', emissiveIntensity: 0.5 }))
+        wheelG.add(rim, rim2)
+        const spokeMat = new THREE.MeshStandardMaterial({ color: '#8a5c3e', roughness: 0.85 })
+        for (let i = 0; i < 8; i++) {
+          const sp = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, R * 2, 5), spokeMat)
+          sp.rotation.z = (i / 8) * Math.PI
+          wheelG.add(sp)
+        }
+        const cabinMat = new THREE.MeshStandardMaterial({ color: '#f2c14e', emissive: '#c98a2a', emissiveIntensity: 0.35, roughness: 0.6 })
+        const cabins: THREE.Mesh[] = []
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2
+          const holder = new THREE.Group()
+          holder.position.set(Math.cos(a) * R, Math.sin(a) * R, 0)
+          const cab = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.3, 1.0), cabinMat)
+          cab.position.y = -0.85
+          cab.castShadow = true
+          holder.add(cab)
+          wheelG.add(holder)
+          cabins.push(cab)
+        }
+        // A-frame support (in the XZ plane — wheel faces the avenue east-west)
+        const legMat = new THREE.MeshStandardMaterial({ color: '#8a5c3e', roughness: 0.9 })
+        for (const sx of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 14.4, 6), legMat)
+            leg.position.set(sx * 1.6, 7, sz * 2.6)
+            leg.rotation.x = sz * 0.2
+            leg.rotation.z = sx * -0.22
+            leg.castShadow = true
+            g.add(leg)
+          }
+        }
+        const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 3.6, 8), spokeMat)
+        axle.rotation.x = Math.PI / 2
+        axle.position.y = 13
+        // wheel plane faces the road: build in XY then yaw 90°
+        const yaw = new THREE.Group()
+        yaw.rotation.y = Math.PI / 2
+        yaw.add(wheelG)
+        this.animated.push((_t, dt) => {
+          wheelG.rotation.z += dt * 0.14
+          for (let i = 0; i < 8; i++) cabins[i].rotation.z = -wheelG.rotation.z - (i / 8) * Math.PI * 2
+        })
+        g.add(yaw, axle)
+        break
+      }
+      case 'crane': {
+        // gantry crane silhouette for the depot district — slow trolley drift
+        const col = d.color ?? '#c9622e'
+        const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.8 })
+        for (const sx of [-3.4, 3.4]) {
+          for (const sz of [-1.6, 1.6]) {
+            const leg = new THREE.Mesh(new THREE.BoxGeometry(0.5, 13, 0.5), mat)
+            leg.position.set(sx, 6.5, sz)
+            leg.castShadow = true
+            g.add(leg)
+          }
+        }
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(9.4, 0.8, 2.2), mat)
+        beam.position.y = 13.2
+        beam.castShadow = true
+        const cab = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.2, 1.4), new THREE.MeshStandardMaterial({ color: '#4a5a6a', roughness: 0.7 }))
+        cab.position.y = 12.1
+        const hook = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 3.4, 4), new THREE.MeshBasicMaterial({ color: '#2c2620' }))
+        hook.position.y = 10.4
+        const hookTrolley = new THREE.Group()
+        hookTrolley.add(cab, hook)
+        hookTrolley.position.x = 2.2
+        g.add(beam, hookTrolley)
+        this.animated.push((t) => { hookTrolley.position.x = Math.sin(t * 0.22) * 2.8 })
         break
       }
       case 'lamp': {

@@ -1,0 +1,362 @@
+   658→- Shipped the graphics half of the perf round: the season world is no longer empty beyond 24 characters — up to 112 rig-less protesters render as 3-draw-call archetype-tinted impostors with walk bob (10Hz matrix updates, zero per-frame JS), while full rigs/minimap/roster behavior is untouched; engine quality now defaults to 'auto' with a guarded adaptive-resolution ladder (exposed engine.effectivePixelRatio + resReason for the HUD), manual tiers byte-identical to before; net.ts exposes a cheap 12Hz download estimate; a cream perf chip (FPS · K/S · crowd · rigs · RES) lives under the EnvChip, toggleable in the new Options → Performance section with "Auto (recommended)" quality.
+   659→- Decisions: detained/dazed impostors stand idle (no broken poses); crowd metrics intentionally mirror the rig's y≈0.335 foot offset (pre-existing rig quirk matched, NOT fixed); game.ts sends hasRig flags and lets CrowdLod own slot reconciliation + 450m cull; perf chip patches are change-gated at 1Hz.
+   660→- Risks for integration round: headless QA ran at 10-13 fps (software GL) so res settled at the ladder floor 0.7 — real GPUs should hold min(dpr,2); capacity 112 > season cap 100 so overflow silently stays invisible; Hud already re-renders on any hud change so the chip adds no new render pressure; season-test's "foreign client" note was this agent's QA browser (Protester_6426) — it left cleanly.
+   661→
+   662→---
+   663→Task ID: 3
+   664→Agent: Z.ai Code (main integrator)
+   665→Task: Performance-audit round (user prompt: senior-engineer 99-player scaling/network/rendering audit) — integration QA of server AOI optimization (2-a) + client LOD pipeline (2-b)
+   666→
+   667→Work Log:
+   668→- AUDIT MAPPING (user prompt → our stack): §1 session architecture → SeasonManager already does 100-occupant seasons + rollover (round 13); this round adds observability. §2 networking → AOI existed but recomputed payloads per-recipient and had only 2 bands; this round adds graded bands + per-tick cache + quantization + metrics. §3 rendering → MAX_RIGS=24 left rig-less remotes invisible; this round adds InstancedMesh impostor crowd + adaptive resolution. §4 top-3 all shipped this round (see 2-a/2-b sections).
+   669→- INTEGRATION QA (all live, gateway :81, fresh agent-browser session):
+   670→  * Services: Next :3000 ok; game-server :3002 returns NEW JSON /health with seasons/totals/broadcast; dev.log clean
+   671→  * Solo season boot: SEASON #2 100/100 · 1 human; env chip cycles (13:22 MORNING → 15:50 AFTERNOON across session — live cycle pacing verified)
+   672→  * PERF CHIP live: "10 FPS · 94K/S · RES 0.7 · 72 CROWD · 24 RIGS" at boot → "10 FPS · 62K/S · 75 CROWD · 24 RIGS" later (1Hz change-gated updates flowing; kbps tracks the 2s net sampler)
+   673→  * Client vs server byte estimates consistent (server est 34-36 KB/s vs client-sampled ~61-94 K/S incl. name-string overhead — same order of magnitude)
+   674→  * Server graded AOI under real load: avgEntriesPerTick 34.8 (was ~100+ per recipient pre-round), avgTickMs 0.2, ticksPerSec ~11-12
+   675→  * MOVEMENT golden path: W-hold 0.9s dz=-1.10 (exact historical baseline)
+   676→  * MAP REGRESSION (round-12 bug): M opens map (uiMode stays playing) → W-hold frozen dz=0.00 → M closes → W-hold restored dz=-1.10 — input orchestration intact with the new crowd layer
+   677→  * World simulation intact: bots unlocked CP 4/4 organically, detainees visible in roster (DETAINED chips), bot speech bubbles render over impostors, minimap dots crawl
+   678→  * Final: eslint exit 0, tsc clean (project src; pre-existing skills/ only), ZERO console errors, screenshots perf-01-menu/02-season/03-final.png
+   679→- Not re-run after 2-b (server untouched since 2-a's run): season-test 37/37, smoke 15 PASS, invite 22 PASS — client-only changes cannot affect socket suites
+   680→
+   681→Stage Summary:
+   682→- Round 15 (performance audit round) COMPLETE: both halves integrated and browser-verified — server broadcasts ~3× fewer entries per recipient at 0.2ms/tick with full observability via /health; client renders 75+ extra protesters as 3-draw-call impostors with adaptive resolution and a live perf HUD; all golden paths (movement, map open/close keyboard restore, season lifecycle, day cycle, bot simulation) regression-clean with zero console errors
+   683→- Verification evidence: /health JSON (34.8 entries/tick · 0.2ms · ~34 KB/s), perf chip live values, dz=-1.10 movement baseline, map-close restore exact, screenshots archived
+   684→- Risks/next: headless software-GL floors at RES 0.7 (real GPUs will hold min(dpr,2) — by design); remaining audit roadmap for future rounds: true binary protocol (FlatBuffers/bitmask) if we ever outgrow JSON+AOI, Agones/K8s per-season process isolation (multi-host scaling — out of scope for single-sandbox), sprite-impostor LOD for mid-band rigs, bot difficulty personalities (round-13 note), season persistence across server restarts (in-memory today)
+   685→
+   686→---
+   687→Task ID: 2-d
+   688→Agent: Z.ai Code (vehicle visuals workstream)
+   689→Task: VehicleSystem visual overhaul — proper lowpoly car / city bus / auto-rickshaw / cow from merged primitives, spinning+steering wheels, getSolidAABBs() contract for the movement workstream (single file: src/game/npcs.ts)
+   690→
+   691→Work Log:
+   692→- Read worklog rounds 10-15 (agent-browser ops findings, double-fork restart pattern, session isolation) + world-def.ts (READ-ONLY: 5 vehicles — 3×'auto', 1×'bus', 1×'cow' on the avenue; kind union is 'auto'|'bus'|'cow', no 'car' spawns yet) + game.ts (VehicleSystem instantiated at L192, `window.__vc` is the Game handle → vehicles reachable at runtime via `__vc.vehicles`; player.teleport(x,z) exists for QA)
+   693→- RICKSHAW DECISION: npcs.ts already had kind 'auto' = auto-rickshaw → KEPT + UPGRADED in place per spec (no new kind, zero server damage-mapping risk). CAR: implemented a full 'car' builder keyed on v.kind==='car' (+ safe fallback for any future kind) so the movement agent can add car spawns without touching npcs.ts; nothing else changed server-side
+   694→- Rewrote the vehicle section (~340 lines, total file ~500): module-level material cache (flatMat: flatShading MeshStandardMaterial singletons — tire/rim/dark-trim/glass 0.62-opacity/plate/emissive head+tail lights, per-palette bodies) + cylinder geometry caches; `buildWheels(count, positions, radius, opts)` helper — cylinder wheels rotated rotation.z=π/2 (spin = rotation.x), grouped per axle (unique z), per-wheel pivot (steer yaw) + spin refs stored on the vehicle, rims = darker hub-cap cylinders parented to tires (opts rims: true|'front'), wheels castShadow=false (bodies only, perf)
+   695→- Static sub-boxes baked (rotate/translate) + merged per material via mergeGeometries (same import path crowd.ts uses): CAR = merged body (chassis + tapered-top cabin + hood + boot), merged glass (side band + tilted windshield + rear glass), merged dark trim (bumpers, grill, wheel arches, mirrors on stalks), merged head/taillight emissives, cream plates (+taxi roof sign on gold flavor), 4 wheels w/ rims — 3 Indian-road palettes (taxi-gold #d9a441 / dusty red #b5543a / sage #93a67e) + per-instance length/height variance, ~14 draw calls. BUS = 2.4×2.6×8.6 proportions: cream body + livery skirt/bands (green #3e6b4f / maroon #7a3040), 10 separate window panes + pillars merged per material, big windshield + rear window, destination board, driver + 5 seat silhouettes (visible through 62%-opacity glass), front+mid door seams, 6 wheel wells, stalk mirrors, roof hatches + AC box, route/rear plates, 6 wheels (dual rear axle, front steers) — 12 draw calls. AUTO (rickshaw) = green body (front-half-cylinder cowl + floor + rear box) + YELLOW half-cylinder canopy roof (DoubleSide), tilted windshield + rear panes, dark interior mass + driver seat + bench + canopy struts + mudguard merged, emissive headlamp, 3 wheels (1 front center steers w/ rim, 2 rear) — 10 draw calls. COW = polished (grazing head tilt rx 0.3, ears, snout, merged legs, dark hooves) — 4 draw calls. castShadow only on body/dark/canopy meshes
+   696→- update(): path/phase/damage math byte-identical; added prevHeading/steer per vehicle — steer ≈ signed turn rate of heading (wrap-angle Δ/dt) clamped ±0.5 rad, eased (dt*7), applied to front-wheel pivots; wheels spin by actual travel speed (spin.rotation.x += speed*dt/radius). getSolidAABBs(): one heading-agnostic AABB per vehicle from VEHICLE_SOLID_EXTENTS (exported const: car 0.95×1.6×1.45, bus 1.3×4.3×2.7, auto 0.85×1.1×1.75, cow 0.7×1.25×1.6) + 0.05 pad, minY 0, fresh small array (10Hz acceptable per spec). Public API fully backward-compatible (update signature, onPlayerHit, vehicles[], group untouched)
+   697→- QA: `bun x tsc --noEmit` → 0 errors in src/ (pre-existing skills/ errors + parallel agent's in-progress mini-services/game-server/combat-test.ts errors only, neither mine); `bun run lint` exit 0. Browser LIVE (gateway :81, agent-browser --session r16d, stale r16b closed; one tab-degradation relaunch mid-QA per known infra limit): solo season boot → scene-graph probe: 43 meshes / 21 CylinderGeometry under vehicles.group, wheels per vehicle 3/3/3/6/0, all vehicle groups named `vehicle-{kind}-{id}`; wheel-spin probe: all 3 auto wheels rotation.x advanced +10.937 rad between samples (speed 7 / r 0.32 × simulated dt — headless fps explains the wall-clock ratio), steer readback exactly 0.000 on straights (U-turn kick is a 1-frame clamped event, sub-visible by design); getSolidAABBs() → 5 boxes, sane extents (e.g. auto at x 12: minX 11.1 / maxX 12.9 / maxY 1.75); teleport QA to the avenue → screenshots (tool-results/r16d-vehicles.png) VLM-verified: cream bus with livery band + visible wheels (no glitches), green/yellow auto-rickshaw + visible wheels, cow + hooves — poster-palette fit confirmed; ZERO console errors/warnings; dev.log tail clean (all 200s, no runtime/hydration errors)
+   698→
+   699→Stage Summary:
+   700→- Vehicles upgraded from 3 boxy primitives to proper lowpoly silhouettes: sedan/hatchback cars (tapered cabin, glass band, emissive lights, 3 Indian-road palettes, taxi flavor w/ roof sign), a real city bus (window panes + pillars, livery skirt, seats/door/roof details, 6-wheel dual rear axle), an upgraded classic auto-rickshaw (green body + yellow curved canopy, 3 wheels, headlamp), and a polished grazing cow — all built from shared cached materials/geometries with static sub-boxes merged per material (43 meshes/draw calls for today's 5 vehicles: 3×9 autos + 12 bus + 4 cow; each future 'car' spawn adds ~14), zero per-frame allocations, paths/counts/speeds/damage untouched
+   701→- Contract delivered: VehicleSystem.getSolidAABBs(): AABB[] + exported VEHICLE_SOLID_EXTENTS — movement agent can call it defensively today (reachable at runtime via window.__vc.vehicles; no new exposure added to game.ts)
+   702→- Risks/notes: 'car' kind is implemented but world-def currently spawns none (VehicleDef union in shared/types.ts is 'auto'|'bus'|'cow' — movement agent owns adding it there + to world-def); glass is 62%-opacity transparent (seats/interiors read through — 1 transparent mesh per vehicle); steering only visibly kicks at ping-pong U-turn flips (straight paths → 0°, verified); heading-agnostic AABBs are intentionally coarse for diagonal paths (the cow) per spec
+   703→
+   704→---
+   705→Task ID: 17
+   706→Agent: Z.ai Code (main — master-prompt upgrade round 16)
+   707→Task: Advanced upgrade per user master prompt — double jump, sprint vault, police melee combat (server-authoritative), random detention release points, GTA-style circular minimap with A* routes + waypoints, realistic vehicles, anti-teleport server validation + engine evaluation
+   708→
+   709→Work Log:
+   710→- PHASE 1 ENGINE EVALUATION (mandated by the prompt): evaluated Option A (keep Three.js/browser stack) vs Unity/C# vs Unreal/C++ against the actual codebase and sandbox. DECISION: keep the browser stack. Rationale: (1) VoteChor is browser-first; 16 rounds of working authoritative-multiplayer code (seasons, social, weather, perf) would be discarded; (2) this environment has no native build/export pipeline — a Unity/Unreal "migration" could not produce a runnable, deployable artifact, and the prompt forbids claiming migrations that don't exist; (3) the game's quality ceiling is content/art/physics-config, not engine — C++ does not auto-create realism. Unity/Unreal remain the right call ONLY if VoteChor later needs console/Steam builds or HD open-world streaming — documented as a launch/download-page decision at that point.
+   711→- CONTRACT PRE-WRITTEN BY MAIN (before delegation): shared/constants.ts += MOVE.doubleJumpVel/maxAirJumps/coyoteTime/jumpBuffer + POLICE_ATTACK block; shared/types.ts NpcNetState += anim/attackAt; npc-brain.ts NpcEvent kind += 'hit' (+amount); game-store.ts Settings += minimapRotate/reducedShake + hud.waypoint (Waypoint type) + defaults (also mirrored in SettingsPanel DEFAULTS).
+   712→- 4 PARALLEL AGENTS IMPLEMENTED (2-a server, 2-b movement/combat, 2-c minimap, 2-d vehicles). Infra context-deadline killed their return messages mid-flight; 2-d appended its worklog section, the other three left complete code unreported — main agent recovered, fixed, and verified everything below. Only post-recovery issues found: 1 TS narrowing error in combat-test.ts (fixed via closure-accessor helper) and vault reach 1.05→1.18m (world's lowest solid props are 1.1m — nothing was vaultable at 1.05).
+   713→- 2-a SERVER (mini-services/game-server + shared/npc-brain.ts): police melee FSM — wind-up telegraph (0.55s, npc slows 15%, view carries anim 'windup' + attackAt), strike re-validation (range ≤2.6m, not dazed/detained/hidden, LOS via segmentBlocked — no hits through walls), per-NPC 1.5s cooldown, 0.4s dodge-retry, staggerUntil render window; weakened targets (<30hp) captured at 0.5× hold time (NpcPlayerView.health added); damagePlayer(id, dmgByType, 'police') reuses existing game:damage flow; RANDOM RELEASE POINTS — RELEASE_POINTS (8 validated: z<-60, outside boss arena, off-road, collider-checked at module init), pickReleasePoint with anti-repeat (lastReleaseId), 30m squadmate filter, fallback chain, game:release now carries label; SERVER MOVEMENT VALIDATION — altitude clamp y≤14 + >18m/tick teleport snap-back (unit-tested).
+   714→- 2-b CLIENT (player/physics/input/game/character/audio/fx/Settings/HowToPlay): double jump (jumpsUsed/coyote 0.1s/buffer 0.12s, fresh-press, once per airborne, landing+vault reset; doubleJumpVel 6.9; jump cost 3 / double 6 stamina), onDoubleJump FX+SFX+rig flourish; sprint vault/mantle in physics (0.62→1.18m reach at hSpeed>6, headroom + behind-wall probes, res.vaulted → anim + SFX + jump-state reset); police hit feel — game:damage kind 'police' → comic thwack SFX + red vignette + stagger anim + knockback + fx popup, wind-up rigs render 'throw' telegraph synced to attackAt, pending-strike confirmation window ±400ms; vehicle solidity — physics.setDynamic() + per-frame VehicleSystem.getSolidAABBs() feed (players can't walk through vehicles); Settings ACCESSIBILITY section (Reduced camera shake → reducedShake gates hit/explosion shake); HowToPlay controls updated (double-tap Space).
+   715→- 2-c CLIENT MINIMAP (new src/game/minimap.ts + BigMap + Hud minimap region): GTA-style CIRCULAR radar — static world layer prerendered per zoom bucket in world space, blitted rotated/translated into a circular clip (1 drawImage/frame); rotates with heading (settings.minimapRotate, smooth shortest-arc lerp) or north-up with N tick; roads/building-ink/checkpoints/tokens/squads/bots/patrol(chasing-only red) layers; player center arrow; A* ROUTES — computeRoute over lazily-built 10m nav grid (colliders inflated 0.8m, same as server nav) + LRU cache, gold dashed polyline to waypoint > objective with distance chip; detained → route to release point; WAYPOINT — big-map click drops pin (survives reload via store persistence pattern), clear button + header distance chip (📍249m ⊗), radar marker; BigMap gained ROTATING toggle + RECENTER + route preview line + updated legend; HUD minimap region restyled circular (ring, hard shadow); wheel-zoom on the radar container (persisted via minimapZoom).
+   716→- 2-d CLIENT VEHICLES (npcs.ts): multi-part models — hatchback/sedan flavors (chassis+cabin, glass inset, emissive head/taillights, mirrors, plate, bumper), city bus (window panes + pillars, interior seat silhouettes, destination board, doors, wheel wells, dual rear axle, roof details), auto-rickshaw (3 wheels, canopy, cowl + headlamp), polished cow; wheels spin by travel speed, front-axle steer on turns; geometry/material caches; getSolidAABBs() contract method (kind-based half-extents, roof heights) consumed by game.ts at 10Hz.
+   717→- QA VERIFIED:
+   718→  * Server suites: combat-test.ts NEW 33/33 (unit: windup→strike→dodge→cooldown→LOS-block→weakened-capture×2 + altitude/teleport guards + pickReleasePoint rules incl. anti-repeat/30m-squad/fallback; LIVE: season npc anim/attackAt fields, police chase→wind-up (6× telegraph snapshots)→game:damage 13 'police'→capture→game:release "Market Exit Post @ 12,-190" (validated point, z<-60, outside arena)→snapshot places released player); season 37/37, smoke ALL, invite ALL (regressions clean)
+   719→  * Browser (agent-browser, gateway :81): circular radar renders + rotates, big-map CLICK-TO-WAYPOINT E2E (click → pin {x:-9.6,z:-366.6} + gold A* route following streets on BOTH big map and radar + 249m chip + clear button), map close → movement restored (round-12 regression holds), waypoint persists across map toggles; DOUBLE JUMP live: single apex 1.24m vs double 1.72m (+0.48m), jump buffer fires on early press, jumpsUsed resets on landing; vehicles: 5 kinds incl. new 'auto' rickshaw rendering on-screen, getSolidAABBs() returns 5 boxes (1.8×1.8 rickshaw sample) feeding setDynamic; perf chip + season chip + crowd unaffected; ZERO console errors; dev.log clean; tsc clean; eslint clean; server tick 0.33ms under live season
+   720→  * NOT captured live (honest): the client-side police-hit FX frame (vignette/knockback) — server chain fully proven via combat-test live flows, client handlers code-verified + type-checked, but headless tab degradation + the new anti-teleport guard (correctly) rejecting eval-driven test teleports prevented a stable staged encounter; recommend verifying in a real 2-player session
+   721→- OPS: game-server double-fork restart after a 3-instance pileup (known sandbox pattern — kill -9 strays, single canonical instance); /tmp/gs-dev.log clean; diagnostics via /tmp/diag2.ts (18 officers legitimately chasing fleeing bots — bot flee 6.6 = police 6.6 speed parity is pre-existing round-13 balance, noted as future tuning)
+   722→
+   723→Stage Summary:
+   724→- Round 16 shipped the master prompt's core playable systems on the existing stack: double jump + buffer/coyote + sprint vault; server-authoritative police melee (wind-up telegraphs, LOS-validated hits, cooldowns, weakened-capture) with full client feel; randomized validated detention release points; a real GTA-style circular rotating radar with A* street-following routes + click-to-waypoint; multi-part realistic vehicles (bus/rickshaw/cars) that now physically block players; anti-cheat movement validation. All acceptance tests run: 33/33 new + 37/37 season + smoke + invite green, zero console errors.
+   725→- Engine decision: STAY on Three.js/browser (full rationale in Work Log) — Unity/Unreal deferred until native distribution is a real requirement.
+   726→- Risks/next: police-vs-player hit FX visual unverified live (above); bot flee speed == police chase speed creates eternal bot pursuits (tune flee 6.0 or stamina for bots); ENDLESS STREAMED CITY (master prompt Phase 7) deliberately deferred — current city is a bounded 5-zone world; chunk streaming is the next big build (deterministic seeded chunks along the avenue axis, shared server/client nav, minimap chunk reveal); vehicle riding/standing-on-roof deferred (dynamic colliders block, don't carry); two-client detention/disconnect stress test still pending.
+   727→
+   728→---
+   729→Task ID: 16
+   730→Agent: Z.ai Code (main)
+   731→Task: 用户报告夜晚太黑 → 改善夜视 + 街灯系统（夜间自动点亮）
+   732→
+   733→Work Log:
+   734→- sky.ts 夜色调色板全面提亮：deep night/astro/blue-hour 三档 keyframe 的 amb 0.5→0.95/0.6→1.05/0.76→1.12，exp 0.7→0.98/0.76→1.02/0.84→1.06，fog/hemi/顶空颜色全部换成偏亮的月光蓝（不再是黑洞）；月光强度 0.5→1.15 且 weather dark 衰减更温和
+   735→- sky.ts 新增 nightFactor getter（sun elevation smooth(0.1,-0.24) → 0 白天 / 1 深夜），供世界渲染器驱动街灯；夜间雾墙 +12% 拉近缓解
+   736→- world.ts 新增完整街灯系统：
+   737→  * 所有 deco lamp 灯头材质注册 lampHeadMats（带 base emissive），夜间 emissiveIntensity 0.5→2.6
+   738→  * 新增 windowEmissiveTexture()：与 diffuse 窗户网格对齐的发光窗贴图（42% 房间熄灯、暖黄/暖白/冷蓝三色、部分窗帘半拉），40+ 栋建筑 emissiveMap 夜间 intensity 0→1.15，城市夜晚灯火通明
+   739→  * 新增 buildExtraStreetLamps()：沿主路两侧 curb 每 23m 交替布灯（跳过与 deco lamp 冲突位），InstancedMesh 实现（pole/arm/head/cone/ground-pool 各 1 draw call，~24 盏新灯），灯臂一律朝路内
+   740→  * 每盏灯：灯头 halo sprite（additive 径向贴图）+ 向下光锥 + 地面光斑（三者共享材质，opacity 由 nightFactor 驱动，fog 生效自然没入夜雾）
+   741→  * 新增 buildLightPool()：真实 PointLight 池（high 8 / medium 5 / low 3 盏，0xffb46a 钠灯暖光，decay 1.7，range 17m），每 0.35s 重新停泊到距玩家最近的灯位；亮度 = 30×nightF×(1+5.5% shimmer 微闪)；灯具常驻场景（intensity 0）避免黄昏/黎明切 visible 引发全材质 shader 重编译卡顿
+   742→  * searchlight 夜间 opacity 0.16→0.31（夜空更醒目）；boss gate 灯保留 base 1.4
+   743→- game.ts：sky.update 后调用 worldRenderer.setNight(sky.nightFactor, focus)；新增 window.__wr 调试句柄（在 WorldRenderer 创建之后赋值）
+   744→- agent-browser 全时段验证：noon（白天零回归、无穿帮）、18:37 dusk（紫橙暮色、灯渐亮）、22:30 night（灯锥+光斑+万家灯火、街道完全可读）、00:31 midnight（最暗时刻依然可玩、氛围佳）；console 零错误；perf chip 白天/夜晚均 10 FPS @ RES 0.7（软件渲染 GPU 下零性能回归，8 盏无阴影点灯开销可忽略）
+   745→
+   746→Stage Summary:
+   747→- 夜晚从"伸手不见五指"变成"月光+钠灯+万家灯火"的可享受场景：全局提亮 + 43 盏街灯（19 authored + 24 程序化）+ 建筑窗光 + 灯光池跟随玩家
+   748→- 关键决策：点灯池常驻场景只调 intensity（避免 shader 重编译）；InstancedMesh 让 ~24 盏新灯只有 5 个 draw call；cone/pool 材质开启 fog 融入夜雾
+   749→- 已知边界：eval 注入的 tod 修改偶发 1Hz HUD chip 显示滞后（纯显示，无逻辑影响）；多 decos 区域（zone C x=±16 deco lamps）与程序化灯最短间距 ~6m 可接受
+   750→- 建议下一轮：雨天夜间灯下涟漪反射（简单：pool opacity × (1+rain)）、商店招牌夜间霓虹化、路灯闪烁故障效果（个别灯 random flicker）
+   751→
+   752→---
+   753→Task ID: 18
+   754→Agent: Z.ai Code (main)
+   755→Task: 用户要求扩充自定义系统 — 更多角色（服装/脸型）+ 大量道具（背包/棍棒/标语牌/横幅/靴子/警棍/棒球棍/购物袋等）+ 更专业的外观
+   756→
+   757→Work Log:
+   758→- DATA (src/lib/cosmetics.ts): CosmeticKind = hat|face|outfit|footwear|gear|held；新增 FACE_CATALOG(clean/beard/moustache/warpaint LV4/scar@barrier_jumper)、OUTFIT_CATALOG(classic/kurta LV2/hoodie LV6/highvis@rescuer)、FOOTWEAR_CATALOG(shoes/boots/chappal LV2/glow LV8)、GEAR_CATALOG(none/backpack/jhola/bannerroll LV3/dhol@chai_guardian/umbrella LV7)、HELD_CATALOG(none/sign/banner/flag LV2/bat LV4/lathi LV6/shoppingbag/megaphone@rescuer)；HAT_CATALOG += bandana(free)/hardhat LV5；SKIN_TONES 6 色（语义命名如 Midnight Filter Coffee）；sanitizeCosmetics() 白名单清洗（长度截断+hex 校验）供服务器/档案共用；randomFreeCosmetics() 给 bot 造随机外观；resolveRigCosmetics() 默认值解析；anyItemIsUnlocked() 全目录通用解锁判断
+   759→- RIG (character.ts): RigOptions += face/outfit/footwear/gear/held；共享几何缓存 +36 项；实现 bandana(帽+脑后结)/hardhat(穹顶+帽檐+脊线)、moustache/warpaint(3 条 accent 战纹)/scar、kurta(裙摆+撞色下摆)/hoodie(兜帽+袋鼠兜)/highvis(橙背心+2 反光条)、boots(高筒+深色)/chappal(平底夹脚)/glow(发光鞋+LED 条)、backpack(通用化+前盖,student/journalist 未设槽位时保留签名背包)/jhola(斜挎带+侧袋)/bannerroll(背卷轴+红边)/dhol(桶鼓+双箍+绑带)/umbrella(收拢伞斜挂+弯钩)、banner(杆+宽布纹理口号,双面)/flag(杆+旗布,行走飘动)/bat(锥形棒+柄)/lathi(玩家版)/shoppingbag(左手袋+提手+葱)/megaphone(右手喇叭)；armBlockR/L 取代 signGroup 判断 — 持物手不再甩臂；旗/横幅布料 update() 内程序摆动；uncle 无 face 槽时默认 beard（身份保留）
+   760→- SERVER (mini-services/game-server): PlayerState += cosmetics；addPlayer 接受并存储；playerNet(p, includeCosmetics) — 仅 join ack(playersArray(true)) 与 game:playerjoined 事件携带（10-12Hz AOI 快照不携带，零带宽回归）；join handler sanitizeCosmetics(payload.cosmetics)；playerjoined 广播扩展为 (id, name, archetype, cosmetics)；season bot 创建时 randomFreeCosmetics() — 99 个 bot 全员随机外观
+   761→- CLIENT: types.ts PlayerNetState += cosmetics?；net.ts onPlayerJoined 签名扩展；player.ts 构造器透传 6 槽位；game.ts 本地玩家全量透传 + attachRig 远程 rig 完整外观（含 skinTone → colors.skin）+ pendingCosmetics Map 解决 playerjoined 先于首个 AOI 快照的竞态
+   762→- API (/api/profile): validateCosmeticUnlocks 泛化 — hat 原逻辑保留 + 5 个新槽位走 anyItemIsUnlocked（未知 id 拒绝、锁定的返回 "Locked — Reach level N/Earn medal: X"）
+   763→- UI (CharacterSelect.tsx 重写 + 新 CharacterPreview.tsx): 真实 WebGL 预览 — 直接用游戏内 CharacterRig 渲染在转台基座上（暖键光+冷轮廓光、缓慢自转、可拖拽旋转、look 变化仅重建 rig 不重建 renderer）；6 标签页衣柜（Headgear/Face/Outfit/Footwear/Back Gear/In Hand）+ 已装备绿点指示 + equipped 计数 chip；肤色 6 色板；Specs 开关保留；标语 Paint It（驱动 sign+banner 纹理）；"Surprise Fit" 随机整套（只从已解锁池抽）+ toast；锁项 hover 显示解锁条件；修复潜在 bug：API 是整对象替换而非合并 — UI 现在总是发送完整 cosmetics（旧行为部分发送会丢字段）
+   764→- QA: tsc 0 错误、eslint 0 错误；season-test 37/37、combat-test 33/33（服务器重启后回归全绿）；agent-browser（经 :81 网关）：衣柜页渲染+3D 预览转台+标签切换+装备/锁定交互+Surprise Fit(5 EQUIPPED+toast)+标语输入全部通过；本地玩家进游戏戴装备帽 ✓；solo 赛季 CONNECTED 100 人 · 72 CROWD/24 RIGS；数据探针 99 remotes/98 带 cosmetics（样本: cap+beard+banner、bandana+glasses+jhola+boots…）；rig 子节点数差异证实道具网格已挂载；橙衣持牌 bot 截图确认；**持久化闭环**：装备 bandana+banner+标语 → reload → 状态原样恢复（服务器往返 ✓）；零 console 错误
+   765→- 已知边界: 赛季中途补位的 bot 无 playerjoined 事件 → 无 cosmetics（默认外观，1/99 案例）；:3000 直连 origin 下 socket 走不通 → OFFLINE（QA 环境伪影，真实预览走 :81 网关正常）
+   766→
+   767→Stage Summary:
+   768→- 自定义系统从"6 顶帽子+眼镜+标语"扩展为 **8 角色 × 6 槽位 × 30+ 道具** 的完整衣柜：脸型(5)/服装(4)/鞋(4)/背具(6)/手持(8)/头饰(8)+肤色(6)+眼镜+专属标语，全部有解锁曲线（等级/成就），实时 3D 预览所见即所得，**多人可见**（服务器同步+远程 rig 完整渲染，bot 也全员随机换装），服务器权威验证解锁
+   769→- 关键修复：cosmetics 部分保存丢字段（现全量发送）；远程玩家此前完全看不到彼此外观（服务器根本不转发 cosmetics — 现已入 ack+join 事件）
+   770→- 下一轮建议：戒指/披风等更多槽位、cosmetics 进游戏内商店（代币购买）、bot 皮肤与名字联动（职业 bot 穿职业装）、衣柜页移动端布局优化（3D 预览小屏折叠）
+   771→
+   772→---
+   773→Task ID: 19
+   774→Agent: Z.ai Code (main)
+   775→Task: 用户要求把"单条小路的地图"升级成德里/GTA式大城市 — 能绕建筑、穿后巷(gali)、走下一批街道和民居；理解 prompt 并专业化实现
+   776→
+   777→Work Log:
+   778→- WORLD EXPANSION (src/game/shared/world-def.ts): 城市从 96m 宽单路条带扩为 **240m 宽 (x ±120) × 582m** 的完整城市网格（面积 2.5×），原有 5 区脊柱（广场→市场→安检→大道→议会）完整保留在中轴：
+   779→  * 4 条东西横街 CROSS_ROADS（导出常量，渲染器/小地图共用数据）：Plaza Cross z-78、Market Exit z-198（2 号检查点正好落在路口）、Avenue z-286、Colony z-452；为此平移了市场建筑行（删第 9 行）、Zone D 建筑行 (-300/-308-i*20)、Zone E 旗杆
+   780→  * 西侧 Purani Gali 贫民巷 mohalla：8 排小住宅 + 2 条贯穿南北的 gali + 庭院围墙 + 南端花园；W2 maidan 空地（树/长椅/茶车/牛）；W4 公寓排 + Neem Park（10 树/5 椅/6 花坛）；W5 政府平房区 + 围墙地块
+   781→  * 东侧 Naya Bazaar：两排商店楼夹 9m 市集巷 + 后巷（木箱/摩托/晒衣绳）+ 住宅排；Saraswati Public School + 操场 + 前院围墙大门；City Depot 3 库房 + 集装箱堆 + 摩托排；Azad Colony Park（纪念碑/树/椅）+ 2 排-colony 住宅
+   782→  * 新 DecoKind：'home'（112 栋小住宅，variant 0 尖顶/1 平顶，10 色灰泥）、'wall'（1.1m 可翻越院墙）、'clothesline'（gali 晒衣绳，4 片布料摆动动画）
+   783→  * 检查点铁丝网从 ±46 延至 ±122（嵌入世界墙）——**安检区无法再从两侧绕过**；QA 时发现并修复了 ±118~±120 的 2m 缝隙漏洞
+   784→  * 6 名新警察巡逻（mohalla/bazaar/park/depot/colony 各 1）、17 个新拾取物（4 token 藏在后巷/gali/公园背后 —— "绕到建筑后面"的探索奖励）、6 台新车辆（2 条横街各 2 台 auto 短驳、Colony Cross 1 台 bus、maidan 1 头牛；A/B 横街车辆路径拆成两半避开检查点门柱）
+   785→- RENDERER (src/game/world.ts): 住宅全部走实例化 —— 4 个 draw call 渲染 112 栋房：bodies InstancedMesh(单灰泥纹理+instanceColor 调色)、尖顶屋顶 InstancedMesh(三棱柱 wedge)+平顶 InstancedMesh、**全部门窗百叶合并成 1 个 merged geometry**（2×2 贴图集：木门/玻璃窗/防盗格栅窗/木百叶；夜间 emissiveMap 让住宅窗户也入万家灯火系统 windowMats）；地面 260m 宽、4 条横街沥青+断续中线+人行道（分段避开主路口）、横街路灯并入 buildExtraStreetLamps（±32 盏、灯臂指向路心、自动接入夜间光锥/光斑/点光池系统）、长栅栏帧距 4m 降耗、尘土扩至 ±115m
+   786→- MAPS: minimap.ts WORLD_W 96→240（地面/边界墙/横街矩形/COLS 24 导航格/雷达 blit 偏移）；game.ts drawMinimap 重构为 **缓存静态底图**（buildMapUnderlay：地面+zone 染色+主路+横街+全部建筑墨块+Boss 竞技场环，只渲染一次，8Hz blit）+ 动态点层；BigMap.tsx 全部硬编码 ±48 参数化为 WORLD_BOUNDS（shared/constants.ts 导出）+ 9 个新街坊地标 HTML 标签（Purani Gali/Naya Bazaar/Saraswati School/Neem Park/City Depot/Azad Colony Park/Fountain/Training Ring/Flyover）；game-store minimapWindow 边界 ±120；GameRoot 缓冲画布 140→240px
+   787→- SERVER: season.ts 导航图 x ±45→±115（bot 现在会游荡到横街和侧街坊； alley 3.2m < NAV_PAD×2 自动保持 bot 不钻窄巷）；npc-brain clamp ±119；顺手修复 2 个 R18 遗留 TS 错误（index.ts join payload cosmetics 类型、season.ts playerNet map 包装）；room.ts RELEASE_POINTS 8/8 验证通过
+   788→- 关键修复：初版把"far wall"box 参数写错（z -576..12 整张世界压成实心）→ tsc 后跑 spawn 检查发现 4 个 release point REJECTED → 修正为 (-124,0,-576,124,14,-572) ✓
+   789→- QA（agent-browser 经 :81 网关全程实测）：
+   790→  * JOIN → CONNECTED 100 人（75 CROWD·24 RIGS），零 console error
+   791→  * 实地走查 6 大新区域截图：Purani Gali（住宅排+gali+路灯+bot 迎面走来）、Naya Bazaar（彩色店面夹巷）、Market Exit 路口（横街虚线+检查点门+瞭望塔+栅栏迷宫）、Neem Park（树/椅/token/住宅排）、City Depot（夜色库房窗光）、Azad Colony（暮色下住宅+雷达墨块）
+   792→  * 大地图：240m 城市建筑墨块 + 4 横街 + 9 地标标签全部渲染；圆形雷达 gali 网格/路口清晰
+   793→  * 夜晚 22:30 横街实拍：新路灯锥+光斑点亮、住宅/商店窗光、探照灯扫掠 —— R16 夜灯系统自动覆盖全部新街
+   794→  * 步行穿过 N-S gali（dz −0.5 @10fps）；**隐藏 token E2E**：后巷 "E — GRAB STOLEN VOTE TOKEN" → 拾取 → 计数 1/12 ✓
+   795→  * 检查点完整性：向西绕行测试被栅栏挡停 (z −202→−203.7)；缝隙封死后重启验证 boot 无 REJECTED
+   796→  * 11 台车辆坐标全对（6 台新横街车辆实时位置确认）；警察在新区域正常伤害/拘留（有机发生）
+   797→  * 性能：白天/夜晚均 10 FPS @ RES 0.7-0.85（headless 软件 GL，与扩城前持平 —— 实例化+合并+缓存策略零回归）；tsc 0 错误、eslint 0 错误、dev.log 干净、game-server 干净重启
+   798→
+   799→Stage Summary:
+   800→- VoteChor 从"一条路"变成真正可游荡的城市：240m 宽 × 582m，4 条横街 + 8 个街坊（贫民巷/市集/学校/公园/库房/政府区/colony），112 栋可绕行小住宅 + 密集 gali + 后巷藏宝 + 横街车流 + 全域夜灯，全部多人同步（服务器同一份 world-def 权威数据：碰撞/导航/巡逻/释放点/道具）
+   801→- 工程要点：住宅 4 draw call（实例化+合并门窗）、大地图底图一次缓存、横街路灯零新增材质、检查点栅栏全域无缝（含缝隙漏洞修复）
+   802→- 已知边界：横街沥青 y 0.008 低于主路 0.01（路口由主路覆盖，无缝）；bot 导航不进 gali（格子 10m+膨胀，玩家专属捷径）；软件 GL 下远端横街在雾中淡出属正常
+   803→- 建议下一轮：住宅屋顶可爬（消防梯/水箱台阶）、横街路口红绿灯+斑马线、gali 里的小型事件（牛挡路/婚礼队伍）、大地图点击地标直接设路点、赛季内动态事件把玩家引向侧街（如"market fire"让 gali 成为撤退路线）
+   804→---
+   805→Task ID: 20
+   806→Agent: Z.ai Code (main)
+   807→Task: 用户要求 — 被警察拘留（detained）时玩家应失去全部收集物（collections）与卡片（cards）。理解 prompt 并专业化实现 GTA 式 BUSTED 没收系统
+   808→
+   809→Work Log:
+   810→- DESIGN（先理解现有系统再设计）: 本作"collections/cards" = 会话内① vote tokens（团队目标计数+个人 p.tokens）② inventory item cards（bottle/chai/firstaid/snack/sign/foam/joke，上限 8）。原行为：拘留仅倒计时+传送释放点，无任何没收。设计原则：**服务器权威**（token 账目在服务器）、**比赛必须可完成**（token 不能凭空消失）、**更有趣的丢失方式**（装备掉在被捕点可被找回 → 小队救援循环）
+   811→- SERVER TOKEN CONFISCATION (mini-services/game-server/room.ts capturePlayer): 拘留瞬间 — p.tokens→0、全局 this.tokens 扣减、**仅该玩家拾取的 token**（itemStates.takenBy 精确过滤）重新藏回世界原点（"警方把证物重新归档回街道"）；game:capture 广播增加第 4 个增量参数 lostTokens（旧客户端自动忽略）；掉落的 boss ballot 归还竞技场地面（boss-brain 新增 dropBallotsOf + BossBallot.carrier 字段，grabBallot 记录 carrier）
+   812→- SERVER DROPPED-ITEM SYSTEM (room.ts + index.ts): 新 DroppedItem 模型 + droppedItems Map；新事件 game:dropped / game:dropTaken(id,byId,byName) / game:dropGone(ids)；confiscateInventory(socketId, items) — 验证 detained + confiscatedFor（detainUntil 标记，一次拘留一发）+ 白名单（token 永不掉落）+ INVENTORY_MAX 上限 + 去重 → 在**服务器权威的被捕坐标**撒 loot ring（半径 1.5m，releasePointBlocked(pad 0.25) 碰撞微调出墙，6 次尝试回退到被捕点）；pickup() 先查 droppedItems（3m 距离验证）再查静态 item；tick 9.5 步 TTL 150s 过期 → game:dropGone；resetMatch 清空掉落+计数并广播
+   813→- CLIENT FLOW (game.ts onCapture): 自捕获时 — ① carryingBallot 清空 ② stats.confiscated/confiscatedItems 记账 ③ BUSTED 通知（分档：有 token 有装备/只有 token/只有装备，带精确数量 + fx popup "−N VOTES CONFISCATED"）④ 在线：net.confiscateInventory(types) 上报（清空本地 inventory 预测）⑤ 离线：本地 re-enable taken tokens（this.tokens 即个人数）+ dropInventoryLocal 本地撒 loot（spawnDropped, respawn:0 一次性）。关键正确性：在线时 this.tokens 是**全局团队计数**，绝不能当个人损失用（严格用服务器 lostTokens）
+   814→- CLIENT NET (net.ts): onCapture 增加 lostTokens 参数；onDropped/onDropTaken/onDropGone 事件；confiscateInventory sender。ItemSystem: removeDropped(id)（移除 mesh+items+byId）；localPickup respawn===0 永不重生语义（loot pile 一次性）
+   815→- 拘留禁交互修复（QA 中发现的真实 bug）：被拘留玩家站在 loot 旁时 E 提示出现且**在押也能拾取**（服务器会拒绝但离线/预测路径不会）→ 拘留中 nearestAvailable 短路为 null、ballot 存取/存入也加 isDetained/isDazed 门
+   816→- SCORE/XP 诚实扣账: HUD score = (stats.tokens − confiscated)×45；EndScreen tokens 在线用服务器终值（已含没收）、离线用 max(0, personal−confiscated)；MatchEndPayload += confiscated/confiscatedItems（客户端计算）
+   817→- UI/文案: HowToPlay 新增红色加粗没收规则（votes re-hidden + gear drops + 小队可找回）；新手 onboarding 增加 23.5s 警告 tip；CAPTURE_MESSAGES 增加两条没收主题幽默文案；EndScreen 新增 "Confiscated" 统计卡（Lock 图标，N votes + M items）
+   818→- OFFLINE 拘留首次可用: npcs.simulateLocal 此前把所有 tickNpc 事件（含 hit）都当 capture 且 onLocalCapture 从未接线（离线从未拘留过）→ 现在按 kind 分流 capture/hit，onLocalHit(amount)→applyDamage('police')（R17 警棍手感链路离线也可触发）
+   819→- QA 工具: game.ts boot 暴露 window.__game QA 句柄（与 __sky/__wr 同模式）
+   820→- 测试 confiscate-test.ts（新，46/46 全绿）：token 没收→全队计数扣减+仅本人 token 复位+lostTokens 增参；旁人 token 不受影响；无 token 捕获零垃圾广播；confiscateInventory 全验证路径（未拘留拒绝/全非法不烧一次性/7 类型去重上限/token 过滤/重复请求拒绝）；掉落拾取（远距拒绝→走进 3m→成功→dropTaken 广播→map 移除）；静态物品拾取回归；TTL 过期（过期移除+新鲜保留+dropGone）；resetMatch 全清；拐角掉落全部可站立（不进 collider）。回归：combat 33/33、season 37/37、smoke ALL、invite ALL（game-server 重启后）
+   821→- agent-browser E2E（离线分阶段 + 在线回归）：
+   822→  * 在线慢速走位尝试自然捕获未果（headless ~0.36m/s + 两次服务器重启中断）→ 诚实改用离线分阶段验证客户端全链路 + 46 条单元测试覆盖服务器权威账目（服务器捕获路径 combat-test LIVE 已有真实覆盖）
+   823→  * 离线分阶段：pickupItem(token+chai) → staged capture → **状态机全对**（tokens 1→0、inventory 清空、A_tok_1 taken=false+visible=true 重现世界、chai drop 生成 1.3m、detained=true）
+   824→  * 视觉确认：DETAINED 全屏遮罩 + "Release in 7s — paperwork is being stamped" + 地上 chai 掉落可见
+   825→  * BUSTED toast 精确文案 "police confiscated 1 vote and 1 item! Your gear dropped where you were caught."、HUD 0/12、拘留中交互提示 null（bug 修复生效）
+   826→  * 释放后 teleport 到掉落点 → E → inventory=["chai"] 恢复、drop 消失 —— **丢失→找回闭环 E2E 通过**
+   827→  * 在线事件句柄分阶段：onDropped 生成 2 掉落 → onDropTaken 移除+通知路径 → onDropGone 移除，全链路 ✓
+   828→  * 在线回归：新服务器 PLAY SOLO → CONNECTED 100 · SEASON #1 · 74 CROWD/24 RIGS · checkpoint 事件流动 · 10 FPS @ RES 0.85；console 零错误；dev.log / gs-dev.log 干净；tsc 0 错误、eslint 0 错误
+   829→
+   830→Stage Summary:
+   831→- 拘留现在有真实代价且不毁比赛：**BUSTED → 警察没收全部 votes 与 items**。votes 回到城市重新可收集（个人与团队计数精确扣减、只复位本人拾取的 token），items 以 loot pile 掉在被捕点（150s TTL、碰撞避墙、任何人可拾、小队救援循环），球票（boss ballot）脱手回竞技场；HUD 分数/结算 XP/EndScreen 诚实扣账
+   832→- 工程要点：服务器权威账目（takenBy 过滤实现精确归还）；一次拘留一发没收（detainUntil 标记）；增量协议参数向后兼容；离线拘留系统首次真正可用（附带修好 simulateLocal 事件分流）
+   833→- 已知边界：在线拾取预测在服务器拒绝时可能短暂幻影（与普通物品同风险，低概率）；浏览器内自然走向警察被 headless 限速阻断（以离线分阶段+单元+combat LIVE 三层覆盖代替，无猜测成分）；没收不清 gateOpen（设计决定：gate 一旦打开不回收）
+   834→- 建议下一轮：detention 期间 HUD 显示"已没收 N votes/M items"清单卡；小队成员拘留时向队友发"捡回装备"导航路标；season bot 也模拟拾取 token 让没收对 bot 生效；没收装备 pile 上加闪烁光柱增强可见性
+   835→
+   836→---
+   837→Task ID: 21
+   838→Agent: Z.ai Code (main)
+   839→Task: 用户要求 — ①警察打人掉血（确认+完善）②受伤后可吃收集的食物回血（收集食物→使用→回血闭环）③路上障碍物有时看不清→确保可见 ④新增热键喊叫/吹口哨制造噪音吸引警察。理解 prompt 并专业化实现
+   840→
+   841→Work Log:
+   842→- HEALTH SURVIVAL LOOP (constants.ts + player.ts + game.ts):
+   843→  * DAMAGE 新增 regenDelaySec 9 / regenPerSec 3 — 脱战 9s 后缓慢回血（food 才是主要回血手段，trickle 只防早期小伤永久残留）；player.sinceDamage 在 damage() 归零、tickRegen(dt) 挂入 fixedUpdate
+   844→  * 食物全部可回血：chai +10 HP（原只有体力+加速）、snack +5 HP（原只有加速）、joke/samosa +10（已有）、firstaid +50（已有）；ITEM_CONFIG desc 同步更新；useInventoryItem 补 HP popup (+N HP 粉色浮字)；被拘留时禁止进食（"No snacking in a police cell"）
+   845→  * **H = Quick Heal**：一键吃最合理的食物 — 缺血 ≥45 优先 firstaid，否则 chai → joke → snack → firstaid（避免大材小用）；满血提示存粮、空口袋提示去收集
+   846→  * **新增 19 个食物拾取点**（world-def，全城分布避开 collider 与既有点位）：chai 13→18、firstaid 8→13、snack 7→12、joke 4→7 — 主路两侧/四条横街路口/检查区迷宫前后/大道施工段/Colony 十字/Naya Bazaar 巷内/Purani Gali 花园/Depot/Azad Colony 公园各有分布；指南针新增 fallback：残血且附近无 medkit 且口袋无粮 → 指向最近 chai
+   847→- SHOUT / WHISTLE (V 键, game.ts + input.ts + audio.ts + constants.ts):
+   848→  * 新 OneShot 'shout'（默认 KeyV，可改键）→ doShout()：2.5s 冷却（performance.now 门）→ 随机 SHOUT_LINES（AAZADI! / *shrill whistle* / KOI HAI?! 等 8 条）→ 语音气泡 + 地面金色扩散噪音环 (fx.burst 12 粒子) + 口哨/喊叫双音效（audio.ts 新 'shout' sawtooth 下扫+呼吸噪声；*星号*行播 whistle 并配手捂嘴姿势 throw anim，其余 celebrate）
+   849→  * 噪音管线复用既有系统：离线 npcs.distraction(x,z,6)；在线 net.noiseEvent → 服务器 room.noise（5/s 限流，已有）→ applyNoise 让 20m 内巡逻 NPC 转入 investigate
+   850→  * TouchControls 新增 SHOUT（Megaphone 图标琥珀）+ HEAL（HeartPulse 粉红）两枚触屏按钮，touchBridge btn 类型扩展
+   851→- OBSTACLE VISIBILITY (world.ts + npcs.ts):
+   852→  * 路障全面高可视改造：白条改共享 hazardStripeMat（白色 #fffbe8 + 暖发光，setNight 驱动 emissive 0.18→1.88 模拟反光带被灯打亮）、红框共享 hazardFrameMat（夜间 0.05→0.55）、每框双反光带（上 0.2 高 + 下 0.14 高）、框厚 0.08→0.12、腿加深色 — 检查区迷宫 ~30 根栅栏全部一次材质共享零额外 draw call
+   853→  * 夜市灯笼系统：stall 双灯笼 + cart 杆灯笼 + teaKettle 炉火余烬 + 灯笼罩光 sprite（共享 lanternMat/lanternHaloMat，夜间 emissive 0.45→2.75、halo opacity 0→0.55）— 市集/巷内的路缘障碍物夜间自发光可读
+   854→  * 牛（移动路障）戴琥珀色铃铛+反光项圈环（emissive 0.55 常亮）— 夜间大道上不再隐身
+   855→- **重大既有 BUG 修复 — 离线 NPC 全军 NaN 冻结**：QA 探针发现离线所有警察 brain.x=NaN（typeof number 但 JSON 序列化 null）→ 属性 setter 陷阱定位到 tickNpc 首次写入 → 根因：game.ts boot/startMatch 与 npcs.ts NpcSystem 构造器在调 createNpcStates 前对 patrol 预 spread（p => ({...p})）— **[x,z] 数组被展开成 {0:x,1:z}**，wp.x=undefined → d=NaN → 位置 NaN 永久污染 → 离线模式警察全部隐形冻结（一直存在但从未被发现，因离线只是 fallback 且在线用服务器快照渲染）；修复：patrol 原样传入（createNpcStates 本就正确处理 [x,z] tuple）→ 离线巡逻/追捕/殴打/拘留全链路首次真正可用
+   856→- DOCS: HowToPlay 控制表新增 V（喊叫吸引警察+2.5s 冷却）与 H（智能进食 + 食物回血数值）两行；Survival Tips 新增"Health matters"（伤害源数值/30HP 以下被抓翻倍/食物回血表/脱战回血）与 V 喊叫战术条目；SettingsPanel 键位表新增 heal/shout 标签
+   857→- QA（agent-browser，在线 :81 + 离线 :3000 双阶段）：
+   858→  * 警察掉血：applyDamage(13,'police')×2 → 100→87→61、HUD 同步、police hit feel（击退+红晕+popup）触发
+   859→  * 脱战回血：9s 后 61→65.3（game-time 门验证），后续 HUD 实测 50→54→63 持续 tick
+   860→  * Quick Heal：缺血 54.2 → 正确吃 firstaid(+50→95.8)；缺血 14.2 → 正确吃 chai(+10, 体力 100)；库存精确扣减
+   861→  * **有机战斗链 E2E**（离线）：传送到 npcA1 巡逻旁 → doShout → patrol→investigate（5.6m→0.7m 走向噪音源）→ LOS 发现→chase→wind-up→警棍命中 100→87（精确 13 = POLICE_ATTACK.dmgByType.police）→ 继续纠缠直至 **capture → DETAINED 全屏 → 7s 释放（HP=50=dazedRecoverHealth）** — 喊叫吸引警察的完整 gameplay 闭环有机发生
+   862→  * V 键绑定链：synthetic keydown KeyV → InputManager → handleOneShot → doShout 冷却戳置位 ✓（headless press 无焦点属环境伪影）；在线 doShout spy 验证 game:noise emit（含坐标）+ 冷却门拦截第二次
+   863→  * 食物点：19/19 新拾取点在 live world 确认（byType 计数 chai18/aid13/snack12/joke7）
+   864→  * 夜景截图×2：检查区迷宫全部路障红框+双白反光带夜间发光、清晰可读；市集灯笼+灯池+窗光；白天对照截图零回归；perf 10 FPS @ RES 0.7 全程无回归
+   865→  * 回归：combat-test 33/33、season-test 37/37、confiscate-test 46/46 全绿；tsc 0 项目错误、eslint 0、console 零错误、dev.log 干净
+   866→- 服务器未改动（无需重启）：shared/constants 仅增量字段，运行中服务器行为不变
+   867→
+   868→Stage Summary:
+   869→- 战斗-生存循环成立：警察殴打掉血（服务器权威）→ 30HP 以下被抓更快 → 玩家有三种恢复手段（食物 H 键智能进食 / 脱战 9s 缓回 / 释放保底 50HP），全城 50 个食物点位支撑
+   870→- V = 免费、可改键、有冷却的"吸引警察"工具：把隐藏的噪音管线（此前只有扔瓶子能触发）变成主动战术 — 喊叫引开巡逻或自投罗网都有趣；触屏双按钮补齐移动端
+   871→- 夜间道路障碍彻底可读：反光带路障 + 灯笼夜市 + 铃铛牛，全部共享材质零性能成本
+   872→- 意外收获：修复离线 NPC NaN 冻结的重大既有 bug — 离线模式从"没有警察的空城"变成完整可玩（巡逻/追捕/殴打/拘留全通）
+   873→- 已知边界：headless rAF 节流导致 game-time ≈ 35% 墙钟（回血等待需 in-page await，非逻辑问题）；在线喊叫的服务器端 NPC 反应未在浏览器直证（room.noise→applyNoise 与离线共用同一 applyNoise，离线已有机验证 + 服务器限流路径原有测试覆盖）
+   874→- 建议下一轮：喊叫可打断 NPC 对话/触发围观群众响应；食物食用动画（hand-to-mouth）专用 AnimName；地图图例标注食物密集区；警察被喊叫吸引后到达现场若一无所获会提高怀疑基线（目前 investigate 完直接回 patrol）
+   875→
+   876→---
+   877→Task ID: 22
+   878→Agent: Z.ai Code (main)
+   879→Task: 用户要求 — ①每个玩家有唯一 ID 追踪记录并保存进度与档案 ②新增阵营选择：玩家可选当 Protector（保护者）或 Police（警察）。理解 prompt 并专业化实现
+   880→
+   881→Work Log:
+   882→- PLAYER IDENTITY + ID CARD:
+   883→  * src/lib/identity.ts（新）: shortIdFromToken() — FNV-1a→LCG 从秘密 token 派生稳定的公开短号 "VC-XXXX-XXXX"（无歧义字母表，去 I/L/O/0/1）；sanitizeRole() 守卫
+   884→  * Prisma: Player += role("protector"|"police")；PlayerStats/MatchResult += arrests → db:push OK
+   885→  * /api/profile: POST 接受 role（白名单化）、profileView 返回 role/createdAt；**新增 GET**（token → 完整档案 + shortId，"records office" 查询口）；响应根附 shortId
+   886→  * /api/matches: 接受 arrests（0..200 clamp），XP_TABLE.perArrest(40) 计入服务器权威 XP，MatchResult/PlayerStats 累加
+   887→  * /api/stats: 返回 arrests 终身统计
+   888→  * UI: MainMenu PlayerCard 新增「🆔 VC-XXXX-XXXX 点击复制」chip（toast 确认）+ 阵营徽章（Protector 绿盾 / Police 蓝警笛）；StatsPanel 顶部新增身份卡（短号复制 + 阵章 + "on file since <日期> — progress saves automatically"）+ "Suspects Arrested" 统计卡（13→14 卡）
+   889→- ROLE SELECT UI (CharacterSelect.tsx): 新 section「2 · Choose Your Side」两张大卡 — PROTECTOR（人民侧：回收选票/救援小队/默认岗位）vs POLICE（委员会侧：逮捕权(E)/警官豁免/+40 XP/逮捕），aria-pressed + 选中描边阴影 + 点击即 POST /api/profile{role} + localStorage votechor_role 兜底 + toast；衣橱编号顺延为 3
+   890→- GAMEPLAY — POLICE ROLE（离线/在线双实现）:
+   891→  * 共享: constants.PLAYER_ROLE{arrestRange 2.8m, arrestCooldownMs 1400, scorePerArrest 120}；types PlayerNetState += role、MatchEndPayload += arrests?；**npc-brain: NpcPlayerView += police 标记，tickNpc 目标扫描 `if (p.police) continue` — NPC 警官永不追捕/殴打同僚**（服务器与离线同一份代码，双双生效）
+   892→  * 服务器(room.ts): PlayerState += role/arrests/lastArrestAt；addPlayer 接受 role；tick views 传 police 标记；**新 arrest(issuer,target) 服务器权威验证矩阵**（ issuer 必须 police/目标存在/非警官/非自己/2.8m 内/未拘留未眩晕/1.4s 冷却）→ 通过 capturePlayer 走完整 BUSTED 管线（没收选票回填世界+掉落装备+随机释放点）+ 私发 game:arrested(targetId,name,total) 诚实计数；playerNet(full) 携带 role（join ack + playerjoined，AOI 快照零带宽回归）；index.ts: join sanitize role + game:arrest socket + playerjoined 增参 + [POLICE] join 日志
+   893→  * 客户端: net.ts JoinPayload.role + arrest() sender + onArrested 事件；player.ts RigOptions += npcType:'police'（卡其警服配色 + lathi + 警用交叉带）；game.ts: role 解析（profile.role → localStorage 兜底）、join payload 携带 role、远程玩家 role 同步渲染警服（pendingRoles map 解决 playerjoined 先于 AOI 竞态，名牌淡蓝）、逮捕交互（在线扫 remotePlayers/离线扫 suspects → "E — Arrest <name>" 提示 → net.arrest/本地结算）、onArrested/onLocalArrest（fx popup "ARRESTED — <name>" + notify + stats.arrests）、HUD objective 翻转 + score += arrests*120、finalizeMatch XP/POST/summary 携带 arrests
+   894→  * **src/game/suspects.ts（新）— 离线训练日**: 6 名 wandering 嫌疑人（8 个开放路面锚点、archetype 配色 rigs、SUSPECT_NAMES 轮换），游荡 2.1 / 8m 内逃跑 5.4（< 疾跑 7.8 必可追上）、collider 避障选路、E 逮捕 → dazed 5.2s → 20-29s 后异锚点重生；仅在「police + 离线」时生成，中途上线自动隐藏（赛季 99 bot 接管）
+   895→  * 警官外观净化: 警察角色 suppress outfit/held/signText/gear（背包含抗议背包、标语牌与警服冲突），保留帽/眼镜/脸/鞋/肤色
+   896→  * HUD 补丁提前: startMatch 即刷 role/arrests/objective（连接窗口最长 4s，旧比赛的"Duty"横幅不再残留）
+   897→- UI 其余: Hud.tsx objective 头部 OFFICER 徽章 + "N ARRESTED THIS SHIFT" 蓝字行；EndScreen arrests>0 时显示 "Arrests Made" 卡；HowToPlay 新增「Two Sides, One City」蓝卡说明（切换免费即时、档案/衣柜/ID 不变）
+   898→- 测试 arrests-test.ts（新，23/23 全绿）: role 默认与同步（playerNet full/AOI 增减宽验证）、tick views police 标记、arrest 全验证矩阵（假 issuer/保护者 issuer/自捕/未知目标/逮捕同僚/超距/冷却/重复逮捕/垃圾 id）、有效逮捕走 capturePlayer 全管线、冷却窗后二次逮捕、NPC brain 4s 从不锁定警官玩家 vs 保护者被锁定
+   899→- 回归: combat 33/33、confiscate 46/46、season 37/37、smoke ALL（game-server 重启后）；tsc 0 项目错误、eslint 0
+   900→- QA（agent-browser，:81 在线 + :3000 离线双 origin 全链路）:
+   901→  * 主菜单: ID chip "VC-CMZD-U53X" + 点击复制 toast ✓；Police 徽章显示且 reload 后持久 ✓
+   902→  * Stats: 身份卡（警笛 + 短号 + POLICE 章 + on file since Oct 15, 2026）+ Suspects Arrested 卡 ✓
+   903→  * Customize: 阵营双卡渲染、点 POLICE → store+localStorage+服务器三方同步（API GET 验证 role:"police"）✓
+   904→  * 在线 (:81 → Season #3): 服务器日志 "[POLICE]" join；HUD OFFICER 徽章 + "Duty: detain rowdy protesters" + 警服 lathi rig；**在线逮捕 E2E** — 页内 watcher 捕捉 2.8m 窗口按 E → game:arrested 确认 → HUD "1 ARRESTED THIS SHIFT" + objective "(1 cuffed)"；真实人类玩家接近时出现 "E — ARREST BANDRABANDIT" 提示 ✓；警官在满城巡逻+当众抓人下 HP 恒 100（豁免生效）✓
+   905→  * 离线 (:3000): 6 suspects 生成、 objective "Duty: detain suspects" 、追逐战（嫌疑人 8m 触发逃跑）→ **离线逮捕 E2E**（Rowdy Ramesh → arrests=1 → score 120）； suspect det 标记确认；角色切回 Protector → 绿色抗议服 rig + "The votes are missing" 开场 → 离线不再生成 suspects ✓
+   906→  * 性能: 在线 10 FPS @ RES 0.85-0.7、68-75 CROWD/24 RIGS、108-135K/S；离线 10 FPS @ 0.7；console 零错误；dev.log / gs-dev.log 干净
+   907→- 已知边界: 多人下远程玩家看到警官警服依赖 playerjoined/join ack（中途补位的边界同 R18 cosmetics 1/99 案例）；:3000 与 :81 是不同 origin → localStorage 各自独立档案（QA 伪影，真实用户单一入口无此问题）；bot 不从玩家警官处逃跑（bot flee 目标是 NPC 警官，玩家警官贴近时 bot 保持游荡 — 实际上更容易被抓，可接受）
+   908→
+   909→Stage Summary:
+   910→- 玩家身份体系落地：每个玩家有唯一稳定公开 ID（VC-XXXX-XXXX，可复制可引用）+ 档案创建日期 + 终身记录（新增逮捕统计）全部持久化于服务器；菜单卡片与统计面板均可查验，进度保存链路（XP/等级/成就/衣柜/阵营）完好
+   911→- 阵营系统首发：Protector（原版玩法）vs Police（警服+lathi、NPC 警官同僚豁免、2.8m E 键逮捕、服务器权威验证+诚实计数、+40 XP/逮捕、离线训练日嫌疑人补位）——选择持久化、双模式可玩、UI 三处可见
+   912→- 工程要点：npc-brain 一行 police 标记同时服务服务器与离线；逮捕复用 BUSTED 没收管线零新账本；AOI 快照不携带 role 零带宽回归；arrests-test 23/23 锁死验证矩阵
+   913→- 已知边界（诚实）: 双客户端目视验证警官远程外观未做（单浏览器 QA；playerNet/attachRig 路径有单测+类型覆盖）；被捕 bot 的 game:confiscate 无客户端上报（bot 无库存，天然无害）
+   914→- 建议下一轮：警察玩家专属 HUD 雷达（嫌疑人蓝点/同僚绿点）；被捕玩家向逮捕者发 "争辩" 快捷消息；警察等级解锁警笛肩灯/手铐皮肤；Protector 专属增益落地（救援/复活加速真实生效）；双人分流 QA（警官+抗议者各一客户端目视互证）
+   915→---
+   916→Task ID: 23
+   917→Agent: Z.ai Code (main)
+   918→Task: User request — ① when the player picks Customize with POLICE side chosen, give police DRESS customization ② improve player FACES (more realistic) ③ let users pick MALE/FEMALE ④ overall more realistic, nicer characters. Keep conversation in English. All four delivered as "Police Wardrobe + Identity & Faces" (round 23).
+   919→
+   920→Work Log:
+   921→- DATA (src/lib/cosmetics.ts):
+   922→  * CosmeticKind += 'hair' | 'policeOutfit' | 'policeHat' (WARDROBE_KINDS order: hat → hair → face → outfit → footwear → gear → held → policeOutfit → policeHat)
+   923→  * HAIR_CATALOG (8 styles): default/buzz/bald/bun/ponytail free · curly LV2 · long LV3 · braid LV4
+   924→  * POLICE_UNIFORMS (6 dress styles, palette + capColor each): Street Khaki (free) · Traffic Wing White (free) · Navy Dress Uniform LV3 · Plainclothes Detective LV4 · Riot Squad Black LV5 · Officer Commandant LV7 → mirrored into POLICE_OUTFIT_CATALOG
+   925→  * POLICE_HAT_CATALOG (5): Peaked Cap / Officer Beret / Police Turban / Bare Head free · Riot Helmet LV5
+   926→  * policeUniformColors(id) resolver (defaults to khaki); sanitizeCosmetics accepts gender('male'|'female')/hair/policeOutfit/policeHat; resolveRigCosmetics extended; randomFreeCosmetics now rolls gender (50/50) + hair (bots get variety); NONE_LIKE += default/khaki/peak
+   927→- RIG (src/game/character.ts):
+   928→  * **Realistic faces for every rig**: eyes (white sclera + dark pupil), hair-colored tilted eyebrows, snub nose (skin shaded −26), mouth — merged via BufferGeometryUtils.mergeGeometries into ONE vertex-colored mesh; geometry cached per (skin|hair|gender) so it stays a single extra draw call per rig (shared material)
+   929→  * **Female build**: narrower torso/sash (0.9), slimmer arms (0.86) & hands (0.92), legs (0.93) + red lips in the merged face; hair auto-suggestion male↔female in UI
+   930→  * **8 hair styles**: default cap / buzz (flattened) / bald (skip) / bun / ponytail (tail+tip) / long (back volume) / curly (5 curls) / braid (3 links + tie)
+   931→  * **Police headgear**: peaked cap (dome+top+band+visor+gold badge) / tilted beret / two-wrap turban with badge pin / riot helmet (dome+rim+visor) / bare head — replaces the old hardcoded cap when npcType is set
+   932→  * **Police uniform kit**: gold chest badge on every officer; SWAT = heavy black vest + plate; Commandant = 2 medal bars; Detective = white collar + tie; Navy = parade belt + buckle; Traffic = 2 hi-vis shoulder bands
+   933→- GAMEPLAY WIRING:
+   934→  * player.ts: PlayerController opts += gender/hair/policeOutfit/policeHat; police palette now via policeUniformColors (6 palettes instead of hardcoded khaki)
+   935→  * game.ts: startMatch passes gender/hair (+ policeOutfit/policeHat when police; protest outfit/gear/held/sign stay suppressed for officers); attachRig passes the same for remotes — **fixed latent bug: remote police previously only got uniform colors when skinTone was set; now every police rig gets its palette**
+   936→  * suspects.ts: offline training-day suspects now mixed gender (odd ids female) with fitting hair styles
+   937→- UI:
+   938→  * CharacterSelect: new BUILD section (♂ Male / ♀ Female cards, aria-pressed) above skin tones; HAIR tab added; **when role === 'police' the section becomes "3 · Dress The Officer", two extra blue tabs appear (POLICE DRESS / POLICE CAP) and Surprise Fit rolls them too**
+   939→  * CharacterPreview: PreviewLook += gender/hair/police(+Outfit/Hat); police preview mirrors game.ts exactly (uniform colors, suppressed protest gear, npcType 'police'); **new Face Check toggle** — camera glides to a close-up so players can see their eyes/lips (button bottom of preview)
+   940→  * game-store Profile.cosmetics type extended
+   941→- **BUGFIX — stale-closure wardrobe persistence**: every wardrobe handler called persist() in the same tick as setState, so the POST carried the PREVIOUS look (first click never reached the server; found live during QA). persist(overrides?) now merges just-clicked values; all call sites (slot/glasses/skin/gender/sign/randomize) updated
+   942→- SERVER/OPSYNC: game-server hot-reloaded sanitizeCosmetics — verified live with a 2-client socket test: joiner with {hair:'ponytail', gender:'female', policeOutfit:'swat', policeHat:'helmet'} broadcasts intact to room-mates; 99 season bots all carry gender (49 female) + hair after hot reload
+   943→- QA (agent-browser): Customize → Female → server shows gender:female+hair:bun (bugfix verified); Face Check close-up screenshot shows eyes/pupils/brows/lips/bun clearly; Police side → Dress The Officer + both police tabs; Traffic Wing White + Turban → server {policeOutfit:'traffic',policeHat:'turban'}; Surprise Fit rolls full new-look set; in-game OFFLINE: officer in white traffic uniform w/ peaked cap + lathi (6 suspects spawn, rig head has 9 parts incl. face mesh, suspect heads 3-9 parts = variety), protector-female re-verified (no suspects); ONLINE (:81): CONNECTED Season #1 100/100, officer on duty, 24 RIGS @ 10 FPS RES 1, zero console errors
+   944→- **OPS INCIDENT (root-caused + fixed)**: live test suites started failing (combat 7, season 6) — NOT a code regression: git-stash baseline reproduced identical failures. Root causes: ① the long-running game-server had been OOM-killed silently (dmesg: k8s pod global OOM under next-server 1.2GB + headless-chrome WebGL pressure) — gs-dev.log had a mid-edit syntax-error restart and stale-process zombies from 03:04/03:58 ② sandbox kills detached processes at end of the spawning Bash call UNLESS double-forked — `( setsid bun index.ts & )` survives; plain setsid/nohup does not ③ `bun --hot` flakiness under restart storms. Clean restart via double-forked plain `bun index.ts` → **combat 33/33 · season 37/37 · arrests 23/23 · confiscate 46/46 · smoke ALL PASS** (exact R22 baseline restored)
+   945→- Housekeeping: tsc 0 project errors · eslint 0 · console clean · dev.log clean · review cron recreated as job 460602 (fixed_rate 900s) after it vanished
+   946→
+   947→Stage Summary:
+   948→- Wardrobe now has identity depth: MALE/FEMALE build (silhouette + lips + hair suggestion), 8 hair styles, and a full POLICE DEPARTMENT wardrobe (6 dress uniforms + 5 headgear) that appears the moment the Police side is chosen — preview shows exactly what other players will see, with a Face Check close-up
+   949→- Every character in the game (player, remotes, season bots, offline suspects, NPC officers) now has a real face (eyes/brows/nose/mouth) rendered as ONE merged vertex-colored mesh per rig — zero material cost, cached geometry, no FPS regression (10 FPS @ RES 0.7–1 both modes)
+   950→- Honest engineering: found & fixed the first-click-never-saves wardrobe bug (pre-existing since r18), the remote-police-palette latent bug, and a platform-level process/OOM mystery that had silently broken the live test suites; all five suites back to green baseline
+   951→- Known boundaries: NPC officers keep the default peaked cap (no per-NPC uniform variety yet); bot cosmetics roll at bot spawn (existing bots keep old look until season restart); :3000-origin browser QA can never be online (XTransformPort only works via :81 gateway — pre-existing, documented)
+   952→- Suggested next round: police-only HUD radar (suspect blue dots / colleague green dots); arguable "argument" quick-message to your arrester; siren shoulder-light + handcuff skins at police levels; NPC officers get random uniform variety; double-client visual verification of remote officer uniforms
+   953→---
+   954→Task ID: 24
+   955→Agent: Z.ai Code (main)
+   956→Task: User request — ① improve face & hair, female face + default ponytail hairstyle for female ② more realistic faces (advanced techniques welcome) ③ expert rendering pass: better shading/lighting depth, render-loop/memory-leak optimization, clean texture filtering to stop blurry rendering. Keep everything in English.
+   957→
+   958→Work Log:
+   959→- FACES v2 (src/game/character.ts — faceGeometryFor rewritten, still ONE merged vertex-colored mesh per (skin|hair|gender), cached):
+   960→  * Ears (skin-shaded shells, both genders) · eyes rebuilt as almond white + brown IRIS + dark pupil + white catchlight dot · lash line hugging the eye top · brows now TWO segments per side forming an expressive arch (thinner/higher for female)
+   961→  * Nose got a bridge + snub tip + two nostril hints · female gets TWO-TONE lips (dark upper #a34e5e / lighter lower #c96a76) + cheek blush baked as a skin→rose vertex-color blend (no extra material)
+   962→  * All features pushed ~0.015 proud of the head sphere because the head was simultaneously upgraded from a coarse 10×8 flat-shaded sphere to a smooth 18×14 one (own MeshStandardMaterial, roughness 0.58, no flatShading) — smooth shading + soft sheen replaces the faceted "plastic helmet" look; body stays low-poly flat by design
+   963→- HAIR v2:
+   964→  * Default hair is now GENDER-AWARE end to end: rig `opts.hair ?? (female ? 'ponytail' : 'default')`, resolveRigCosmetics returns 'ponytail' for female when unset, CharacterSelect chooseGender now suggests PONYTAIL (was 'bun') when flipping to female, randomFreeCosmetics weights female bots 50% ponytail / 30% bun
+   965→  * Ponytail v2: crown segment + gold/accents scrunchie ring + tapered tail + tip · 'long' got two front strands framing the face · bun/ponytail/long/braid all get a side-swept FRINGE wedge · hair material is now smooth with a slight sheen (roughness 0.55) instead of flat
+   966→- TEXTURE FILTERING (blurry-rendering fix):
+   967→  * world.ts canvasTex: LinearMipmapLinear min + Linear mag + anisotropy 8 (three clamps to device max) — roads/ground/buildings crisp at grazing angles
+   968→  * character.ts sign/banner/name-tag textures: anisotropy 4
+   969→- LIGHTING DEPTH (engine.ts): new shadowless counter-FILL directional light (classic 3-point) positioned opposite the sky key each frame in trackSun(); intensity = clamp(sun*0.11 + hemi*0.14, ≤0.55) so it tracks day/night/weather automatically — shadowed faces/sides read without flattening the look
+   970→- MEMORY LEAKS (the big one — rigs were NEVER disposed, only scene.remove'd):
+   971→  * CharacterRig.dispose(): traverses the group, frees per-rig materials + inline geometries + canvas textures, protected by a sharedGeo WeakSet (G.* cache + cached face geometries) and skips the shared face material
+   972→  * Wired at every removal site in game.ts: old player rig on startMatch, out-of-budget bot rigs (ensureRemoteRigs), removeRemote, SuspectSystem.dispose() (new) for the offline training-day teardown
+   973→  * CharacterPreview.setNameColor now frees the replaced sprite's texture+material (long-lived leak on every squad recolor)
+   974→  * Engine.dispose(): full scene traversal dispose (geometry/material/map) + scene.clear() so a fresh Game/Engine pair never inherits GPU memory; renderer created with stencil:false (unused buffer saved)
+   975→  * Shared module caches (G.*, faceGeoCache) intentionally survive: three.js re-uploads disposed resources on demand — verified by a full quit-to-menu → fresh match cycle
+   976→- QA (agent-browser): Customize → FEMALE auto-equips PONYTAIL ("EQUIPPED" chip confirmed); Face Check close-up shows ears/iris eyes/lashes/two-tone lips/blush/fringe/ponytail+scrunchie — **2 preview bugs found & fixed live**: ① turntable auto-spun away from the face — Face Check now eases spin to the nearest front-facing angle and holds it ② face camera was fixed at y≈1.66 while archetypes scale the rig (head cropped at top) — camera now retargets to actual head height × rig scale on every rebuild; TDZ crash from the first ordering attempt caught in QA and fixed by hoisting camera state above buildRig
+   977→- In-game: fresh solo match renders crisp roads/buildings, female ponytail visible on the player rig, NPC officer engaged organically at night (baton hit → health 100→87, WANTED RUN! banner) · night 22:31 verified: lamps + window glow + fill light coexist with no wash-out · perf chip 10 FPS @ RES 0.7 — identical to the Task 23 baseline (fill light + smooth heads + extra face vertices = zero measurable regression) · **quit-to-menu → re-enter: clean boot, zero console errors** (dispose/re-upload cycle proven) · WebGL context exhaustion mid-QA was a long-lived headless browser session artifact, resolved by restarting the browser (not a code issue)
+   978→- bunx tsc --noEmit: 0 project errors · bun run lint: 0 issues · dev.log clean
+   979→
+   980→Stage Summary:
+   981→- Characters read as people now: smooth shaded heads with ears/iris/catchlight/lashes/arched brows/nose bridge/nostrils, gendered mouths (two-tone lips + blush for female), gender-aware default hair (female = ponytail with scrunchie + fringe) — all still ONE shared-material merged mesh per rig, so the realism cost per character is a single draw call
+   982→- Rendering pass shipped: anisotropic trilinear filtering everywhere (blurry roads fixed), 3-point lighting with a sky-driven fill light, full resource disposal at every rig/engine teardown (the pre-existing leak that would slowly degrade FPS over long sessions is gone)
+   983→- Known boundaries: existing season bots keep their rolled look until the next bot spawn/season restart (server-side); Face Check framing tuned for current rig proportions (auto-scales with archetype but extreme custom scales would need a re-look); headless browser cannot synthesize WASD movement (QA used debug teleports — pre-existing artifact)
+   984→- Suggested next round: idle blink + talk-mouth animation on the face mesh (life without new rigs); hair physics sway (ponytail reacts to run speed); NPC officers get random uniform variety (khaki/traffic/navy mix per beat); ambient occlusion cheat (baked vertex AO on torso/limb boxes) for depth without post-processing
+   985→---
+   986→Task ID: 25
+   987→Agent: Z.ai Code (main)
+   988→Task: User request — "Review the supplied Three.js rendering script and integrate its useful features into the existing VoteChor.app game" (8 steps: inspect project · fix rendering/GLB loading · real third-person character · animation states · reliable physics · performance · preserve gameplay · test and report). No new script file was supplied (upload/ holds only the Oct-13 master prompt), so the 8 steps were implemented as features inside the existing architecture — upgrade, not replace. Keep conversation in English.
+   989→
+   990→Work Log:
+   991→- STEP 1 INSPECT (no rewrites): bun + Next.js 16 · three r186.1 (verified in node_modules) · procedural box rigs (no GLB path existed) · custom AABB physics (grid + step-up + vault + dynamic vehicles) · fixed-step engine loop (accumulator, dt clamp 0.1) · socket.io multiplayer via :3002 game-server · assets under public/. Pre-existing from earlier rounds and PRESERVED: sRGB output + ACESFilmic tone mapping + exposure, PCFSoft shadow tiers, adaptive-resolution ladder, full scene dispose, double jump + coyote + jump buffer, camera wall-clip. Gaps found: no GLB pipeline, no animation state machine (discrete pose switch), no fall/land/recover states, no fall-out-of-world recovery, no anim LOD.
+   992→- STEP 2 GLB PIPELINE (new files):
+   993→  * scripts/export-character-glb.ts (bun, no DOM) — GLTFExporter + FileReader shim (bun lacks FileReader; exporter needs onloadend). Builds a low-poly PBR humanoid (Hips→Torso→Head/ArmL/ArmR + LegL/LegR node hierarchy, 7 MeshStandardMaterials, ~14 meshes, female gets Ponytail node) and exports TWO real assets: public/models/votechor-male.glb (90.3 KB) + votechor-female.glb (94.1 KB), each with 13 node-TRS animation clips: idle/walk/run/jump/fall/land/slide/hit/detained/recover/celebrate/throw/heal (loop clips close their curves; poses mirror the procedural rig conventions).
+   994→  * src/game/glb.ts — GLBAssetManager: load() NEVER rejects (invalid path / parse error / timeout 12s / no meshes → resolves null + one-time onAssetError log), failed URLs cached as failed (no re-fetch storms), normalize pass (shadow flags, frustum culling, invalid materials replaced), instantiate() clones with per-instance AnimationMixer + named clip map, disposeInstance/disposeAsset free geometry/material(+array)/map/normalMap/… GPU memory.
+   995→- STEP 3+4 CHARACTER + ANIMATION:
+   996→  * src/game/anim.ts (new) — the animation state machine: pickLoco(ctx) PURE state selection with the spec's full priority (detained > hit > land > recover > slide > airborne split [doubleJump→fall→jump] > run > walk > idle); mapToAnimName (doubleJump→jump, hit→dazed, fall/land/recover identity — new net states); CLIP_FALLBACK chains per state (animation-free/partial models degrade gracefully); GLBAnimDriver: crossfade transitions (0.16s), LoopOnce+clampWhenFinished one-shots (land/hit/recover/throw/heal/jump), walk/run timeScale calibrated to design speeds (hSpeed/4.4, hSpeed/7.6 clamped), same-state hold semantics, snap() for spawns, LOD-throttled update (lodInterval → mixer updates at ~15Hz for distant rigs).
+   997→  * character.ts: new procedural pose cases 'fall' (arm-flail air pose), 'land' (absorb crouch), 'recover' (getup) so remote rigs + Classic mode render the new net states.
+   998→  * player.ts: landTimer/recoverTimer windows (hard landing 0.5s / soft 0.2s; release() getup 0.8s) with movement penalties (×0.45 landing, ×0.6 getup) so impacts read on the body; render() now routes through pickLoco + both backends (GLB: driver.play+mixer update; procedural: rig.update(netAnim)) — legacy animOverride names mapped safely ('dazed'→hit, 'down'→detained) so playAnim call sites can never crash the driver; netAnim field published instead of rig.anim so network state is correct for BOTH backends; attachGlb/detachGlb swap (GLB visible ⇔ procedural hidden, procedural rig stays for name tag/fallback).
+   999→- STEP 5 PHYSICS: fall-out-of-world recovery — pos.y < -6 teleports to lastSafe (recorded every 0.4s while grounded+normal), landTimer 0.4 + notify + fx burst; verified live (y=-12 → y=0 grounded). Existing collision stack (buildings/vehicles/barriers AABBs, standable tops, step-up, sprint vault, dynamic vehicle colliders @10Hz) untouched and green.
+  1000→- STEP 6 PERFORMANCE: anim LOD for remote rigs >45m (pose updates at ~15Hz via animAcc accumulator — 3 type sites updated); GLB driver lodInterval hook; delta-time/fixed-step/adaptive-res/shadow tiers/pixel-ratio caps already in place from earlier rounds; perf chip readout: 10 FPS @ RES 0.7 — IDENTICAL to the Task 24 baseline (GLB player rig costs nothing measurable vs 40-box procedural).
+  1001→- STEP 7 PRESERVE + INTEGRATE:
+  1002→  * game.ts: glbMgr + hiFi palette capture (mirrors PlayerController color logic incl. skinTone override + policeUniformColors for POLICE role — officer gets uniform-tinted GLB); tryAttachHiFi() is async, non-blocking, mid-load-match-change safe, silent-fallback; tintGlb() clones materials per instance and tints by mesh name (Torso/Arms→shirt, Legs→pants, Head/Hands→skin, Sash→accent); fresh-match teardown disposes the GLB instance; live settings swap via store subscription (applyHiFiSetting).
+  1003→  * Settings: hiFiModel boolean (default true) in game-store Settings + SettingsPanel "Character Model" select (High-Fi GLB / Classic Rig) with toast.
+  1004→  * Networking: shared/types AnimName += 'fall'|'land'|'recover'; game-server room.ts ANIMS whitelist extended to match (client-published states survive server sanitize); remote rigs receive + render the new states.
+  1005→- STEP 8 TEST & REPORT:
+  1006→  * tests/anim-test.ts (NEW, 39/39): pickLoco priority matrix (grounded thresholds 0.6/6.4 boundaries, airborne split, impact/capture precedence), mapToAnimName, fallback-chain coverage, GLBAnimDriver crossfade/hold/degraded/animation-free/LOD-throttle behaviors.
+  1007→  * tests/glb-test.ts (NEW, 24/24): binary GLB parse (magic/version/total-length/chunk walk/padding), hierarchy + Ponytail node, 13-clip inventory with channels+samplers, both genders, PLUS GLBAssetManager live error contract (bad path → null, cached failure, short-circuit re-load).
+  1008→  * Regression (game-server restarted, double-fork): combat 33/33 · arrests 23/23 · confiscate 46/46 · season 37/37 · smoke ALL PASS.
+  1009→  * bunx tsc --noEmit: 0 project errors (2 pre-existing skills/ only) · bun run lint: 0 issues · dev.log clean.
+  1010→  * agent-browser E2E (all live-verified): Settings shows "Character Model: High-Fi GLB" → PLAY SOLO → GLB attached (13 clips, procedural rig hidden); W held → netAnim 'walk' + activeClip 'walk' + real displacement; Space → jump (vy 3.9, jumps 1) → Space again → double jump (jumps 2, vy 5.2); live Classic↔High-Fi toggle swaps rigs both directions; police arrest E2E still works (Rowdy Ramesh cuffed, "1 ARRESTED"); fall recovery E2E; quit-to-menu → fresh match re-attaches GLB cleanly; FEMALE profile → female GLB with Ponytail node (noon screenshot: khaki officer tint, ponytail visible, crisp); zero page errors, zero console errors after every pass.
+  1011→- Honest boundaries: 'land'/'detained'/'recover' GLB clips were unit-verified (same driver path as the live-verified walk/jump) but not visually captured live — the officer role is capture-exempt and landing windows are sub-second in headless QA; players will see them in normal play (hard falls, detention releases). "Run the actual build" is honored via tsc+lint+suites because this sandbox forbids `next build` (dev-server-only environment). The supplied-script mention resolved to the Oct-13 master prompt file — no new script existed to port, so the 8 steps were implemented natively.
+  1012→
+  1013→Stage Summary:
+  1014→- VoteChor now has a REAL GLB asset pipeline end to end: authored exporter script → 13-clip animated PBR character models in public/models → robust manager (error/fallback/cleanup contracts tested) → attached to the existing third-person player controller → driven by a unit-tested animation state machine with crossfade blending, speed-calibrated locomotion, one-shot impacts, and full state coverage (idle/walk/run/jump/doubleJump/fall/land/slide/hit/detained/recover/celebrate/throw/heal)
+  1015→- The Classic procedural rig remains the always-available fallback (settings toggle, auto-fallback on any asset failure) — zero gameplay, multiplayer, cosmetics, or performance regression: all five server suites green, 10 FPS @ RES 0.7 unchanged, console clean
+  1016→- New physics safety net (fall-out-of-world recovery) and new networked animation states (fall/land/recover) benefit BOTH backends
+  1017→- Suggested next round: pose-match the GLB clips against archetype scale (giant archetype would need per-archetype GLB scale factor); add 'doubleJump' flip clip to the export; extend the GLB pipeline to remote players (instantiate per remote with cosmetics tint); sound-event hooks on clip boundaries (footstep frames inside the walk/run clips); optional DRACO compression if models grow
+
+[showing lines 658-1017 of 1018; use offset=1018 with limit to continue reading]

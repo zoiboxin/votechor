@@ -20,6 +20,7 @@ const TIPS = [
 export default function SquadPanel() {
   const squadOpen = useGameStore((s) => s.squadOpen)
   const toggleSquad = useGameStore((s) => s.toggleSquad)
+  const squadPanelOn = useGameStore((s) => s.settings.squadPanel)
   const hud = useGameStore((s) => s.hud)
   const squad = useGameStore((s) => s.squad)
   const matchMode = useGameStore((s) => s.matchMode)
@@ -37,7 +38,10 @@ export default function SquadPanel() {
     return () => window.clearInterval(t)
   }, [squadOpen])
 
-  if (!squadOpen) return null
+  // v42 — Options → Interface can disable the squad panel entirely (the Tab key
+  // becomes a no-op with a one-time reminder from the engine); the component then
+  // renders nothing at all.
+  if (!squadOpen || squadPanelOn === false) return null
 
   const copyCode = async () => {
     if (!squad?.code) return
@@ -77,11 +81,18 @@ export default function SquadPanel() {
   const squadById = new Map((squad?.members ?? []).map((m) => [m.id, m]))
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center">
+    /* v42 — docked to the RIGHT edge of the screen (was a centered modal): the
+       panel stays put over the top-right HUD stack, out of the crosshair, and
+       slides in from the right. Narrow screens keep a small gutter.
+       v46 — z-[45]: above the touch drag-to-look layer (z-30, later in the DOM
+       with equal z would win the stacking contest and swallow taps on the
+       right-docked panel — the modal was half-dead on touch devices). Width and
+       padding tighten on phones; the 8-bullet field manual is desktop-only. */
+    <div className="pointer-events-none fixed inset-0 z-[45] flex items-center justify-end pr-2 sm:pr-5">
       <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="vc-paper pointer-events-auto max-h-[86vh] w-[min(430px,92vw)] overflow-y-auto vc-scroll rounded-2xl border-2 border-[#1c1a17]/80 p-4 shadow-[6px_6px_0_rgba(28,26,23,0.85)]"
+        initial={{ opacity: 0, scale: 0.96, x: 26 }}
+        animate={{ opacity: 1, scale: 1, x: 0 }}
+        className="vc-paper pointer-events-auto max-h-[86dvh] w-[min(340px,92vw)] overflow-y-auto vc-scroll rounded-2xl border-2 border-[#1c1a17]/80 p-3 shadow-[6px_6px_0_rgba(28,26,23,0.85)] sm:w-[min(430px,92vw)] sm:p-4"
       >
         <div className="mb-2 flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-base font-black uppercase tracking-tight text-[#1c1a17]">
@@ -131,11 +142,11 @@ export default function SquadPanel() {
                     </button>
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-y-1.5">
                   <span className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/50">
                     {squad.members.length}/4 members · share the code or link
                   </span>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     {/* gifting perk — hand an item to the nearest live teammate (§11) */}
                     <button
                       onClick={() => uiActions().giftNearest()}
@@ -268,7 +279,7 @@ export default function SquadPanel() {
                 </span>
                 <span className="text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/40">{ordered.length} in season</span>
               </div>
-              <div className="vc-scroll max-h-52 space-y-1 overflow-y-auto pr-1">
+              <div className="vc-scroll max-h-36 space-y-1 overflow-y-auto pr-1 sm:max-h-52">
                 {ordered.map((p) => (
                   <div
                     key={p.id}
@@ -398,7 +409,9 @@ export default function SquadPanel() {
           </div>
         )}
 
-        <div className="mt-3 space-y-1 rounded-xl border-2 border-dashed border-[#8c1f28]/40 bg-[#f2c14e]/25 p-2.5">
+        {/* v46 — the field manual is a desktop nicety; on phones it cost ~220px of
+            an already height-tight panel. Hidden below sm. */}
+        <div className="mt-3 hidden space-y-1 rounded-xl border-2 border-dashed border-[#8c1f28]/40 bg-[#f2c14e]/25 p-2.5 sm:block">
           <div className="flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">
             <KeyRound className="h-3 w-3" /> Squad field manual
           </div>
@@ -406,7 +419,7 @@ export default function SquadPanel() {
             <p key={i} className="text-[10px] font-semibold leading-snug text-[#1c1a17]/75">• {t}</p>
           ))}
         </div>
-        <p className="mt-1.5 text-center text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/40">Tab to close</p>
+        <p className="mt-1.5 hidden text-center text-[9px] font-bold uppercase tracking-widest text-[#1c1a17]/40 sm:block">Tab to close</p>
       </motion.div>
     </div>
   )

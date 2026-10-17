@@ -153,8 +153,9 @@ export class SkySystem {
   timeMode: TimeMode = 'cycle'
   /** settings.weatherMode — 'auto' runs the weather state machine */
   weatherMode: WeatherMode = 'auto'
-  /** seconds for a full 24h cycle when timeMode = 'cycle' */
-  dayLength = 420
+  /** seconds for a full 24h cycle when timeMode = 'cycle' — v38: 20 real minutes
+   *  (was 420 s / 7 min, which the player felt was far too short). */
+  dayLength = 1200
   /** fired at the moment a lightning flash starts (game wires HUD flash + thunder) */
   onLightning: (() => void) | null = null
   /** current normalized light direction (sun by day, moon by night) — engine reads this */
@@ -163,7 +164,9 @@ export class SkySystem {
   timeOfDay = 10.5 // hours [0,24)
   weather: WeatherKind = 'clear'
   private targetWeather: WeatherKind = 'clear'
-  private wTimer = 40 + Math.random() * 60
+  // v38 — weather states last minutes, not seconds (was 40–100 s: skies flipped
+  // before the player could even read the HUD chip). First roll 2.5–7.5 min.
+  private wTimer = 150 + Math.random() * 180
 
   // smoothed weather params (approach the target def exponentially → free transitions)
   private cur = { ...WEATHER.clear }
@@ -388,7 +391,7 @@ export class SkySystem {
     if (m === this.weatherMode) return
     this.weatherMode = m
     if (m !== 'auto') this.targetWeather = m
-    this.wTimer = 45 + Math.random() * 70
+    this.wTimer = 150 + Math.random() * 180
   }
 
   /** Human-readable environment info for the HUD chip. */
@@ -417,15 +420,22 @@ export class SkySystem {
     this.camPos.copy(camPos)
 
     // ---- clock ----
+    // v38 — long days: daytime hours (06:00–20:00) advance at 5/6 rate so the sun
+    // lingers and night takes a long, visible stretch of play to arrive; night hours
+    // hurry by at 25/18 rate (nights were already the complained-about dark stretch).
+    // Weights are normalized (14·⅚ + 10·²⁵⁄₁₈ = 24) so the full period is exactly
+    // dayLength: daylight gets 70% of the wall-clock cycle, night 30%.
     if (this.timeMode === 'cycle') {
-      this.timeOfDay = (this.timeOfDay + (dt / this.dayLength) * 24) % 24
+      const w = this.timeOfDay >= 6 && this.timeOfDay < 20 ? 5 / 6 : 25 / 18
+      this.timeOfDay = (this.timeOfDay + (dt / this.dayLength) * 24 * w) % 24
     }
 
     // ---- weather state machine ----
     if (this.weatherMode === 'auto') {
       this.wTimer -= dt
       if (this.wTimer <= 0) {
-        this.wTimer = 50 + Math.random() * 75
+        // v38 — 3.5–7.5 min between weather changes (was 50–125 s)
+        this.wTimer = 210 + Math.random() * 240
         const opts = NEXT_WEATHER[this.targetWeather]
         let roll = Math.random()
         for (const [kind, p] of opts) {

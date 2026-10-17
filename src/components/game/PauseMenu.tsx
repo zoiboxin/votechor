@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useGameStore, uiActions } from '@/lib/game-store'
 import { Play, Settings, BookOpen, LogOut, Vote, Camera } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -14,6 +14,30 @@ export default function PauseMenu() {
   const [howtoOpen, setHowtoOpen] = useState(false)
   const matchTime = useGameStore((s) => s.hud.matchTime)
   const tokens = useGameStore((s) => s.hud.tokens)
+
+  // v35 — ESC resumes. While paused the engine input is DISABLED (so its own
+  // toggle can never fire), which meant the modal could only ever be dismissed
+  // with the Resume button — a second ESC looked like "nothing happened".
+  // Capture-phase so it wins over page listeners; gated while a nested dialog
+  // (Settings / How to Play) is open, since those consume ESC themselves.
+  // v36 — timeStamp guard: when the pointer was never locked (headless / some
+  // embeds), a single Escape keydown pauses the game AND React synchronously
+  // mounts this menu mid-dispatch, so this listener used to receive the SAME
+  // keydown and instantly resume — ESC looked dead. The opening keydown's
+  // timeStamp always predates this effect, so ignore anything not strictly
+  // newer; a genuine later Escape (timeStamp > armedAt) still resumes.
+  useEffect(() => {
+    const armedAt = performance.now()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Escape' || settingsOpen || howtoOpen) return
+      if (e.timeStamp && e.timeStamp <= armedAt) return
+      e.preventDefault()
+      e.stopPropagation()
+      resume()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [settingsOpen, howtoOpen])
 
   const btn =
     'flex w-full items-center gap-3 rounded-2xl border-2 border-[#1c1a17]/80 px-4 py-3 text-left text-sm font-black uppercase tracking-tight shadow-[4px_4px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17]'

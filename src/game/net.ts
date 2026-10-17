@@ -11,6 +11,7 @@ export interface JoinPayload {
   roomCode: string | null
   cosmetics?: Record<string, unknown>
   season?: boolean // solo queue → persistent Season (99 backfill bots)
+  role?: 'protector' | 'police' // police → officer rig + arrest powers, NPC officers stand down
 }
 
 /** Season metadata from the server (join ack + game:season updates). */
@@ -48,6 +49,10 @@ export type NetEvents = {
   onItems: (items: ItemNetState[]) => void
   onBoss: (boss: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) => void
   onCapture: (playerId: string, until: number, message: string, lostTokens?: number) => void
+  /** Police role: server confirmed one of OUR arrests (honest counting). */
+  onArrested: (targetId: string, targetName: string, totalArrests: number) => void
+  /** Police-role baton strike (F) landed somewhere in the room — swing anim + impact FX. */
+  onStrike: (fromId: string, targetId: string, x: number, z: number) => void
   onRelease: (playerId: string, x: number, z: number) => void
   onDropped: (drops: DroppedItemNetState[]) => void
   onDropTaken: (itemId: string, byId: string, byName: string) => void
@@ -56,8 +61,11 @@ export type NetEvents = {
   onProjectile: (p: { id: string; type: string; x: number; y: number; z: number; vx: number; vy: number; vz: number }) => void
   onEmote: (playerId: string, emote: string) => void
   onQuickMsg: (playerId: string, msgId: number) => void
+  onChat: (playerId: string, name: string, text: string) => void
+  /** v45 — a room-mate shouted/whistled at (x, z): spatially audible to everyone near. */
+  onShout: (playerId: string, x: number, z: number, whistle: boolean, line: string) => void
   onPlayerLeft: (playerId: string, name: string) => void
-  onPlayerJoined: (playerId: string, name: string, archetype?: string, cosmetics?: Record<string, string | boolean>) => void
+  onPlayerJoined: (playerId: string, name: string, archetype?: string, cosmetics?: Record<string, string | boolean>, role?: 'protector' | 'police') => void
   onHealth: (playerId: string, health: number, dazed: boolean) => void
   onDamage: (playerId: string, amount: number, kind: string) => void
   onMatchEnd: (payload: MatchEndPayload) => void
@@ -140,6 +148,8 @@ export class NetClient {
         socket.on('game:items', (i: ItemNetState[]) => this.ev.onItems?.(i))
         socket.on('game:boss', (b: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) => this.ev.onBoss?.(b, ballots))
         socket.on('game:capture', (playerId: string, until: number, message: string, lostTokens?: number) => this.ev.onCapture?.(playerId, until, message, lostTokens))
+        socket.on('game:arrested', (targetId: string, targetName: string, total: number) => this.ev.onArrested?.(targetId, targetName, total))
+        socket.on('game:strike', (fromId: string, targetId: string, x: number, z: number) => this.ev.onStrike?.(fromId, targetId, x, z))
         socket.on('game:release', (playerId: string, x: number, z: number) => this.ev.onRelease?.(playerId, x, z))
         socket.on('game:dropped', (drops: DroppedItemNetState[]) => this.ev.onDropped?.(drops))
         socket.on('game:dropTaken', (itemId: string, byId: string, byName: string) => this.ev.onDropTaken?.(itemId, byId, byName))
@@ -148,8 +158,10 @@ export class NetClient {
         socket.on('game:projectile', (p: { id: string; type: string; x: number; y: number; z: number; vx: number; vy: number; vz: number }) => this.ev.onProjectile?.(p))
         socket.on('game:emote', (playerId: string, emote: string) => this.ev.onEmote?.(playerId, emote))
         socket.on('game:quickmsg', (playerId: string, msgId: number) => this.ev.onQuickMsg?.(playerId, msgId))
+        socket.on('game:chat', (playerId: string, name: string, text: string) => this.ev.onChat?.(playerId, name, text))
+        socket.on('game:shout', (playerId: string, x: number, z: number, whistle: boolean, line: string) => this.ev.onShout?.(playerId, x, z, whistle, line))
         socket.on('game:playerleft', (playerId: string, name: string) => this.ev.onPlayerLeft?.(playerId, name))
-        socket.on('game:playerjoined', (playerId: string, name: string, archetype?: string, cosmetics?: Record<string, string | boolean>) => this.ev.onPlayerJoined?.(playerId, name, archetype, cosmetics))
+        socket.on('game:playerjoined', (playerId: string, name: string, archetype?: string, cosmetics?: Record<string, string | boolean>, role?: 'protector' | 'police') => this.ev.onPlayerJoined?.(playerId, name, archetype, cosmetics, role))
         socket.on('game:health', (playerId: string, health: number, dazed: boolean) => this.ev.onHealth?.(playerId, health, dazed))
         socket.on('game:damage', (playerId: string, amount: number, kind: string) => this.ev.onDamage?.(playerId, amount, kind))
         socket.on('game:matchend', (payload: MatchEndPayload) => this.ev.onMatchEnd?.(payload))
@@ -197,12 +209,29 @@ export class NetClient {
   pickupItem(itemId: string) { this.socket?.emit('game:pickup', { itemId }) }
   /** Detained: report inventory cards for police confiscation (server drops them as loot). */
   confiscateInventory(types: string[]) { this.socket?.emit('game:confiscate', { items: types }) }
+  /**
+   * Report a player-initiated ground drop: a deliberately dropped inventory item
+   * (HUD right-click) or a thrown item's landing spot. The server validates +
+   * registers it in its drop registry and relays game:dropped to the WHOLE room
+   * (including us — the relay is the single spawn source, so no client-side dupes).
+   */
+  dropItem(type: string, x: number, z: number) { this.socket?.emit('game:dropItem', { type, x, z }) }
   throwItem(type: string, x: number, y: number, z: number, vx: number, vy: number, vz: number) {
     this.socket?.emit('game:throw', { type, x, y, z, vx, vy, vz })
   }
   noiseEvent(x: number, z: number) { this.socket?.emit('game:noise', { x, z }) }
+  /** v45 — relay my shout/whistle so the rest of the room hears it spatially. */
+  shoutEvent(x: number, z: number, whistle: boolean, line: string) {
+    this.socket?.emit('game:shout', { x, z, whistle, line })
+  }
+  /** Police role: request to detain the nearest suspect — server validates range/role/cooldown. */
+  arrest(targetId: string) { this.socket?.emit('game:arrest', { targetId }) }
+  /** Police role: lathi strike (F) — server validates and applies the damage. */
+  strike(targetId: string) { this.socket?.emit('game:policeHit', { targetId }) }
   emote(emote: string) { this.socket?.emit('game:emote', { emote }) }
   quickMsg(msgId: number) { this.socket?.emit('game:quickmsg', { msgId }) }
+  /** v44 — free-text chat line (server sanitizes + rate-limits, then relays to the room). */
+  chat(text: string) { this.socket?.emit('game:chat', { text }) }
   reviveTarget(targetId: string) { this.socket?.emit('game:revive', { targetId }) }
   healTarget(targetId: string) { this.socket?.emit('game:heal', { targetId }) }
   bossHit() { this.socket?.emit('game:bossHit', {}) }

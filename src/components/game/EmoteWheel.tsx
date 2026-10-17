@@ -39,21 +39,7 @@ export default function EmoteWheel() {
     return () => { alive = false; window.clearInterval(iv); window.removeEventListener('focus', load) }
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'Escape' || e.code === 'KeyG') {
-        e.preventDefault()
-        toggle(false)
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [open, toggle])
-
   const unlocked = useMemo(() => unlockedEmoteIds(level, codes), [level, codes])
-
-  if (!open) return null
 
   const send = (id: string) => {
     if (!unlocked.has(id)) {
@@ -74,6 +60,30 @@ export default function EmoteWheel() {
     toggle(false)
   }
 
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Escape' || e.code === 'KeyG') {
+        e.preventDefault()
+        toggle(false)
+        return
+      }
+      // number keys 1..N pick an emote straight from the wheel
+      const m = /^Digit([1-9])$/.exec(e.code)
+      if (m) {
+        const idx = Number(m[1]) - 1
+        if (idx < EMOTE_CATALOG.length) {
+          e.preventDefault()
+          send(EMOTE_CATALOG[idx].id)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open, toggle, unlocked])
+
+  if (!open) return null
+
   // ring layout: 8 slots, gentle protest-poster look
   const RADIUS = 108
 
@@ -82,12 +92,14 @@ export default function EmoteWheel() {
       className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center bg-[#1c1a17]/45 backdrop-blur-[2px]"
       onClick={() => toggle(false)}
     >
-      <div className="relative h-[300px] w-[300px]" onClick={(e) => e.stopPropagation()}>
+      {/* v46 — the 300px wheel (plus its orbiting labels) shrinks slightly on
+          phones so the outermost emote chips never clip on narrow screens */}
+      <div className="relative h-[300px] w-[300px] scale-[0.82] sm:scale-100" onClick={(e) => e.stopPropagation()}>
         {/* header chip */}
         <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 text-center">
           <div className="vc-paper rounded-xl border-2 border-[#1c1a17] px-3 py-1.5 shadow-[3px_3px_0_rgba(28,26,23,0.8)]">
             <div className="text-[9px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Emote Wheel</div>
-            <div className="text-[9px] font-bold text-[#1c1a17]/60">G / Esc to close</div>
+            <div className="text-[9px] font-bold text-[#1c1a17]/60">G / Esc to close · 1-{Math.min(EMOTE_CATALOG.length, 9)} to pick</div>
             <div className="mt-0.5 border-t border-dashed border-[#1c1a17]/30 pt-0.5 text-[8px] font-black uppercase tracking-widest text-[#2e6e4e]">
               {unlocked.size}/{EMOTE_CATALOG.length} unlocked
             </div>
@@ -115,6 +127,9 @@ export default function EmoteWheel() {
               style={isUnlocked ? undefined : { filter: 'grayscale(1)' }}
             >
               <span className={`flex flex-col items-center ${shakeId === e.id ? 'vc-emote-shake' : ''}`}>
+                <span className="absolute -left-1 -top-1.5 flex h-4 w-4 items-center justify-center rounded-md border border-[#1c1a17]/80 bg-[#1c1a17] text-[9px] font-black text-[#f2c14e]">
+                  {i + 1}
+                </span>
                 <span className="text-2xl leading-none">{e.emoji}</span>
                 <span className={`mt-0.5 text-[8px] font-black uppercase tracking-wider ${isUnlocked ? 'text-[#1c1a17]/70' : 'text-[#1c1a17]/45'}`}>
                   {e.label}

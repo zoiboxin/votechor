@@ -4,11 +4,15 @@ import { useEffect, useState } from 'react'
 import { useGameStore } from '@/lib/game-store'
 import { uiActions } from '@/lib/game-store'
 import { ARCHETYPES, archetypeById, xpForLevel, levelFromXp, RANDOM_NOTIFICATIONS } from '@/game/shared/constants'
+import { mapForLevel, nextMapUnlock, mapById } from '@/game/shared/maps'
 import {
   Play, Users, PersonStanding, BookOpen, Settings, Trophy, Medal, BarChart3,
   Pencil, Check, Vote, Megaphone, Wifi, WifiOff, CalendarDays, CalendarRange,
+  Fingerprint, Copy, Shield, Siren, MapPin, Lock, RotateCcw,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { shortIdFromToken } from '@/lib/identity'
+import { VC_BUILD } from '@/lib/build-version'
 import CharacterSelect from './CharacterSelect'
 import PlayScreen from './PlayScreen'
 import SettingsPanel from './SettingsPanel'
@@ -165,6 +169,16 @@ function WeeklyCard() {
   )
 }
 
+/** The secret auth token from localStorage — drives the public short-ID derivation. */
+function getStoredToken(): string {
+  try {
+    const raw = localStorage.getItem('votechor_profile')
+    return raw ? (JSON.parse(raw) as { token?: string }).token ?? '' : ''
+  } catch {
+    return ''
+  }
+}
+
 function PlayerCard() {
   const profile = useGameStore((s) => s.profile)
   const profileLoading = useGameStore((s) => s.profileLoading)
@@ -173,12 +187,23 @@ function PlayerCard() {
   const [editing, setEditing] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const level = profile ? levelFromXp(profile.xp) : 1
   const base = xpForLevel(level)
   const next = xpForLevel(level + 1)
   const pct = profile ? Math.min(100, Math.max(0, ((profile.xp - base) / Math.max(1, next - base)) * 100)) : 0
   const arch = archetypeById(profile?.archetype ?? 'student')
+  // v43 — district campaign progress
+  const district = mapForLevel(level)
+  const nextUnlock = nextMapUnlock(level)
+  // v44 — a replay pick (Play screen) overrides what solo actually plays (reactive)
+  const selectedMapId = useGameStore((s) => s.selectedMapId)
+  const replayPick = (() => {
+    if (!selectedMapId) return null
+    const m = mapById(selectedMapId)
+    return m.minLevel <= level && m.id !== district.id ? m : null
+  })()
 
   const saveName = async () => {
     const clean = nameDraft.trim().slice(0, 20)
@@ -235,6 +260,43 @@ function PlayerCard() {
         </span>
       </div>
 
+      {/* unique ID + chosen side — the public identity row */}
+      <div className="mb-2 flex items-center gap-1.5">
+        <button
+          onClick={() => {
+            const id = shortIdFromToken(getStoredToken())
+            try {
+              void navigator.clipboard?.writeText(id)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1600)
+              notify(`Player ID ${id} copied — quote it at the records office.`, 'info')
+            } catch {
+              notify(`Player ID: ${id}`, 'info')
+            }
+          }}
+          className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-dashed border-[#1c1a17]/45 bg-[#efe6c8]/70 px-2 py-1 text-left transition-colors hover:border-[#8c1f28]"
+          title="Your unique player ID — click to copy"
+          aria-label={`Unique player ID ${shortIdFromToken(getStoredToken())}, click to copy`}
+        >
+          <Fingerprint className="h-3.5 w-3.5 shrink-0 text-[#8c1f28]" />
+          <span className="truncate text-[10px] font-black uppercase tracking-[0.14em] text-[#1c1a17]/80">
+            {shortIdFromToken(getStoredToken())}
+          </span>
+          {copied ? <Check className="h-3 w-3 shrink-0 text-[#2e6e4e]" /> : <Copy className="h-3 w-3 shrink-0 text-[#1c1a17]/35 group-hover:text-[#8c1f28]" />}
+        </button>
+        <span
+          className={`flex shrink-0 items-center gap-1 rounded-lg border px-1.5 py-1 text-[9px] font-black uppercase tracking-wide ${
+            (profile?.role ?? 'protector') === 'police'
+              ? 'border-[#3d5a80]/60 bg-[#3d5a80]/12 text-[#3d5a80]'
+              : 'border-[#2e6e4e]/60 bg-[#2e6e4e]/12 text-[#2e6e4e]'
+          }`}
+          title={(profile?.role ?? 'protector') === 'police' ? 'Serving the committee — arrest powers' : 'Fighting for the people'}
+        >
+          {(profile?.role ?? 'protector') === 'police' ? <Siren className="h-3 w-3" /> : <Shield className="h-3 w-3" />}
+          {(profile?.role ?? 'protector') === 'police' ? 'Police' : 'Protector'}
+        </span>
+      </div>
+
       {editing ? (
         <div className="flex items-center gap-1.5">
           <input
@@ -281,6 +343,38 @@ function PlayerCard() {
             transition={{ duration: 0.7, ease: 'easeOut' }}
           />
         </div>
+      </div>
+
+      {/* v43 — district campaign: current map + the next unlock to chase */}
+      <div className="mt-2 rounded-xl border-2 border-[#1c1a17]/25 bg-[#efe6c8]/60 px-2.5 py-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.16em] text-[#1c1a17]/70">
+            <MapPin className="h-3 w-3 text-[#8c1f28]" /> District
+          </span>
+          <span className="truncate text-[11px] font-black text-[#1c1a17]" title={district.tagline}>
+            {district.name} <span className="font-bold text-[#2e6e4e]">×{district.xpMul}</span>
+          </span>
+        </div>
+        {replayPick && (
+          <div className="mt-1 flex items-center justify-between gap-2 border-t border-dashed border-[#8c1f28]/40 pt-1">
+            <span className="flex shrink-0 items-center gap-1 text-[9px] font-black uppercase tracking-wider text-[#8c1f28]">
+              <RotateCcw className="h-2.5 w-2.5" /> Replay
+            </span>
+            <span className="truncate text-[10px] font-black text-[#8c1f28]" title={`${replayPick.name} — picked on the Play screen`}>
+              {replayPick.name} <span className="font-bold">×{replayPick.xpMul}</span>
+            </span>
+          </div>
+        )}
+        {nextUnlock && (
+          <div className="mt-1 flex items-center justify-between gap-2 border-t border-dashed border-[#1c1a17]/20 pt-1">
+            <span className="flex shrink-0 items-center gap-1 text-[9px] font-black uppercase tracking-wider text-[#b07d1e]">
+              <Lock className="h-2.5 w-2.5" /> Lv {nextUnlock.minLevel}
+            </span>
+            <span className="truncate text-[10px] font-black text-[#b07d1e]" title={nextUnlock.tagline}>
+              {nextUnlock.name}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* daily streak chip — retention loop badge */}
@@ -425,6 +519,12 @@ export default function MainMenu() {
           />
         ))}
       </div>
+
+      {/* build tag — proves which code version this tab runs (stale-bundle detection:
+          if a reported bug “still exists”, this tag says whether the fix was even loaded) */}
+      <span className="pointer-events-none absolute bottom-1.5 right-2 z-10 rounded border border-[#1c1a17]/25 bg-[#f5efdc]/80 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#1c1a17]/45">
+        build {VC_BUILD}
+      </span>
 
       {/* Hero */}
       <header className="relative shrink-0 border-b-2 border-[#1c1a17]/80">

@@ -6,8 +6,20 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import {
   BarChart3, RefreshCw, WifiOff, Vote, Footprints, Flag, KeyRound, HeartPulse, Package,
   Skull, Trophy, Users, Swords, Crown, History, Clock, Zap, HeartHandshake, Award,
+  Fingerprint, Copy, Shield, Siren, Gavel, Check,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { shortIdFromToken } from '@/lib/identity'
+
+/** The secret auth token from localStorage — drives the public short-ID derivation. */
+function getStoredToken(): string {
+  try {
+    const raw = localStorage.getItem('votechor_profile')
+    return raw ? (JSON.parse(raw) as { token?: string }).token ?? '' : ''
+  } catch {
+    return ''
+  }
+}
 
 interface RecentMatch {
   id: string
@@ -31,6 +43,7 @@ const CARDS = [
   { key: 'matches', label: 'Protests Joined', icon: Users },
   { key: 'wins', label: 'Victories', icon: Crown },
   { key: 'tokens', label: 'Votes Recovered', icon: Vote },
+  { key: 'arrests', label: 'Suspects Arrested', icon: Gavel },
   { key: 'distance', label: 'Distance Run', icon: Footprints, fmt: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)} km` : `${v} m`) },
   { key: 'checkpoints', label: 'Checkpoints', icon: Flag },
   { key: 'rescues', label: 'Rescues', icon: KeyRound },
@@ -49,6 +62,16 @@ export default function StatsPanel({ open, onOpenChange }: { open: boolean; onOp
   const [recent, setRecent] = useState<RecentMatch[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const shortId = shortIdFromToken(getStoredToken())
+  const isPolice = profile?.role === 'police'
+  const memberSince = (() => {
+    if (!profile?.createdAt) return null
+    const d = new Date(profile.createdAt)
+    return Number.isFinite(d.getTime())
+      ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      : null
+  })()
 
   useEffect(() => {
     if (!open) return
@@ -100,6 +123,40 @@ export default function StatsPanel({ open, onOpenChange }: { open: boolean; onOp
             Official file for <b className="font-black">{profile?.name ?? 'Unregistered Protester'}</b> — kept in triplicate, obviously.
           </DialogDescription>
         </DialogHeader>
+
+        {/* identity card: unique ID + side + on-file date — the records-office header */}
+        <div className={`flex flex-wrap items-center gap-2 rounded-2xl border-2 p-3 ${isPolice ? 'border-[#3d5a80]/50 bg-[#e2ecf5]/70' : 'border-[#2e6e4e]/50 bg-[#dcebe0]/70'}`}>
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border-2 text-[#f5efdc] ${isPolice ? 'border-[#3d5a80] bg-[#3d5a80]' : 'border-[#2e6e4e] bg-[#2e6e4e]'}`}>
+            {isPolice ? <Siren className="h-4.5 w-4.5" /> : <Shield className="h-4.5 w-4.5" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => {
+                  try {
+                    void navigator.clipboard?.writeText(shortId)
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 1600)
+                    notify(`Player ID ${shortId} copied.`, 'info')
+                  } catch { /* clipboard unavailable */ }
+                }}
+                className="group flex items-center gap-1.5 rounded-lg border border-dashed border-[#1c1a17]/40 bg-[#f5efdc]/80 px-2 py-0.5 transition-colors hover:border-[#8c1f28]"
+                title="Click to copy your unique player ID"
+                aria-label={`Unique player ID ${shortId}, click to copy`}
+              >
+                <Fingerprint className="h-3 w-3 text-[#8c1f28]" />
+                <span className="text-[11px] font-black uppercase tracking-[0.14em] text-[#1c1a17]">{shortId}</span>
+                {copied ? <Check className="h-3 w-3 text-[#2e6e4e]" /> : <Copy className="h-3 w-3 text-[#1c1a17]/35 group-hover:text-[#8c1f28]" />}
+              </button>
+              <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${isPolice ? 'border-[#3d5a80]/60 bg-[#3d5a80]/10 text-[#3d5a80]' : 'border-[#2e6e4e]/60 bg-[#2e6e4e]/10 text-[#2e6e4e]'}`}>
+                {isPolice ? 'Police' : 'Protector'}
+              </span>
+            </div>
+            <p className="mt-0.5 text-[9px] font-bold uppercase tracking-wider text-[#1c1a17]/50">
+              Unique record no.{memberSince ? ` · on file since ${memberSince}` : ''} — progress saves automatically
+            </p>
+          </div>
+        </div>
 
         <button
           onClick={() => {

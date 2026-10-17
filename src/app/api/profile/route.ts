@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ACHIEVEMENTS, ARCHETYPES } from '@/game/shared/constants'
 import { COSMETIC_IDS, hatIsUnlocked, unlockedHatIds, cosmeticById, unlockLabel, WARDROBE_KINDS, catalogByKind, anyItemIsUnlocked, type CosmeticKind } from '@/lib/cosmetics'
+import { shortIdFromToken, sanitizeRole } from '@/lib/identity'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,7 +78,7 @@ async function ensureAchievementsSeeded(): Promise<void> {
 
 const ARCHETYPE_IDS = new Set(ARCHETYPES.map((a) => a.id))
 
-function profileView(p: { id: string; name: string; archetype: string; xp: number; level: number; cosmetics: string; dailyStreak: number }, unlockedHats?: string[]) {
+function profileView(p: { id: string; name: string; archetype: string; role: string; xp: number; level: number; cosmetics: string; dailyStreak: number; createdAt: Date }, unlockedHats?: string[]) {
   let cosmetics: Record<string, unknown> = {}
   try {
     const parsed: unknown = JSON.parse(p.cosmetics)
@@ -85,7 +86,18 @@ function profileView(p: { id: string; name: string; archetype: string; xp: numbe
   } catch {
     cosmetics = {}
   }
-  return { id: p.id, name: p.name, archetype: p.archetype, xp: p.xp, level: p.level, dailyStreak: p.dailyStreak, cosmetics, ...(unlockedHats ? { unlockedHats } : {}) }
+  return {
+    id: p.id,
+    name: p.name,
+    archetype: p.archetype,
+    role: (p.role === 'police' ? 'police' : 'protector') as 'protector' | 'police',
+    xp: p.xp,
+    level: p.level,
+    dailyStreak: p.dailyStreak,
+    createdAt: p.createdAt.toISOString(),
+    cosmetics,
+    ...(unlockedHats ? { unlockedHats } : {}),
+  }
 }
 
 /** Load the player's unlocked hat ids (server-authoritative, from level + granted achievements). */
@@ -152,6 +164,11 @@ export async function POST(req: Request) {
       }
     }
 
+    let role: string | undefined
+    if (body.role !== undefined && body.role !== null) {
+      role = sanitizeRole(body.role) // 'protector' | 'police' — anything else becomes protector
+    }
+
     let cosmeticsObj: Record<string, unknown> | undefined
     let cosmeticsJson: string | undefined
     if (body.cosmetics !== undefined && body.cosmetics !== null) {
@@ -187,13 +204,14 @@ export async function POST(req: Request) {
           data: {
             ...(name !== undefined ? { name } : {}),
             ...(archetype !== undefined ? { archetype } : {}),
+            ...(role !== undefined ? { role } : {}),
             ...(cosmeticsJson !== undefined ? { cosmetics: cosmeticsJson } : {}),
           },
         })
         await db.playerStats.upsert({ where: { playerId: updated.id }, create: { playerId: updated.id }, update: {} })
         await ensureAchievementsSeeded()
         const unlockedHats = await computeUnlockedHats(updated.id, updated.level)
-        return NextResponse.json({ profile: profileView(updated, unlockedHats), token })
+        return NextResponse.json({ profile: profileView(updated, unlockedHats), token, shortId: shortIdFromToken(token) })
       }
     }
 
@@ -205,15 +223,31 @@ export async function POST(req: Request) {
         token: newToken,
         name: finalName,
         ...(archetype !== undefined ? { archetype } : {}),
+        ...(role !== undefined ? { role } : {}),
         ...(cosmeticsJson !== undefined ? { cosmetics: cosmeticsJson } : {}),
       },
     })
     await db.playerStats.upsert({ where: { playerId: created.id }, create: { playerId: created.id }, update: {} })
     await ensureAchievementsSeeded()
     const unlockedHats = await computeUnlockedHats(created.id, created.level)
-    return NextResponse.json({ profile: profileView(created, unlockedHats), token: newToken })
+    return NextResponse.json({ profile: profileView(created, unlockedHats), token: newToken, shortId: shortIdFromToken(newToken) })
   } catch (err) {
     console.error('[api/profile] error:', err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+/** GET — full identity file for the token: profile + public short ID (the "case file number"). */
+export async function GET(req: Request) {
+  try {
+    const token = sanitize(req.headers.get('x-vc-token') ?? '')
+    if (!token) return NextResponse.json({ error: 'Missing x-vc-token header' }, { status: 401 })
+    const player = await db.player.findUnique({ where: { token } })
+    if (!player) return NextResponse.json({ error: 'Unknown player' }, { status: 404 })
+    const unlockedHats = await computeUnlockedHats(player.id, player.level)
+    return NextResponse.json({ profile: profileView(player, unlockedHats), token, shortId: shortIdFromToken(token) })
+  } catch (err) {
+    console.error('[api/profile GET] error:', err instanceof Error ? err.message : err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

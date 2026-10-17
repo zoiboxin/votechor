@@ -8,6 +8,7 @@ export interface AABB {
   minX: number; minY: number; minZ: number
   maxX: number; maxY: number; maxZ: number
   walkable?: boolean // can be stood on (platforms/ramps)
+  prop?: boolean // v47 — solid street prop (stall/scooter/bench/…); tests scope placement checks to these
 }
 
 export type DecoKind =
@@ -16,6 +17,8 @@ export type DecoKind =
   | 'monument' | 'flagpole' | 'billboard' | 'cart' | 'auto' | 'teaKettle'
   | 'sign' | 'planter' | 'stage' | 'toilet' | 'hoarding'
   | 'home' | 'wall' | 'clothesline'
+  // v43 level-map landmarks — variant-only props appended by buildWorldDef(mapId)
+  | 'stringLights' | 'archGate' | 'ferrisWheel' | 'crane'
 
 export interface Deco {
   kind: DecoKind
@@ -65,7 +68,7 @@ export interface VehicleDef {
   id: string
   path: Array<[number, number]>
   speed: number
-  kind: 'auto' | 'bus' | 'cow'
+  kind: 'auto' | 'bus' | 'cow' | 'car' | 'bike'
 }
 
 export interface CrossRoadDef {
@@ -87,6 +90,18 @@ export interface WorldDef {
   vehicles: VehicleDef[]
   bossArena: { x: number; z: number; radius: number; gateZ: number }
   landmarks: { name: string; x: number; z: number }[]
+  // v43 level-map identity + theming (classic defaults when built without a map id)
+  mapId?: string
+  mapName?: string
+  mapTagline?: string
+  /** district XP multiplier applied at match end (maps.ts) */
+  xpMul?: number
+  /** 1..5 difficulty pips (maps.ts) */
+  difficulty?: number
+  /** ground base tint (renderer derives speckle shading) */
+  groundTint?: string
+  /** asphalt tint */
+  roadTint?: string
 }
 
 // ---------- Characters ----------
@@ -100,7 +115,7 @@ export interface Archetype {
 }
 
 // ---------- Networking ----------
-export type AnimName = 'idle' | 'walk' | 'run' | 'jump' | 'slide' | 'dazed' | 'detained' | 'celebrate' | 'throw' | 'heal' | 'down'
+export type AnimName = 'idle' | 'walk' | 'run' | 'jump' | 'fall' | 'land' | 'recover' | 'slide' | 'dazed' | 'detained' | 'celebrate' | 'throw' | 'heal' | 'down'
 
 export interface PlayerNetState {
   id: string
@@ -117,6 +132,8 @@ export interface PlayerNetState {
   tokens?: number
   /** Wardrobe — included ONLY in the join ack + game:playerjoined (10Hz snapshots omit it). */
   cosmetics?: Record<string, string | boolean>
+  /** Chosen side — 'police' renders the officer rig; included with cosmetics (join ack + playerjoined). */
+  role?: 'protector' | 'police'
 }
 
 export type NpcStateName = 'patrol' | 'suspicious' | 'investigate' | 'chase' | 'capture' | 'return' | 'idle'
@@ -190,6 +207,8 @@ export interface MatchEndPayload {
   /** vote tokens + item cards police seized on detention (client-computed) */
   confiscated?: number
   confiscatedItems?: number
+  /** arrests made (police role) — server counts validated detentions the local officer performed */
+  arrests?: number
   playersOnline: number
 }
 
