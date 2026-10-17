@@ -463,10 +463,23 @@ class AudioManagerImpl {
   private rainGain: GainNode | null = null
   private rainSrc: AudioBufferSourceNode | null = null
 
-  /** level 0..1 — smoothly fades a looping filtered-noise rain bed in/out */
+  /** level 0..1 — smoothly fades a looping filtered-noise rain bed in/out.
+   *  v49: level ≤ 0.01 also HARD-STOPS the looping source after the fade tail —
+   *  a parked rain loop used to keep hissing behind menus after quitting a match. */
   setRain(level: number) {
     if (!this.ctx || !this.master) return
-    if (level > 0.01 && !this.rainSrc) {
+    if (level <= 0.01) {
+      if (this.rainGain && this.ctx) this.rainGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.8)
+      if (this.rainSrc) {
+        const src = this.rainSrc
+        this.rainSrc = null
+        this.rainGain = null
+        try { src.stop(this.ctx.currentTime + 2.5) } catch { /* already stopped */ }
+        src.onended = () => { try { src.disconnect() } catch { /* already disconnected */ } }
+      }
+      return
+    }
+    if (!this.rainSrc) {
       const len = this.ctx.sampleRate * 2
       const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
       const data = buf.getChannelData(0)
@@ -495,6 +508,11 @@ class AudioManagerImpl {
     if (this.rainGain && this.ctx) {
       this.rainGain.gain.setTargetAtTime(level * 0.16, this.ctx.currentTime, 1.2)
     }
+  }
+
+  /** Fully stop the rain bed (menus are silent — v49). */
+  stopRain() {
+    this.setRain(0)
   }
 
   // ---------- crowd ambience ----------

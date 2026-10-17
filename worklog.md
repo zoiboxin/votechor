@@ -1663,3 +1663,27 @@ Stage Summary:
 - ESC → Quit to Menu verified fixed end-to-end with real state assertions, including the replay-after-quit regression path.
 - Note: the 'menu' theme value remains in the MusicTheme union (unused by game code now) so the setTheme change-guard keeps working; nothing schedules it.
 - Suggested next round: two-tab multiplayer smoke (remote rig visibility + squad flows), then continue the standing agenda (item persistence, animal polish, horn honks, pet name tags).
+
+---
+Task ID: 51
+Agent: Z.ai Code (main)
+Task: User reported background sound STILL playing on the menu page after ESC → Quit to Menu (follow-up to Task 50). Find the remaining source and fix it.
+
+Work Log:
+- Re-audited every continuous audio source. AudioManager hosts exactly three looping beds: the music sequencer (silenced in v48), the crowd noise loop (stopped in v48), and the WEATHER RAIN bed — which Task 50 did NOT cover. Grep confirmed no WebAudio exists outside AudioManager.
+- Root cause: game.ts renderUpdate() (the per-frame render callback, which keeps running behind menus because the world stays visible behind the menu UI) called AudioManager.setRain(sky.rainLevel) unconditionally every frame. setRain() created a looping filtered-noise source connected straight to the master gain, and a level ≤ 0 only faded the gain — the source kept looping forever. So quitting any match where rain had occurred (weather state machine rolls rain/storm with 14–50% probability from common states; Monsoon Mohalla forces it) left rain hissing on the landing page indefinitely. That is the "still playing some sound" the user heard.
+- audio.ts fix: setRain(level ≤ 0.01) now fades the gain AND hard-stops the looping source (stop scheduled +2.5 s so the 0.8-tau fade finishes, onended disconnects and clears refs; rainGain/rainSrc nulled immediately so the next rain cleanly recreates the bed). Added stopRain() helper.
+- game.ts fixes: renderUpdate now gates the audio push — setRain only passes sky.rainLevel while this.running && uiMode is 'playing'/'paused', else 0 (prevents the render loop from re-parking the bed on menus); leaveMatch() and finalizeMatch() now call AudioManager.stopRain() alongside stopCrowd(). (Match start needs no change — rain follows the sky's rainLevel as before.)
+- Bumped VC_BUILD 'v48' → 'v49'. tsc --noEmit clean; eslint clean.
+- Agent-browser QA via Caddy (:81) with FORCED rain (setSettings({weatherMode:'rain'}) — worst case, all three beds live):
+  1. Landing page: {theme idle, timer:null, crowd:null, rain:null} → silent.
+  2. PLAY SOLO: {playing, ambient, timer:true, crowd:true, rain:true, rainLevel 0.14 climbing} → music + crowd + rain all active.
+  3. ESC → QUIT TO MENU: {menu, theme:'none', timer:null, crowd:null, rain:null, rainGain:null} → ALL beds dead, landing page silent (the reported bug, now proven with rain active).
+  4. Regression replay: PLAY SOLO again → all three beds restart cleanly; quit again → all silent. No dev.log errors.
+- Screenshot: tool-results/qa-v49-silent-menu.png.
+
+Stage Summary:
+- The landing page is now verifiably silent in all weather conditions: music sequencer, crowd bed, AND rain bed all hard-stop on quit/end-screen and never run behind menus. In-match ambience (including rain) is unchanged; rain restarts correctly on replay.
+- Key lesson recorded: renderUpdate runs behind menus — any per-frame audio push there must be uiMode-gated, and looping WebAudio sources must be hard-stopped (gain fades alone park inaudible-but-alive loops... and in rain's case, audible ones).
+- User-facing note: long-lived tabs must reload once to pick up v49 (the stale-bundle banner appears automatically; BUILD badge bottom-right shows V49).
+- Suggested next round: two-tab multiplayer smoke, then the standing agenda (item persistence, animal polish, horn honks, pet name tags).

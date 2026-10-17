@@ -953,6 +953,7 @@ export class Game {
     useGameStore.getState().setSquad(null)
     AudioManager.setTheme('none') // v48: landing page is silent — background sound only while a match runs
     AudioManager.stopCrowd()
+    AudioManager.stopRain() // v49: kill any lingering weather bed
     const st = useGameStore.getState()
     st.setUIMode('menu')
     st.setMenuScreen('main')
@@ -2705,14 +2706,17 @@ export class Game {
     this.engine.trackSun(focus)
 
     // ---- atmosphere: day/night cycle + weather (drives fog, lights, exposure, rain) ----
-    const settings = useGameStore.getState().settings
+    const gst = useGameStore.getState()
+    const settings = gst.settings
     const sky = this.engine.sky
     sky.setTimeMode(settings.timeMode ?? 'cycle')
     sky.setWeatherMode(settings.weatherMode ?? 'auto')
     sky.update(dt, focus)
     this.engine.renderer.toneMappingExposure = sky.exposure
     this.worldRenderer.setNight(sky.nightFactor, focus)
-    AudioManager.setRain(sky.rainLevel)
+    // v49: rain AUDIO only while a match session is on screen — renderUpdate keeps running
+    // behind menus, and an ungated setRain() used to park a looping rain bed after quit.
+    AudioManager.setRain(this.running && (gst.uiMode === 'playing' || gst.uiMode === 'paused') ? sky.rainLevel : 0)
     this.envTick += dt
     if (this.envTick >= 1) {
       this.envTick = 0
@@ -3362,6 +3366,7 @@ export class Game {
     store.setUIMode('ended')
     AudioManager.setTheme('none') // v48: end screen is quiet too — the victory/defeat stinger already played
     AudioManager.stopCrowd()
+    AudioManager.stopRain() // v49: kill any lingering weather bed
   }
 
   // ================= photo mode =================
