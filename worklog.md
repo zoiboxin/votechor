@@ -1835,3 +1835,24 @@ Stage Summary:
 - The customization modal now visibly applies EVERY wardrobe slot to the High-Fi model — the "nothing changes" complaint is fixed at the pipeline level (single resolveAvatarLook/applyAvatarLook shared by preview, local player and remotes), and the model renders at the intended brightness (normalized tint instead of the double-darkening multiply).
 - Honest limitations: accessories are stylized primitive meshes (beard is a curved pad, not sculpted hair); female puppet attachments are scale-fitted approximations; sign/banner slogan textures are generated client-side per instance and disposed on re-apply; remote cosmetics use the identical code path (verified for the local player + programmatic probe; a dedicated two-tab remote-cosmetics smoke stays in the standing agenda).
 - Suggested next round: two-tab multiplayer cosmetics smoke; profile save/load race investigation (side observation above); then the standing agenda (item persistence, animal polish, horn honks, pet name tags).
+
+---
+Task ID: 57
+Agent: Z.ai Code (main)
+Task: "customize page hair classic cut is showing some black color of box in front of eyes check understand and update"
+
+Work Log:
+- Reproduced first (agent-browser via Caddy :81): with Classic Cut (hair id 'default' — the male default) the Face Check close-up showed a wide BLACK SLAB covering the eyes exactly as reported; switching to Buzz Cut (dome only) restored the fully visible face → the fringe box was isolated as the culprit.
+- Root cause (measured, in src/game/avatar-look.ts buildHair 'default' branch): the Classic Cut fringe was BOX(0.16, 0.035, 0.02) at head-local (0, 0.258, 0.104) rot.x −0.14 → spanned y 0.2405–0.2755, which lands ON the eye line, and protruded to z≈0.114 in front of the face — a black visor over the eyes (hair color default #191512 is near-black). Cross-evidence: the dome's rim (y 0.30) reads as a natural hairline just above the brows in every style → true eye line ≈ y 0.25–0.27, i.e. the fringe sat a full band BELOW the hairline.
+- Fix: fringe re-anchored ON the hairline — BOX(0.19, 0.036, 0.024) at (0, 0.303, 0.106) rot.x −0.22: spans y 0.285–0.321 (bottom edge clears the eyes), tucked under the dome rim (front z ≤ ~0.124 < dome 0.132) so it reads as hair peeking below the dome over the brow; slightly wider to match the dome width; tilt keeps the lower edge hugging the forehead.
+- Full hair-style sweep for the same defect class (Face Check screenshots): Buzz/Spiked/Top Bun/Ponytail clean via UI; Mega Afro (L5) and Flowing Long (L3) verified by injecting the id into the zustand profile via window.__vcStore.setProfile and remounting the wardrobe (UI locks them at the QA profile's level) — afro hugs top/back, eyes clear; long frames the face, eyes clear. Curly/Side Braid have no geometry below the dome rim → safe by the same measurements. No other style needed changes.
+- Glasses spot-check while the fringe was being moved: specs (rims y 0.192–0.258) sit around the eye region and no longer intersect anything (old fringe overlapped the rims' top); v56-classic-specs-ok.png. Left unchanged — visually correct.
+- In-match regression (solo, Season #17, online): programmatic probe of __game.player.glb head bone — cosmetic hair group present with the NEW fringe params (BoxGeometry w 0.19 h 0.036 at (0, 0.303, 0.106) rot −0.22) proving the shared applyAvatarLook path (preview = local player = remotes) picked up the fix.
+- VC_BUILD v55 → v56. tsc clean; eslint clean. dev.log clean.
+- QA note: a fresh browser session's first wardrobe open can show the procedural puppet while the 21.5 MB skinned GLB is still downloading (boot preload primes it ~seconds later) — second open is High-Fi. Not a regression; documented timing.
+
+Stage Summary:
+- Classic Cut no longer renders a black box over the eyes — the fringe now sits on the hairline where a fringe belongs; every other hair style was swept for the same defect and verified clean (including the two level-locked ones, checked via store injection).
+- Key lesson recorded: attachment slabs were originally fitted against ASSUMED face landmarks (eyes at y 0.225); the textured model's real eye line is ≈ 0.25–0.27. Anything drawn lower than y≈0.28 in front of the face will cover the eyes.
+- Screenshots: tool-results/v56-before-blackband.png (reproduction), v56-buzz-isolated.png, v56-classic-fixed.png, v56-wardrobe-final.png (V56 badge), v56-afro-ok.png, v56-long-ok.png, v56-classic-specs-ok.png.
+- Suggested next round: two-tab multiplayer cosmetics smoke; profile save/load race (Task 56 side observation); standing agenda (item persistence, animal polish, horn honks, pet name tags).

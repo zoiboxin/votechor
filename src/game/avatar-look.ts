@@ -257,8 +257,8 @@ function buildHair(id: string, color: string): THREE.Group | null {
     case 'afro':
       g.add(mesh(SPH(0.165, 14, 12), c, 0, 0.365, -0.012, 1, 0.92, 1))
       break
-    default: // 'default' — Classic Cut: dome + fringe
-      g.add(dome(), mesh(BOX(0.16, 0.035, 0.02), c, 0, 0.258, 0.104, 1, 1, 1, -0.14))
+    default: // 'default' — Classic Cut: dome + fringe ON THE HAIRLINE (eyes are ~y 0.25–0.27 — a lower slab reads as a black visor over the eyes)
+      g.add(dome(), mesh(BOX(0.19, 0.036, 0.024), c, 0, 0.303, 0.106, 1, 1, 1, -0.22))
   }
   return g
 }
