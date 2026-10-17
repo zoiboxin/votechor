@@ -102,7 +102,7 @@ export function resolveAvatarLook(c: LooseCosmetics, archetypeId: string, role: 
     palette: pal,
     gender: o.gender === 'female' ? 'female' : 'male',
     hat: fieldStr(o, 'hat', 'none'),
-    hair: fieldStr(o, 'hair', 'default'),
+    hair: fieldStr(o, 'hair', 'bald'),
     face: fieldStr(o, 'face', 'clean'),
     build: fieldStr(o, 'build', 'regular'),
     outfit,

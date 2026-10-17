@@ -1856,3 +1856,30 @@ Stage Summary:
 - Key lesson recorded: attachment slabs were originally fitted against ASSUMED face landmarks (eyes at y 0.225); the textured model's real eye line is ≈ 0.25–0.27. Anything drawn lower than y≈0.28 in front of the face will cover the eyes.
 - Screenshots: tool-results/v56-before-blackband.png (reproduction), v56-buzz-isolated.png, v56-classic-fixed.png, v56-wardrobe-final.png (V56 badge), v56-afro-ok.png, v56-long-ok.png, v56-classic-specs-ok.png.
 - Suggested next round: two-tab multiplayer cosmetics smoke; profile save/load race (Task 56 side observation); standing agenda (item persistence, animal polish, horn honks, pet name tags).
+
+---
+Task ID: 58
+Agent: Z.ai Code (main)
+Task: "customization hair not looking good check one by one all hair style make sure all looking good by default make head bald no hair so when player select customized hair style it fit properly on head and modal looking good"
+
+Work Log:
+- KEY DISCOVERY: the High-Fi male head has its hair PAINTED INTO the baked texture (AvatarHead has a dedicated 1024x1024 PNG inside the GLB; materials->images mapped via new scripts/map-head-texture.ts). Equipping 'Bald & Bold' only removed the attachment — the head still rendered the painted hairdo. So "default bald" required real texture surgery, not a catalog change.
+- NEW scripts/baldify-male-head.ts (dry-run + --apply) rewrites the head texture in public/models/votechor-male-skinned.glb in place:
+  1. Pass A — flood fill: seeds = texels of every hair-zone vertex (scalp y>0.30, back z<=0.055 && y>0.17, sides |x|>0.075 && y>0.20 — head-local, Head joint world y measured 1.580) whose texel is dark (lum<165); fill 4-connected through dark texels; painted eyebrows explicitly protected. 504,900 texels.
+  2. Pass B — bright islands ENCLOSED by hair and NOT connected to the neck-skin samples (the combed parting strip): 4,280 texels.
+  3. Pass C — the magenta UV corner pockets (2,909 head verts mapped there — would have rendered as magenta spots on the bald scalp): repainted. 11,719 texels.
+  4. Repaint = cheek+neck skin average (rgb 204,158,132) + noise; boundary texels get skin fill with gentler noise.
+  5. VERIFY — resample all 42,060 head vertices: hair-zone texels must not be dark (<140; the fill tone itself is lum ~163, an earlier verify threshold of 165 flag-drowned in its own fill — measured and fixed).
+- MEASURED LESSONS baked into the script: (1) glTF UVs are TOP-LEFT origin with REPEAT wrapping — the scalp's v runs NEGATIVE (−0.65..−0.88) and must wrap, not clamp (clamping silently sampled the bottom skin row and produced 0 seeds twice); (2) node translations are hierarchical — Head world y = parent-chain sum, asserted against the head mesh bbox.
+- Result: the male High-Fi head is now genuinely BALD with face features (brows, eyes, nose, lips, both ears) fully preserved; texture before/after saved (v57-texture-before/after.png). GLB rebuilt in place (23.83MB); hairy original backed up at /tmp/votechor-male-skinned-hairy.glb.
+- DEFAULT = BALD wired everywhere (6 spots): cosmetics.ts normalizeCosmetics (both genders), CharacterSelect DEFAULTS + useState fallback, avatar-look.ts resolveAvatarLook, character.ts procedural-fallback builder (opts.hair ?? 'bald'), and chooseGender now KEEPS bald across gender switches (bald is gender-neutral) while still flipping default/buzz <-> ponytail.
+- ONE-BY-ONE SWEEP of all 11 hair styles on the bald base (Face Check screenshots, tool-results/v57-*-on-bald.png): Classic Cut (dome + hairline fringe sits cleanly on bare scalp, eyes clear), Buzz, Spiked Top, Top Bun (task-57 geometry unchanged), Ponytail, Party Mullet, plus the four UI-locked ones injected via window.__vcStore.setProfile: Curly Top, Flowing Long, Side Braid, Mega Afro — every style reads as a real haircut ON the bald head, no eye occlusion, no painted-hair clash anymore.
+- Female: the clip-driven puppet renders BALD by default (its static Hair/Ponytail meshes hide per the existing rule) and the procedural ponytail attachment fits (v57-female-*.png).
+- In-match regression (solo, online, V57): baldified GLB loads through the whole pipeline (playableClips=13), head attachments present (server profile hair='default' -> Classic Cut), remotes path identical. ESC -> QUIT TO MENU -> theme 'none', musicTimer null, crowdSource false (audio rule intact). tsc clean; eslint clean; dev.log clean.
+- Not changed (measured, then left alone): the attachment shapes themselves needed no reshaping once the painted hair was gone — every style passed the visual sweep; randomFreeCosmetics (bots) intentionally still rolls random hair for variety.
+
+Stage Summary:
+- The customization default is now a genuinely bald High-Fi head (texture-level, verified programmatically + visually), and every hair style attaches onto clean skin exactly as the user asked — no more clash between the baked hairdo and the selected style, no more "hair not looking good" mush at the default.
+- Honest limitations: the scalp fill is a measured flat skin tone + noise (no stubble/pore detail; mostly covered by whichever style is worn); the left ear lost some painted helix shading that was under the old hair (3D geometry still shades it); existing profiles with a SAVED hair keep their choice — only untouched profiles start bald.
+- Screenshots: tool-results/v57-bald-default.png, v57-{classic,buzz,mullet,spiky,ponytail,curly,long,braid,afro}-on-bald.png, v57-female-{bald,ponytail}.png, v57-inmatch.png, v57-texture-{before,after}.png. New scripts: scripts/baldify-male-head.ts, scripts/map-head-texture.ts, scripts/debug-scalp-seeds.ts.
+- Suggested next round: two-tab multiplayer cosmetics smoke; profile save/load race (Task 56 side observation); standing agenda (item persistence, animal polish, horn honks, pet name tags).

@@ -739,8 +739,9 @@ export class CharacterRig {
     this.headPivot.add(head)
 
     // ---- hair styles (v50): open-front swept dome + real hairline pieces ----
-    // default is gender-aware: female rigs wear a ponytail, male rigs the classic cut
-    const hairSlot = opts.hair ?? (isFemale ? 'ponytail' : 'default')
+    // v58: default is BALD — the High-Fi model's baked hair was removed, so an
+    // unstyled head shows clean skin and every selected style fits onto it
+    const hairSlot = opts.hair ?? 'bald'
     if (hairSlot !== 'bald') {
       // dome covers crown/back/sides; the face wedge stays open so brows +
       // fringe read (the old full-ring dome swallowed the forehead like a cap)

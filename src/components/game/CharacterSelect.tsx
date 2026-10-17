@@ -41,7 +41,7 @@ const POLICE_SLOTS: SlotSpec[] = [
 ]
 
 const DEFAULTS: Record<CosmeticKind, string> = {
-  hat: 'none', hair: 'default', face: 'clean', build: 'regular', outfit: 'classic', footwear: 'shoes', gear: 'none', held: 'none',
+  hat: 'none', hair: 'bald', face: 'clean', build: 'regular', outfit: 'classic', footwear: 'shoes', gear: 'none', held: 'none',
   policeOutfit: 'khaki', policeHat: 'peak',
 }
 
@@ -71,7 +71,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
 
   const [archetype, setArchetype] = useState(profile?.archetype ?? 'student')
   const [hat, setHat] = useState(profile?.cosmetics?.hat ?? 'none')
-  const [hair, setHair] = useState(profile?.cosmetics?.hair ?? 'default')
+  const [hair, setHair] = useState(profile?.cosmetics?.hair ?? 'bald')
   const [gender, setGender] = useState<'male' | 'female'>(profile?.cosmetics?.gender === 'female' ? 'female' : 'male')
   const [policeOutfit, setPoliceOutfit] = useState(profile?.cosmetics?.policeOutfit ?? 'khaki')
   const [policeHat, setPoliceHat] = useState(profile?.cosmetics?.policeHat ?? 'peak')
@@ -207,7 +207,9 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     if (next === gender) return
     setGender(next)
     let nextHair = hair
-    if (hair === 'default' || hair === 'buzz' || hair === 'bald') {
+    if (hair === 'bald') {
+      // bald is the untouched default and suits both silhouettes — keep it
+    } else if (hair === 'default' || hair === 'buzz') {
       // untouched masculine styles flip to the signature feminine ponytail (and back)
       nextHair = next === 'female' ? 'ponytail' : 'default'
       setHair(nextHair)

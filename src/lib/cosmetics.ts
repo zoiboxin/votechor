@@ -496,7 +496,7 @@ export function resolveRigCosmetics(c: Record<string, unknown> | undefined | nul
   const build: BodyBuild = rawBuild === 'slim' || rawBuild === 'sturdy' ? rawBuild : 'regular'
   return {
     hat: typeof c?.hat === 'string' ? c.hat : 'none',
-    hair: typeof c?.hair === 'string' ? c.hair : (gender === 'female' ? 'ponytail' : 'default'),
+    hair: typeof c?.hair === 'string' ? c.hair : 'bald',
     gender,
     face: typeof c?.face === 'string' ? c.face : 'clean',
     build,
