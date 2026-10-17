@@ -428,12 +428,12 @@ const defaultSettings: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  /** DEFAULT OFF (v33) — the procedural rig is the CUSTOMIZED body: every wardrobe
-   *  slot (hat / hair / face / build / outfit / footwear / gear / held) renders on it.
-   *  The High-Fi GLB is a fixed generic mesh (only palette-tinted), so when it was the
-   *  default the whole wardrobe silently vanished in-game ("customized but not
-   *  showing"). GLB stays opt-in via Options → Character Model. */
-  hiFiModel: false,
+  /** DEFAULT ON (v51) — the High-Fi slot now holds the textured realistic avatar
+   *  (user-supplied promptplay model, A-posed + shader arm-swing), which the user
+   *  explicitly asked for as THE player character. The wardrobe renders on the
+   *  procedural rig, so Classic Rig remains the opt-out for full customization;
+   *  police role always uses the procedural uniform (identity clarity). */
+  hiFiModel: true,
   /** DEFAULT OFF = the exact rendering path of commit 5b08baf ("v25"), which the
    *  affected user device confirmed working, while every build with these
    *  visibility optimizations active rendered a blue world for them. Opt-in via

@@ -136,15 +136,15 @@ export default function GameRoot() {
             localStorage.setItem('votechor_settings', JSON.stringify(parsed))
           } catch { /* private browsing */ }
         }
-        // ONE-TIME v33 MIGRATION — builds ≤ v32 shipped hiFiModel ON: the generic
-        // GLB body replaced the procedural rig in-game, so the entire wardrobe
-        // (hat / hair / face / build / outfit / footwear / gear / held) silently
-        // vanished — "I customized my character but it doesn't show in the game".
-        // Strip the saved preference once so the customized Classic rig becomes
-        // the default; an explicit opt-in from Options is respected forever.
-        if (!localStorage.getItem('votechor_hifi_migrated')) {
+        // ONE-TIME v51 MIGRATION (re-run of the v33 pass) — v33 turned hiFiModel OFF
+        // because the old generic GLB hid the customized wardrobe. v51 replaces the
+        // High-Fi slot with the textured realistic avatar the user supplied as THE
+        // player character, so the saved preference is stripped once more and everyone
+        // re-defaults to the new model. An explicit Options choice is still respected
+        // forever after (the marker only lets this run once).
+        if (!localStorage.getItem('votechor_hifi_migrated_v51')) {
           try {
-            localStorage.setItem('votechor_hifi_migrated', '1')
+            localStorage.setItem('votechor_hifi_migrated_v51', '1')
             delete parsed.hiFiModel
             localStorage.setItem('votechor_settings', JSON.stringify(parsed))
           } catch { /* private browsing */ }

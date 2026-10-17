@@ -39,7 +39,6 @@ export class GLBAssetManager {
     if (this.failedUrls.has(url)) return Promise.resolve(null) // known-bad — don't re-fetch
     const p = this.doLoad(url)
     this.cache.set(url, p)
-    p.then((a) => { if (!a) { this.cache.delete(url); this.failedUrls.add(url) } })
     return p
   }
 
@@ -48,14 +47,22 @@ export class GLBAssetManager {
   private doLoad(url: string): Promise<GLBAsset | null> {
     return new Promise((resolve) => {
       let settled = false
-      const done = (a: GLBAsset | null, reason?: string) => {
+      const finish = (a: GLBAsset | null, reason?: string, retryable = false) => {
         if (settled) return
         settled = true
-        if (!a && reason) this.onAssetError?.(url, reason)
+        if (!a) {
+          // timeouts (slow device, big asset) stay retryable — hard errors are one-strike
+          this.cache.delete(url)
+          if (!retryable) this.failedUrls.add(url)
+          this.onAssetError?.(url, reason ?? 'unknown')
+        }
         resolve(a)
       }
-      // hard timeout — a hung asset fetch must never block the match
-      const timeout = setTimeout(() => done(null, 'timeout after 12s'), 12000)
+      // hard timeout — a hung asset fetch must never block the match. Ceiling is
+      // generous (45s): realistic high-poly assets (20MB+ of textures) on throttled
+      // devices can legitimately exceed the old 12s, and the caller already renders
+      // the procedural rig meanwhile — nothing gameplay-side ever waits.
+      const timeout = setTimeout(() => finish(null, 'timeout after 45s', true), 45000)
       try {
         this.loader.load(
           url,
@@ -63,7 +70,7 @@ export class GLBAssetManager {
             clearTimeout(timeout)
             try {
               const scene = gltf.scene as THREE.Group
-              if (!scene) { done(null, 'empty scene'); return }
+              if (!scene) { finish(null, 'empty scene'); return }
               // normalize the graph: shadows off (software GPU), sane culling
               let meshes = 0
               scene.traverse((o) => {
@@ -83,22 +90,29 @@ export class GLBAssetManager {
                   }
                 }
               })
-              if (meshes === 0) { done(null, 'no meshes'); return }
+              if (meshes === 0) { finish(null, 'no meshes'); return }
               const anims = Array.isArray(gltf.animations) ? gltf.animations : []
-              done({ url, scene, animations: anims, bytes: 0 })
+              const asset: GLBAsset = { url, scene, animations: anims, bytes: 0 }
+              if (settled) {
+                // a timeout already released the caller — park the freshly parsed
+                // asset so the NEXT match's retry resolves instantly (no re-fetch)
+                this.cache.set(url, Promise.resolve(asset))
+                return
+              }
+              finish(asset)
             } catch (e) {
-              done(null, `normalize failed: ${e instanceof Error ? e.message : String(e)}`)
+              finish(null, `normalize failed: ${e instanceof Error ? e.message : String(e)}`)
             }
           },
           undefined,
           (err) => {
             clearTimeout(timeout)
-            done(null, `loader error: ${err instanceof Error ? err.message : String(err)}`)
+            finish(null, `loader error: ${err instanceof Error ? err.message : String(err)}`)
           },
         )
       } catch (e) {
         clearTimeout(timeout)
-        done(null, `load threw: ${e instanceof Error ? e.message : String(e)}`)
+        finish(null, `load threw: ${e instanceof Error ? e.message : String(e)}`)
       }
     })
   }

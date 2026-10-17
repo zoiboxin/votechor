@@ -43,7 +43,7 @@ const DEFAULTS: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  hiFiModel: false,
+  hiFiModel: true,
   distanceCulling: false,
   squadPanel: true,
   keybinds: { ...DEFAULT_KEYBINDS }, // canonical defaults imported from the store — a private stale copy here once lacked heal/shout and re-crashed the panel via "Reset to Committee Defaults"
@@ -228,7 +228,7 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Model</div>
-                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig = your full customized look (hat, hair, shoes…). High-Fi = generic GLB (wardrobe hidden)</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">High-Fi = realistic textured avatar (wardrobe hidden on your own character). Classic Rig = your full customized look</div>
               </div>
               <Select
                 value={settings.hiFiModel ? 'hifi' : 'classic'}

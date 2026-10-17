@@ -80,6 +80,92 @@ export const CLIP_FALLBACK: Record<LocoState, string[]> = {
   heal: ['heal'],
 }
 
+/**
+ * Procedural locomotion fallback for CLIP-LESS GLB characters (e.g. the textured
+ * promptplay avatar whose limbs are fused into one mesh — no skeleton, no clips).
+ * GLBAnimDriver resolves no clips for such models, so without this the body would
+ * glide frozen in its baked pose. Three cheap layers sell the motion:
+ *   1. ARM SWING — a vertex-shader rotation of the arm region (|x| > 0.21, safely
+ *      above the shirt hem at 0.209) around the shoulder line (y = 1.547), driven
+ *      by a phase/amp uniform pair. Patches AvatarBody + outfit_top so sleeves
+ *      follow the skin arms; normals are rotated too so lighting stays coherent.
+ *   2. BOB — subtle vertical bounce of the whole group at step frequency.
+ *   3. LEAN — slight forward pitch proportional to the swing (YXZ order keeps the
+ *      lean local to the facing yaw that player.render / the remote loop set).
+ * The arm-region constants mirror scripts/fix-avatar-pose.ts, which baked the
+ * T-pose into an A-pose (pivot ±0.215/1.547, hands at ±0.37).
+ */
+export class GlbLocoFallback {
+  private static readonly ARM_X = 0.21
+  private static readonly SHOULDER_Y = 1.547
+  private phase = 0
+  private amp = 0
+  private uPhase = { value: 0 }
+  private uSwing = { value: 0 }
+  private patched = false
+
+  /** Patch the body/outfit materials with the arm-swing vertex transform (idempotent). */
+  patch(group: THREE.Object3D) {
+    if (this.patched) return
+    this.patched = true
+    const armX = GlbLocoFallback.ARM_X.toFixed(3)
+    const shoulderY = GlbLocoFallback.SHOULDER_Y.toFixed(3)
+    group.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (!mesh.isMesh || typeof mesh.name !== 'string') return
+      if (!/^(AvatarBody|outfit_top)$/i.test(mesh.name)) return
+      const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial | undefined
+      if (!mat || !(mat as THREE.Material).isMaterial) return
+      const clone = mat.clone() // per-instance uniforms (the cached asset keeps its originals)
+      clone.onBeforeCompile = (shader) => {
+        shader.uniforms.uPhase = this.uPhase
+        shader.uniforms.uSwing = this.uSwing
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nuniform float uPhase;\nuniform float uSwing;')
+          .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+{
+  float sgnN = position.x >= 0.0 ? 1.0 : -1.0;
+  float angN = sgnN * uSwing * sin(uPhase);
+  float cN = cos(angN), sN = sin(angN);
+  objectNormal = vec3(objectNormal.x, objectNormal.y * cN - objectNormal.z * sN, objectNormal.y * sN + objectNormal.z * cN);
+}`)
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+{
+  float aw = smoothstep(${armX}, ${(GlbLocoFallback.ARM_X + 0.05).toFixed(3)}, abs(position.x));
+  if (aw > 0.001) {
+    float sgn = position.x >= 0.0 ? 1.0 : -1.0;
+    float ang = sgn * uSwing * sin(uPhase);
+    float c = cos(ang), s = sin(ang);
+    float dy = position.y - ${shoulderY};
+    transformed = vec3(position.x, ${shoulderY} + dy * c - position.z * s, dy * s + position.z * c);
+  }
+}`)
+      }
+      mesh.material = clone
+    })
+  }
+
+  /**
+   * Advance the fallback and apply bob/lean to the instance group. Call AFTER the
+   * per-frame position/rotation copy so the offsets ride on top (both call sites
+   * re-copy position/rotation.y every frame, so nothing accumulates).
+   */
+  apply(group: THREE.Group, dt: number, hSpeed: number, grounded: boolean) {
+    const target = grounded ? THREE.MathUtils.clamp((hSpeed - 0.3) / 5.5, 0, 1) : 0.2
+    this.amp += (target - this.amp) * Math.min(1, dt * 6)
+    this.phase += dt * (1.2 + hSpeed * 1.35)
+    this.uPhase.value = this.phase
+    this.uSwing.value = 0.55 * this.amp
+    group.position.y += grounded ? Math.abs(Math.sin(this.phase)) * 0.045 * this.amp : 0
+    group.rotation.order = 'YXZ'
+    group.rotation.x = 0.1 * this.amp
+  }
+
+  dispose() {
+    // uniform objects die with the cloned materials — nothing to free here
+  }
+}
+
 /** Clip timeScale calibration: design speeds the exported clips were authored for. */
 const WALK_DESIGN_SPEED = 4.4
 const RUN_DESIGN_SPEED = 7.6

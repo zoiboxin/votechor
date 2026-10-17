@@ -34,7 +34,7 @@ import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-s
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
 import { GLBAssetManager, type GLBInstance } from './glb'
-import { GLBAnimDriver } from './anim'
+import { GLBAnimDriver, GlbLocoFallback } from './anim'
 import type { LocoState } from './anim'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
@@ -42,7 +42,7 @@ import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors }
 interface RemoteEntry {
   rig: import('./character').CharacterRig | null
   /** High-Fi GLB model instance (replaces the procedural body; rig keeps the name tag). */
-  glb: { inst: GLBInstance; driver: GLBAnimDriver; loading: boolean } | null
+  glb: { inst: GLBInstance; driver: GLBAnimDriver; loading: boolean; loco?: GlbLocoFallback } | null
   target: { x: number; y: number; z: number; ry: number }
   anim: AnimName
   name: string
@@ -184,7 +184,11 @@ export class Game {
   private lastArrestAttemptAt = 0 // police-role arrest spam gate (client side)
   private lastPlayerStrikeAt = 0 // police-role baton strike (F) spam gate — distinct from the NPC telegraph above
   // ---- High-Fi GLB player model (Step 2/3/4 integration — auto-fallback to procedural) ----
-  private glbMgr = new GLBAssetManager()
+  private glbMgr = (() => {
+    const mgr = new GLBAssetManager()
+    mgr.onAssetError = (url, reason) => console.warn(`[glb] ${url}: ${reason}`)
+    return mgr
+  })()
   private hiFiPalette: { shirt: string; pants: string; skin: string; accent: string } | null = null
   private hiFiGender: 'male' | 'female' = 'male'
   private role: 'protector' | 'police' = 'protector' // chosen side (profile.role)
@@ -1125,6 +1129,10 @@ export class Game {
    */
   private async attachRemoteGlb(id: string, r: RemoteEntry) {
     if (r.glb || !r.rig) return
+    // police stay on the procedural rig: their uniform/hat/lathi identity reads clearly
+    // there, while the textured avatar GLB has no uniform to tint (tintGlb matches no
+    // mesh names on it) — an untinted protestor-looking cop would confuse chases.
+    if (r.role === 'police') return
     r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
     const gender = r.cosmetics?.gender === 'female' ? 'female' : 'male'
     const url = gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
@@ -1134,16 +1142,13 @@ export class Game {
     if (this.remotePlayers.get(id) !== r || !r.rig || !this.store.settings.hiFiModel) { r.glb = null; return }
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) { r.glb = null; return }
-    // same palette logic as the procedural rig above (archetype colors + skinTone + police uniform)
+    // palette kept for tintGlb (matches the old rigged GLB's mesh names; the textured
+    // avatar's names don't match so it keeps its own textures — intended)
     const c = r.cosmetics
     const arch = archetypeById(r.archetype)
     const pal = {
       shirt: arch.colors.shirt, pants: arch.colors.pants, accent: arch.colors.accent,
       skin: typeof c?.skinTone === 'string' ? c.skinTone : arch.colors.skin,
-    }
-    if (r.role === 'police') {
-      const u = policeUniformColors(typeof c?.policeOutfit === 'string' ? c.policeOutfit : undefined)
-      pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
     }
     this.tintGlb(inst, pal)
     inst.group.visible = true
@@ -1151,8 +1156,10 @@ export class Game {
     inst.group.rotation.y = r.target.ry
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
+    const loco = new GlbLocoFallback()
+    loco.patch(inst.group) // arm-swing layer for clip-less models (harmless when clips exist)
     r.rig.setBodyVisible(false) // name tag + alert sprites stay
-    r.glb = { inst, driver, loading: false }
+    r.glb = { inst, driver, loading: false, loco }
     // catch the GLB up to wherever interpolation is right now
     inst.group.position.copy(r.rig.group.position)
     inst.group.rotation.y = r.rig.group.rotation.y
@@ -1177,6 +1184,8 @@ export class Game {
   private async tryAttachHiFi() {
     const p = this.player
     if (!p || p.glb || !this.hiFiPalette) return
+    // police play on the procedural rig (uniform/hat identity — see attachRemoteGlb)
+    if (this.role === 'police') return
     const url = this.hiFiGender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
     const asset = await this.glbMgr.load(url)
     if (!asset) return // loader already logged the reason; procedural stays
@@ -2638,6 +2647,8 @@ export class Game {
         r.glb.driver.update(animDt)
         r.glb.inst.group.position.copy(pos)
         r.glb.inst.group.rotation.y = r.rig.group.rotation.y
+        // clip-less models (textured avatar) get the procedural bob/lean/arm-swing layer
+        if (r.glb.driver.playableClips === 0 && r.glb.loco) r.glb.loco.apply(r.glb.inst.group, animDt, hSpeed, true)
       }
     }
 

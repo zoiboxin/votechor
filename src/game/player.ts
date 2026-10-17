@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { CharacterRig } from './character'
 import { MOVE, DAMAGE, archetypeById } from './shared/constants'
 import { policeUniformColors } from '../lib/cosmetics'
-import { pickLoco, mapToAnimName } from './anim'
+import { pickLoco, mapToAnimName, GlbLocoFallback } from './anim'
 import type { GLBAnimDriver, LocoState } from './anim'
 import type { GLBInstance } from './glb'
 import type { AnimName } from './shared/types'
@@ -52,7 +52,7 @@ export class PlayerController {
   /** Numeric-glitch sentinel fired when pos/vel stopped being finite (see applyInput). */
   onNanRecover: ((reason?: 'nan' | 'bounds') => void) | null = null
   // ---- High-Fi GLB rig (optional — procedural rig stays as the fallback) ----
-  glb: { inst: GLBInstance; driver: GLBAnimDriver } | null = null
+  glb: { inst: GLBInstance; driver: GLBAnimDriver; loco: GlbLocoFallback } | null = null
   /** Last resolved animation state, published to the network (works for BOTH backends). */
   netAnim: AnimName = 'idle'
 
@@ -382,7 +382,9 @@ export class PlayerController {
 
   /** Attach the High-Fi GLB rig (hides the procedural body; both stay positioned). */
   attachGlb(inst: GLBInstance, driver: GLBAnimDriver) {
-    this.glb = { inst, driver }
+    const loco = new GlbLocoFallback()
+    loco.patch(inst.group) // arm-swing shader for clip-less models (no-op pose-wise until applied)
+    this.glb = { inst, driver, loco }
     this.glb.driver.snap('idle')
     this.rig.group.visible = false
     inst.group.visible = true
@@ -392,6 +394,7 @@ export class PlayerController {
   detachGlb() {
     if (!this.glb) return
     this.glb.driver.dispose()
+    this.glb.loco.dispose()
     this.glb = null
     this.rig.group.visible = true
   }
@@ -431,6 +434,8 @@ export class PlayerController {
       this.glb.driver.update(dt)
       this.glb.inst.group.position.copy(this.pos)
       this.glb.inst.group.rotation.y = this.ry
+      // clip-less models (textured avatar) get the procedural bob/lean/arm-swing layer
+      if (this.glb.driver.playableClips === 0) this.glb.loco.apply(this.glb.inst.group, dt, hSpeed, this.grounded)
     }
     // procedural backend always updates (it holds the name tag + is the fallback)
     this.rig.update(dt, this.netAnim, hSpeed)
