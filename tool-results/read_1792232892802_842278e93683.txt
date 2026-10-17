@@ -1,0 +1,679 @@
+     1→'use client'
+     2→
+     3→// VoteChor Wardrobe — pick an archetype, then kit them out across six equipment
+     4→// slots (headgear / face / outfit / footwear / back gear / in-hand) with a live
+     5→// WebGL preview of the actual in-game rig. Server stays authoritative on unlocks.
+     6→import { useEffect, useMemo, useState } from 'react'
+     7→import { useGameStore, uiActions, type Profile } from '@/lib/game-store'
+     8→import { ARCHETYPES, ACHIEVEMENTS } from '@/game/shared/constants'
+     9→import {
+    10→  HAT_CATALOG, HAIR_CATALOG, FACE_CATALOG, BUILD_CATALOG, OUTFIT_CATALOG, FOOTWEAR_CATALOG, GEAR_CATALOG, HELD_CATALOG,
+    11→  POLICE_OUTFIT_CATALOG, POLICE_HAT_CATALOG,
+    12→  SKIN_TONES, unlockLabel, anyItemIsUnlocked, type CosmeticItem, type CosmeticKind,
+    13→} from '@/lib/cosmetics'
+    14→import { ArrowLeft, Check, Dices, Gem, Lock, Save, Shield, Siren, Unlock } from 'lucide-react'
+    15→import { motion } from 'framer-motion'
+    16→import CharacterPreview, { type PreviewLook } from './CharacterPreview'
+    17→import type { Archetype } from '@/game/shared/types'
+    18→
+    19→interface SlotSpec {
+    20→  kind: CosmeticKind
+    21→  label: string
+    22→  hint: string
+    23→  catalog: CosmeticItem[]
+    24→}
+    25→
+    26→const SLOTS: SlotSpec[] = [
+    27→  { kind: 'hat', label: 'Headgear', hint: 'Caps, cones & crowns', catalog: HAT_CATALOG },
+    28→  { kind: 'hair', label: 'Hair', hint: 'Cuts, buns & braids', catalog: HAIR_CATALOG },
+    29→  { kind: 'face', label: 'Face', hint: 'Beards & battle paint', catalog: FACE_CATALOG },
+    30→  { kind: 'build', label: 'Build', hint: 'Body shape & fit', catalog: BUILD_CATALOG },
+    31→  { kind: 'outfit', label: 'Outfit', hint: 'Dress for the cause', catalog: OUTFIT_CATALOG },
+    32→  { kind: 'footwear', label: 'Footwear', hint: 'March in style', catalog: FOOTWEAR_CATALOG },
+    33→  { kind: 'gear', label: 'Back Gear', hint: 'Drums, bags & rolls', catalog: GEAR_CATALOG },
+    34→  { kind: 'held', label: 'In Hand', hint: 'Signs, flags & bats', catalog: HELD_CATALOG },
+    35→]
+    36→
+    37→/** Extra tabs that only appear while the POLICE side is chosen (round 23). */
+    38→const POLICE_SLOTS: SlotSpec[] = [
+    39→  { kind: 'policeOutfit', label: 'Police Dress', hint: 'Six regulation uniforms', catalog: POLICE_OUTFIT_CATALOG },
+    40→  { kind: 'policeHat', label: 'Police Cap', hint: 'Peak, beret & turban', catalog: POLICE_HAT_CATALOG },
+    41→]
+    42→
+    43→const DEFAULTS: Record<CosmeticKind, string> = {
+    44→  hat: 'none', hair: 'default', face: 'clean', build: 'regular', outfit: 'classic', footwear: 'shoes', gear: 'none', held: 'none',
+    45→  policeOutfit: 'khaki', policeHat: 'peak',
+    46→}
+    47→
+    48→function cssMiniPreview(a: Archetype) {
+    49→  return (
+    50→    <div className="relative mx-auto flex h-24 w-24 items-end justify-center overflow-hidden rounded-xl border-2 border-[#1c1a17]/60"
+    51→      style={{ background: `linear-gradient(180deg, ${a.colors.accent}55 0%, ${a.colors.shirt}33 100%)` }}>
+    52→      <div className="absolute bottom-0 flex gap-1.5">
+    53→        <div className="h-5 w-3.5 rounded-b-md" style={{ background: a.colors.pants }} />
+    54→        <div className="h-5 w-3.5 rounded-b-md" style={{ background: a.colors.pants }} />
+    55→      </div>
+    56→      <div className="absolute bottom-4 h-10 w-11 rounded-t-lg border border-[#1c1a17]/40" style={{ background: a.colors.shirt }}>
+    57→        <div className="absolute left-1/2 top-1.5 h-4 w-1.5 -translate-x-1/2 rounded" style={{ background: a.colors.accent }} />
+    58→      </div>
+    59→      <div className="absolute bottom-[3.75rem] h-9 w-9 rounded-full border-2 border-[#1c1a17]/50" style={{ background: a.colors.skin }}>
+    60→        <div className="absolute inset-x-0 top-0 h-2.5 rounded-t-full" style={{ background: a.colors.hair }} />
+    61→      </div>
+    62→    </div>
+    63→  )
+    64→}
+    65→
+    66→export default function CharacterSelect({ onBack }: { onBack: () => void }) {
+    67→  const profile = useGameStore((s) => s.profile)
+    68→  const setProfile = useGameStore((s) => s.setProfile)
+    69→  const notify = useGameStore((s) => s.notify)
+    70→  const hiFiSetting = useGameStore((s) => s.settings.hiFiModel) // preview must mirror the in-game model (v52)
+    71→
+    72→  const [archetype, setArchetype] = useState(profile?.archetype ?? 'student')
+    73→  const [hat, setHat] = useState(profile?.cosmetics?.hat ?? 'none')
+    74→  const [hair, setHair] = useState(profile?.cosmetics?.hair ?? 'default')
+    75→  const [gender, setGender] = useState<'male' | 'female'>(profile?.cosmetics?.gender === 'female' ? 'female' : 'male')
+    76→  const [policeOutfit, setPoliceOutfit] = useState(profile?.cosmetics?.policeOutfit ?? 'khaki')
+    77→  const [policeHat, setPoliceHat] = useState(profile?.cosmetics?.policeHat ?? 'peak')
+    78→  const [face, setFace] = useState(profile?.cosmetics?.face ?? 'clean')
+    79→  const [build, setBuild] = useState(profile?.cosmetics?.build ?? 'regular')
+    80→  const [outfit, setOutfit] = useState(profile?.cosmetics?.outfit ?? 'classic')
+    81→  const [footwear, setFootwear] = useState(profile?.cosmetics?.footwear ?? 'shoes')
+    82→  const [gear, setGear] = useState(profile?.cosmetics?.gear ?? 'none')
+    83→  const [held, setHeld] = useState(profile?.cosmetics?.held ?? 'none')
+    84→  const [glasses, setGlasses] = useState(profile?.cosmetics?.glasses ?? false)
+    85→  const [skinTone, setSkinTone] = useState(profile?.cosmetics?.skinTone ?? '')
+    86→  const [signText, setSignText] = useState(profile?.cosmetics?.signText ?? '')
+    87→  const [role, setRole] = useState<'protector' | 'police'>(profile?.role === 'police' ? 'police' : 'protector')
+    88→  const [saving, setSaving] = useState(false)
+    89→  const [unlockedCodes, setUnlockedCodes] = useState<Set<string>>(new Set())
+    90→  const [tab, setTab] = useState<CosmeticKind>('hat')
+    91→  const [hovered, setHovered] = useState<string | null>(null)
+    92→
+    93→  // fetch granted achievements → cosmetic unlocks (server remains authoritative on save)
+    94→  // re-fetches on mount, on window focus, and every 15s so mid-session unlocks appear live
+    95→  useEffect(() => {
+    96→    let cancelled = false
+    97→    const load = async () => {
+    98→      try {
+    99→        const raw = localStorage.getItem('votechor_profile')
+   100→        const token = raw ? (JSON.parse(raw) as { token?: string }).token : undefined
+   101→        if (!token) return
+   102→        const res = await fetch('/api/achievements', { headers: { 'x-vc-token': token } })
+   103→        if (!res.ok) return
+   104→        const data = (await res.json()) as { unlocked?: string[] }
+   105→        if (!cancelled && Array.isArray(data.unlocked)) setUnlockedCodes(new Set(data.unlocked))
+   106→      } catch { /* offline — defaults stay unlocked */ }
+   107→    }
+   108→    void load()
+   109→    window.addEventListener('focus', load)
+   110→    const iv = setInterval(load, 15000)
+   111→    return () => {
+   112→      cancelled = true
+   113→      window.removeEventListener('focus', load)
+   114→      clearInterval(iv)
+   115→    }
+   116→  }, [])
+   117→
+   118→  const level = profile?.level ?? 1
+   119→  const achName = (code: string) => ACHIEVEMENTS.find((a) => a.id === code)?.name ?? code.replaceAll('_', ' ')
+   120→
+   121→  const isUnlocked = (item: CosmeticItem) => {
+   122→    if (item.unlock.type === 'free') return true
+   123→    if (item.unlock.type === 'level') return level >= item.unlock.level
+   124→    return unlockedCodes.has(item.unlock.code)
+   125→  }
+   126→
+   127→  const token = () => {
+   128→    try {
+   129→      const raw = localStorage.getItem('votechor_profile')
+   130→      return raw ? (JSON.parse(raw) as { token?: string }).token ?? null : null
+   131→    } catch {
+   132→      return null
+   133→    }
+   134→  }
+   135→
+   136→  // NOTE: the API REPLACES the stored cosmetics object — always persist the FULL look.
+   137→  const currentLook = () => ({
+   138→    hat, hair, gender, face, build, outfit, footwear, gear, held, glasses,
+   139→    policeOutfit, policeHat,
+   140→    ...(skinTone ? { skinTone } : {}),
+   141→    signText: signText.slice(0, 24),
+   142→  })
+   143→
+   144→  /** `overrides` carry the just-clicked values — React state lags one tick behind, so
+   145→   *  posting plain currentLook() would silently save the PREVIOUS look (r23 bugfix). */
+   146→  const persist = async (overrides?: Record<string, string | boolean>) => {
+   147→    setSaving(true)
+   148→    try {
+   149→      const res = await fetch('/api/profile', {
+   150→        method: 'POST',
+   151→        headers: { 'Content-Type': 'application/json', 'x-vc-token': token() ?? '' },
+   152→        body: JSON.stringify({ cosmetics: { ...currentLook(), ...overrides } }),
+   153→      })
+   154→      if (!res.ok) {
+   155→        const data = (await res.json().catch(() => ({}))) as { error?: string }
+   156→        notify(data.error ? `Wardrobe rejected: ${data.error}` : 'Wardrobe department did not answer. Changes kept locally.', 'warning')
+   157→      }
+   158→    } catch {
+   159→      notify('Saved locally. The server will hear about this later.', 'warning')
+   160→    } finally {
+   161→      setSaving(false)
+   162→    }
+   163→  }
+   164→
+   165→  const setSlot = (kind: CosmeticKind, id: string, item?: CosmeticItem) => {
+   166→    if (item && !isUnlocked(item)) {
+   167→      notify(`Locked: ${item.label} — ${unlockLabel(item)}`, 'warning')
+   168→      return
+   169→    }
+   170→    switch (kind) {
+   171→      case 'hat': setHat(id); break
+   172→      case 'hair': setHair(id); break
+   173→      case 'face': setFace(id); break
+   174→      case 'build': setBuild(id); break
+   175→      case 'outfit': setOutfit(id); break
+   176→      case 'footwear': setFootwear(id); break
+   177→      case 'gear': setGear(id); break
+   178→      case 'held': setHeld(id); break
+   179→      case 'policeOutfit': setPoliceOutfit(id); break
+   180→      case 'policeHat': setPoliceHat(id); break
+   181→    }
+   182→    const patch: Partial<Profile['cosmetics']> = {}
+   183→    ;(patch as Record<string, string | boolean>)[kind] = id
+   184→    uiActions().updateCosmetics(patch)
+   185→    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, [kind]: id } })
+   186→    void persist({ [kind]: id })
+   187→  }
+   188→
+   189→  const toggleGlasses = () => {
+   190→    const next = !glasses
+   191→    setGlasses(next)
+   192→    uiActions().updateCosmetics({ glasses: next })
+   193→    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, glasses: next } })
+   194→    void persist({ glasses: next })
+   195→  }
+   196→
+   197→  const chooseSkin = (hex: string) => {
+   198→    const next = skinTone === hex ? '' : hex
+   199→    setSkinTone(next)
+   200→    uiActions().updateCosmetics({ skinTone: next })
+   201→    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, skinTone: next } })
+   202→    void persist({ skinTone: next })
+   203→  }
+   204→
+   205→  /** Male / female build — also nudges hair to a fitting style while untouched. */
+   206→  const chooseGender = (next: 'male' | 'female') => {
+   207→    if (next === gender) return
+   208→    setGender(next)
+   209→    let nextHair = hair
+   210→    if (hair === 'default' || hair === 'buzz' || hair === 'bald') {
+   211→      // untouched masculine styles flip to the signature feminine ponytail (and back)
+   212→      nextHair = next === 'female' ? 'ponytail' : 'default'
+   213→      setHair(nextHair)
+   214→    }
+   215→    uiActions().updateCosmetics({ gender: next, hair: nextHair })
+   216→    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, gender: next, hair: nextHair } })
+   217→    void persist({ gender: next, hair: nextHair })
+   218→  }
+   219→
+   220→  const chooseArchetype = (id: string) => {
+   221→    setArchetype(id)
+   222→    uiActions().selectArchetype(id)
+   223→    setProfile(profile ? { ...profile, archetype: id } : profile)
+   224→    // archetype is a separate API field
+   225→    ;(async () => {
+   226→      setSaving(true)
+   227→      try {
+   228→        await fetch('/api/profile', {
+   229→          method: 'POST',
+   230→          headers: { 'Content-Type': 'application/json', 'x-vc-token': token() ?? '' },
+   231→          body: JSON.stringify({ archetype: id, cosmetics: currentLook() }),
+   232→        })
+   233→      } catch { /* local-only */ } finally { setSaving(false) }
+   234→    })()
+   235→  }
+   236→
+   237→  /** Pick a side — persisted on the profile (server) + localStorage (offline fallback). */
+   238→  const chooseRole = (next: 'protector' | 'police') => {
+   239→    if (next === role) return
+   240→    setRole(next)
+   241→    setProfile(profile ? { ...profile, role: next } : profile)
+   242→    try { localStorage.setItem('votechor_role', next) } catch { /* private browsing */ }
+   243→    notify(next === 'police'
+   244→      ? 'Badge accepted — you report for duty next match. Keep the lathi polite.'
+   245→      : 'Welcome back to the people’s side — the protest missed you.', 'info')
+   246→    ;(async () => {
+   247→      setSaving(true)
+   248→      try {
+   249→        await fetch('/api/profile', {
+   250→          method: 'POST',
+   251→          headers: { 'Content-Type': 'application/json', 'x-vc-token': token() ?? '' },
+   252→          body: JSON.stringify({ role: next }),
+   253→        })
+   254→      } catch { /* local-only */ } finally { setSaving(false) }
+   255→    })()
+   256→  }
+   257→
+   258→  const saveSign = () => {
+   259→    const text = signText.slice(0, 24)
+   260→    setSignText(text)
+   261→    uiActions().updateCosmetics({ signText: text })
+   262→    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, signText: text } })
+   263→    void persist({ signText: text })
+   264→  }
+   265→
+   266→  const randomize = () => {
+   267→    const pickFree = (catalog: CosmeticItem[]) => {
+   268→      const pool = catalog.filter(isUnlocked)
+   269→      return pool[Math.floor(Math.random() * pool.length)]?.id ?? catalog[0].id
+   270→    }
+   271→    const rg = gender === 'female' ? 'male' : 'female'
+   272→    const female = rg === 'female'
+   273→    const rh = pickFree(HAT_CATALOG); setHat(rh)
+   274→    const rhair = female
+   275→      ? (['bun', 'ponytail', 'braid', 'long', 'curly', 'default'] as const)[Math.floor(Math.random() * 6)]
+   276→      : (['default', 'buzz', 'curly', 'bald', 'ponytail'] as const)[Math.floor(Math.random() * 5)]
+   277→    setHair(rhair)
+   278→    const rf = pickFree(FACE_CATALOG); setFace(rf)
+   279→    const rb = pickFree(BUILD_CATALOG); setBuild(rb)
+   280→    const ro = pickFree(OUTFIT_CATALOG); setOutfit(ro)
+   281→    const rw = pickFree(FOOTWEAR_CATALOG); setFootwear(rw)
+   282→    const rgr = pickFree(GEAR_CATALOG); setGear(rgr)
+   283→    const rd = pickFree(HELD_CATALOG); setHeld(rd)
+   284→    const rpo = pickFree(POLICE_OUTFIT_CATALOG); setPoliceOutfit(rpo)
+   285→    const rph = pickFree(POLICE_HAT_CATALOG); setPoliceHat(rph)
+   286→    const rs = Math.random() < 0.4
+   287→    setGlasses(rs)
+   288→    const tone = SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)].hex
+   289→    setSkinTone(tone)
+   290→    setGender(rg)
+   291→    uiActions().updateCosmetics({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone })
+   292→    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone } })
+   293→    void persist({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone })
+   294→    notify('Stylist rolled a fresh fit — democracy never looked better', 'squad')
+   295→  }
+   296→
+   297→  const police = role === 'police'
+   298→  const look: PreviewLook = useMemo(() => ({
+   299→    archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText: signText.trim(),
+   300→    skinTone: skinTone || undefined,
+   301→    gender, hair,
+   302→    police,
+   303→    policeOutfit, policeHat,
+   304→  }), [archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText, skinTone, gender, hair, police, policeOutfit, policeHat])
+   305→
+   306→  const sel = ARCHETYPES.find((a) => a.id === archetype) ?? ARCHETYPES[0]
+   307→  const visibleSlots = police ? [...SLOTS, ...POLICE_SLOTS] : SLOTS
+   308→  const activeTab = visibleSlots.find((s) => s.kind === tab) ?? visibleSlots[0]
+   309→  const slotValues: Record<CosmeticKind, string> = { hat, hair, face, build, outfit, footwear, gear, held, policeOutfit, policeHat }
+   310→  const equippedCount = visibleSlots.filter((s) => slotValues[s.kind] !== DEFAULTS[s.kind]).length + (glasses ? 1 : 0) + (skinTone ? 1 : 0)
+   311→
+   312→  return (
+   313→    <div className="vc-paper pointer-events-auto fixed inset-0 z-30 flex flex-col overflow-hidden">
+   314→      <div className="pointer-events-none absolute inset-0 opacity-[0.05] [background:repeating-linear-gradient(-35deg,#2e6e4e_0_18px,transparent_18px_36px)]" />
+   315→
+   316→      <header className="relative flex shrink-0 items-center gap-3 border-b-2 border-[#1c1a17]/80 bg-[#f2a541]/60 px-4 py-3">
+   317→        <button
+   318→          onClick={onBack}
+   319→          className="flex items-center gap-1.5 rounded-xl border-2 border-[#1c1a17]/80 bg-[#f5efdc] px-3 py-1.5 text-xs font-black uppercase tracking-tight text-[#1c1a17] shadow-[3px_3px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:shadow-[4px_5px_0_#1c1a17] active:translate-x-[1px] active:translate-y-[1px] active:shadow-[1px_1px_0_#1c1a17]"
+   320→        >
+   321→          <ArrowLeft className="h-4 w-4" /> Back
+   322→        </button>
+   323→        <h2 className="text-xl font-black uppercase tracking-tight text-[#1c1a17] sm:text-2xl">Protester Wardrobe</h2>
+   324→        <span className="hidden rounded-full border-2 border-[#1c1a17]/60 bg-[#f5efdc]/80 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-[#1c1a17]/70 sm:inline">
+   325→          {equippedCount} equipped
+   326→        </span>
+   327→        <div className="ml-auto flex items-center gap-2">
+   328→          <button
+   329→            onClick={randomize}
+   330→            className="flex items-center gap-1.5 rounded-xl border-2 border-[#1c1a17]/80 bg-[#2e6e4e] px-3 py-1.5 text-xs font-black uppercase tracking-tight text-[#f5efdc] shadow-[3px_3px_0_#1c1a17] transition-all hover:-translate-y-0.5 hover:shadow-[4px_5px_0_#1c1a17] active:translate-x-[1px] active:translate-y-[1px]"
+   331→          >
+   332→            <Dices className="h-4 w-4" /> Surprise Fit
+   333→          </button>
+   334→          {saving && <Save className="h-4 w-4 animate-pulse text-[#8c1f28]" />}
+   335→        </div>
+   336→      </header>
+   337→
+   338→      <div className="vc-scroll min-h-0 flex-1 overflow-y-auto">
+   339→        <div className="mx-auto max-w-6xl space-y-5 px-4 py-5">
+   340→          {/* Archetype grid */}
+   341→          <section aria-label="Characters">
+   342→            <div className="mb-2 flex items-baseline gap-2">
+   343→              <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">1 · Choose Your Character</h3>
+   344→              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">{ARCHETYPES.length} rebels with quirks</span>
+   345→            </div>
+   346→            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+   347→              {ARCHETYPES.map((a, i) => {
+   348→                const active = a.id === archetype
+   349→                return (
+   350→                  <motion.button
+   351→                    key={a.id}
+   352→                    initial={{ opacity: 0, y: 14 }}
+   353→                    animate={{ opacity: 1, y: 0 }}
+   354→                    transition={{ delay: i * 0.04 }}
+   355→                    onClick={() => chooseArchetype(a.id)}
+   356→                    className={`relative rounded-2xl border-2 p-3 text-left transition-all duration-150 ${
+   357→                      active
+   358→                        ? 'border-[#8c1f28] bg-[#f2c14e]/40 shadow-[5px_5px_0_#8c1f28]'
+   359→                        : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
+   360→                    }`}
+   361→                  >
+   362→                    {active && (
+   363→                      <span className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1c1a17] bg-[#2e6e4e] text-[#f5efdc]">
+   364→                        <Check className="h-3.5 w-3.5" strokeWidth={3} />
+   365→                      </span>
+   366→                    )}
+   367→                    {cssMiniPreview(a)}
+   368→                    <div className="mt-2 text-sm font-black uppercase tracking-tight text-[#1c1a17]">{a.name}</div>
+   369→                    <div className="mt-0.5 text-[11px] font-semibold leading-snug text-[#1c1a17]/70">{a.desc}</div>
+   370→                    <div className="mt-2 flex items-start gap-1 rounded-lg bg-[#2e6e4e]/15 px-2 py-1 text-[10px] font-bold text-[#2e6e4e]">
+   371→                      <Gem className="mt-0.5 h-3 w-3 shrink-0" /> {a.perk}
+   372→                    </div>
+   373→                  </motion.button>
+   374→                )
+   375→              })}
+   376→            </div>
+   377→          </section>
+   378→
+   379→          {/* Choose your side: Protector vs Police */}
+   380→          <section aria-label="Choose your side">
+   381→            <div className="mb-2 flex items-baseline gap-2">
+   382→              <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">2 · Choose Your Side</h3>
+   383→              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">two badges, one city — saves to your profile</span>
+   384→            </div>
+   385→            <div className="grid gap-3 sm:grid-cols-2">
+   386→              <motion.button
+   387→                initial={{ opacity: 0, y: 14 }}
+   388→                animate={{ opacity: 1, y: 0 }}
+   389→                transition={{ delay: 0.05 }}
+   390→                onClick={() => chooseRole('protector')}
+   391→                aria-pressed={role === 'protector'}
+   392→                className={`relative rounded-2xl border-2 p-4 text-left transition-all duration-150 ${
+   393→                  role === 'protector'
+   394→                    ? 'border-[#2e6e4e] bg-[#dcebe0] shadow-[5px_5px_0_#2e6e4e]'
+   395→                    : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
+   396→                }`}
+   397→              >
+   398→                {role === 'protector' && (
+   399→                  <span className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1c1a17] bg-[#2e6e4e] text-[#f5efdc]">
+   400→                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
+   401→                  </span>
+   402→                )}
+   403→                <div className="flex items-center gap-2.5">
+   404→                  <span className={`flex h-11 w-11 items-center justify-center rounded-xl border-2 ${role === 'protector' ? 'border-[#2e6e4e] bg-[#2e6e4e] text-[#f5efdc]' : 'border-[#1c1a17]/60 bg-[#f2c14e] text-[#1c1a17]'}`}>
+   405→                    <Shield className="h-5 w-5" strokeWidth={2.4} />
+   406→                  </span>
+   407→                  <div>
+   408→                    <div className="text-base font-black uppercase tracking-tight text-[#1c1a17]">Protector</div>
+   409→                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#2e6e4e]">The people&apos;s side</div>
+   410→                  </div>
+   411→                </div>
+   412→                <p className="mt-2 text-[11px] font-semibold leading-snug text-[#1c1a17]/75">
+   413→                  March with the protest — dodge patrols, recover the stolen votes, rescue squadmates and feed the crowd.
+   414→                </p>
+   415→                <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-black uppercase tracking-wide">
+   416→                  <span className="rounded-full border border-[#2e6e4e]/50 bg-[#2e6e4e]/10 px-2 py-0.5 text-[#2e6e4e]">Recover votes</span>
+   417→                  <span className="rounded-full border border-[#2e6e4e]/50 bg-[#2e6e4e]/10 px-2 py-0.5 text-[#2e6e4e]">Rescue squad</span>
+   418→                  <span className="rounded-full border border-[#2e6e4e]/50 bg-[#2e6e4e]/10 px-2 py-0.5 text-[#2e6e4e]">Default post</span>
+   419→                </div>
+   420→              </motion.button>
+   421→
+   422→              <motion.button
+   423→                initial={{ opacity: 0, y: 14 }}
+   424→                animate={{ opacity: 1, y: 0 }}
+   425→                transition={{ delay: 0.1 }}
+   426→                onClick={() => chooseRole('police')}
+   427→                aria-pressed={role === 'police'}
+   428→                className={`relative rounded-2xl border-2 p-4 text-left transition-all duration-150 ${
+   429→                  role === 'police'
+   430→                    ? 'border-[#3d5a80] bg-[#e2ecf5] shadow-[5px_5px_0_#3d5a80]'
+   431→                    : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
+   432→                }`}
+   433→              >
+   434→                {role === 'police' && (
+   435→                  <span className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1c1a17] bg-[#3d5a80] text-[#f5efdc]">
+   436→                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
+   437→                  </span>
+   438→                )}
+   439→                <div className="flex items-center gap-2.5">
+   440→                  <span className={`flex h-11 w-11 items-center justify-center rounded-xl border-2 ${role === 'police' ? 'border-[#3d5a80] bg-[#3d5a80] text-[#f5efdc]' : 'border-[#1c1a17]/60 bg-[#f2c14e] text-[#1c1a17]'}`}>
+   441→                    <Siren className="h-5 w-5" strokeWidth={2.4} />
+   442→                  </span>
+   443→                  <div>
+   444→                    <div className="text-base font-black uppercase tracking-tight text-[#1c1a17]">Police</div>
+   445→                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#3d5a80]">The committee&apos;s side</div>
+   446→                  </div>
+   447→                </div>
+   448→                <p className="mt-2 text-[11px] font-semibold leading-snug text-[#1c1a17]/75">
+   449→                  Wear the khaki &amp; lathi — fellow officers stand down, protesters scatter, and YOU make the arrests (E) up close.
+   450→                </p>
+   451→                <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-black uppercase tracking-wide">
+   452→                  <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">Arrest powers (E)</span>
+   453→                  <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">Officer immunity</span>
+   454→                  <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">+40 XP / arrest</span>
+   455→                </div>
+   456→              </motion.button>
+   457→            </div>
+   458→          </section>
+   459→
+   460→          {/* Wardrobe: live 3D preview + tabbed slots */}
+   461→          <section aria-label="Wardrobe" className="rounded-2xl border-2 border-[#1c1a17]/80 bg-[#f5efdc] p-4 shadow-[4px_4px_0_#1c1a17]">
+   462→            <div className="mb-3 flex flex-wrap items-baseline gap-2">
+   463→              <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">
+   464→                {police ? '3 · Dress The Officer' : '3 · Dress The Protester'}
+   465→              </h3>
+   466→              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">drag the figure to spin</span>
+   467→              {police && (
+   468→                <span className="rounded-full border-2 border-[#3d5a80]/60 bg-[#e2ecf5] px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#3d5a80]">
+   469→                  🚓 police wardrobe active — uniform &amp; cap tabs below
+   470→                </span>
+   471→              )}
+   472→            </div>
+   473→            <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
+   474→              {/* Preview + build + skin tones */}
+   475→              <div className="space-y-3">
+   476→                <div className="vc-dots overflow-hidden rounded-xl border-2 border-[#1c1a17]/50 bg-gradient-to-b from-[#cfe0e8] to-[#efe6c8]">
+   477→                  <CharacterPreview look={look} hiFi={hiFiSetting && !police} className="h-[300px] w-full" />
+   478→                </div>
+   479→                {hiFiSetting && !police && (
+   480→                  <p className="rounded-lg border border-[#1c1a17]/25 bg-[#f5efdc]/85 px-2.5 py-1.5 text-[9px] font-bold uppercase leading-relaxed tracking-wide text-[#1c1a17]/70">
+   481→                    Showing your in-game High-Fi model — team colours &amp; skin tone apply live. Hats, hair &amp; gear render on the Classic Rig (Options → Character Model).
+   482→                  </p>
+   483→                )}
+   484→                {/* Build — male / female selection (round 23) */}
+   485→                <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
+   486→                  <div className="mb-1.5 flex items-center justify-between">
+   487→                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Build</span>
+   488→                    <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">silhouette · lips · hair fit</span>
+   489→                  </div>
+   490→                  <div className="grid grid-cols-2 gap-2">
+   491→                    <button
+   492→                      onClick={() => chooseGender('male')}
+   493→                      aria-pressed={gender === 'male'}
+   494→                      className={`rounded-xl border-2 px-2 py-2 text-left transition-all ${
+   495→                        gender === 'male'
+   496→                          ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
+   497→                          : 'border-[#1c1a17]/50 bg-white/60 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5'
+   498→                      }`}
+   499→                    >
+   500→                      <span className="block text-sm font-black uppercase tracking-tight text-[#1c1a17]">♂ Male</span>
+   501→                      <span className="block text-[9px] font-semibold leading-tight text-[#1c1a17]/60">Broad marcher build</span>
+   502→                    </button>
+   503→                    <button
+   504→                      onClick={() => chooseGender('female')}
+   505→                      aria-pressed={gender === 'female'}
+   506→                      className={`rounded-xl border-2 px-2 py-2 text-left transition-all ${
+   507→                        gender === 'female'
+   508→                          ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
+   509→                          : 'border-[#1c1a17]/50 bg-white/60 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5'
+   510→                      }`}
+   511→                    >
+   512→                      <span className="block text-sm font-black uppercase tracking-tight text-[#1c1a17]">♀ Female</span>
+   513→                      <span className="block text-[9px] font-semibold leading-tight text-[#1c1a17]/60">Lean marcher build</span>
+   514→                    </button>
+   515→                  </div>
+   516→                </div>
+   517→                <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
+   518→                  <div className="mb-1.5 flex items-center justify-between">
+   519→                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Skin Tone</span>
+   520→                    {skinTone && <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">{SKIN_TONES.find((t) => t.hex === skinTone)?.label}</span>}
+   521→                  </div>
+   522→                  <div className="flex flex-wrap gap-1.5">
+   523→                    {SKIN_TONES.map((t) => (
+   524→                      <button
+   525→                        key={t.id}
+   526→                        onClick={() => chooseSkin(t.hex)}
+   527→                        title={t.label}
+   528→                        aria-label={`Skin tone ${t.label}`}
+   529→                        className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${skinTone === t.hex ? 'border-[#8c1f28] ring-2 ring-[#f2c14e]' : 'border-[#1c1a17]/40'}`}
+   530→                        style={{ background: t.hex }}
+   531→                      />
+   532→                    ))}
+   533→                  </div>
+   534→                  <div className="mt-2 text-center text-[11px] font-bold uppercase text-[#1c1a17]/70">{sel.name}</div>
+   535→                </div>
+   536→                <button
+   537→                  onClick={toggleGlasses}
+   538→                  className={`flex w-full items-center justify-center gap-2 rounded-xl border-2 px-3 py-2 text-xs font-black uppercase tracking-tight transition-all ${
+   539→                    glasses
+   540→                      ? 'border-[#2e6e4e] bg-[#2e6e4e] text-[#f5efdc] shadow-[3px_3px_0_#1c1a17]'
+   541→                      : 'border-[#1c1a17]/60 bg-[#f5efdc] text-[#1c1a17]/70 shadow-[2px_2px_0_#1c1a17]/40'
+   542→                  }`}
+   543→                >
+   544→                  {glasses ? 'Specs ON — intellectual look' : 'Specs OFF'}
+   545→                </button>
+   546→              </div>
+   547→
+   548→              {/* Tabs + item grid + slogan */}
+   549→              <div className="space-y-3">
+   550→                <div role="tablist" aria-label="Wardrobe slots" className="flex flex-wrap gap-1.5">
+   551→                  {visibleSlots.map((s) => {
+   552→                    const value = slotValues[s.kind]
+   553→                    const isDefault = value === DEFAULTS[s.kind]
+   554→                    return (
+   555→                      <button
+   556→                        key={s.kind}
+   557→                        role="tab"
+   558→                        aria-selected={tab === s.kind}
+   559→                        onClick={() => setTab(s.kind)}
+   560→                        className={`rounded-xl border-2 px-3 py-1.5 text-[11px] font-black uppercase tracking-tight transition-all ${
+   561→                          tab === s.kind
+   562→                            ? 'border-[#8c1f28] bg-[#f2c14e] text-[#1c1a17] shadow-[3px_3px_0_#8c1f28]'
+   563→                            : s.kind === 'policeOutfit' || s.kind === 'policeHat'
+   564→                              ? 'border-[#3d5a80]/60 bg-[#e2ecf5] text-[#3d5a80] shadow-[2px_2px_0_#3d5a80]/40 hover:-translate-y-0.5'
+   565→                              : 'border-[#1c1a17]/50 bg-[#f5efdc] text-[#1c1a17]/70 shadow-[2px_2px_0_#1c1a17]/30 hover:-translate-y-0.5'
+   566→                        }`}
+   567→                      >
+   568→                        {s.label}
+   569→                        {!isDefault && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-[#2e6e4e]" />}
+   570→                      </button>
+   571→                    )
+   572→                  })}
+   573→                </div>
+   574→
+   575→                <div className="min-h-[190px] rounded-xl border-2 border-[#1c1a17]/40 p-3">
+   576→                  <div className="mb-2 flex items-baseline justify-between">
+   577→                    <div>
+   578→                      <span className="text-xs font-black uppercase tracking-wider text-[#1c1a17]">{activeTab.label}</span>
+   579→                      <span className="ml-2 text-[10px] font-bold uppercase text-[#1c1a17]/45">{activeTab.hint}</span>
+   580→                    </div>
+   581→                    <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">
+   582→                      {activeTab.catalog.filter(isUnlocked).length}/{activeTab.catalog.length} unlocked
+   583→                    </span>
+   584→                  </div>
+   585→                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+   586→                    {activeTab.catalog.map((item) => {
+   587→                      const unlocked = isUnlocked(item)
+   588→                      const value = slotValues[item.kind]
+   589→                      const active = value === item.id
+   590→                      const criteria =
+   591→                        item.unlock.type === 'level' ? `LEVEL ${item.unlock.level}` :
+   592→                        item.unlock.type === 'achievement' ? achName(item.unlock.code).toUpperCase() : ''
+   593→                      return (
+   594→                        <button
+   595→                          key={item.id}
+   596→                          onClick={() => setSlot(item.kind as CosmeticKind, item.id, item)}
+   597→                          onMouseEnter={() => setHovered(item.id)}
+   598→                          onMouseLeave={() => setHovered(null)}
+   599→                          onFocus={() => setHovered(item.id)}
+   600→                          onBlur={() => setHovered(null)}
+   601→                          aria-label={`${item.label}${unlocked ? '' : ` (locked — ${unlockLabel(item)})`}`}
+   602→                          className={`relative rounded-xl border-2 p-2 text-left transition-all duration-150 ${
+   603→                            active
+   604→                              ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
+   605→                              : unlocked
+   606→                                ? 'border-[#1c1a17]/60 bg-white/60 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5 hover:shadow-[3px_3px_0_#1c1a17]/60'
+   607→                                : 'border-dashed border-[#1c1a17]/40 bg-[#efe6c8]/60 opacity-80 hover:opacity-100'
+   608→                          }`}
+   609→                        >
+   610→                          <div className="flex items-center gap-1.5">
+   611→                            <span className={`text-base leading-none ${unlocked ? '' : 'grayscale'}`}>{item.emoji}</span>
+   612→                            <span className={`text-[10px] font-black uppercase leading-tight tracking-tight ${unlocked ? 'text-[#1c1a17]' : 'text-[#1c1a17]/55'}`}>
+   613→                              {item.label}
+   614→                            </span>
+   615→                          </div>
+   616→                          <div className="mt-0.5 line-clamp-1 text-[9px] font-semibold text-[#1c1a17]/50">{item.desc}</div>
+   617→                          <div className="mt-1 min-h-[16px]">
+   618→                            {unlocked ? (
+   619→                              <span className="flex items-center gap-1 text-[9px] font-bold uppercase text-[#2e6e4e]">
+   620→                                <Unlock className="h-2.5 w-2.5" /> {active ? 'Equipped' : 'Equippable'}
+   621→                              </span>
+   622→                            ) : hovered === item.id ? (
+   623→                              <span className="block text-[9px] font-bold uppercase leading-tight text-[#8c1f28]">
+   624→                                {unlockLabel(item)}
+   625→                              </span>
+   626→                            ) : (
+   627→                              <span className="flex items-center gap-1 text-[9px] font-bold uppercase text-[#1c1a17]/45">
+   628→                                <Lock className="h-2.5 w-2.5" /> {criteria}
+   629→                              </span>
+   630→                            )}
+   631→                          </div>
+   632→                          {!unlocked && (
+   633→                            <span className="absolute right-1.5 top-1.5 text-[#8c1f28]/70">
+   634→                              <Lock className="h-3 w-3" />
+   635→                            </span>
+   636→                          )}
+   637→                        </button>
+   638→                      )
+   639→                    })}
+   640→                  </div>
+   641→                </div>
+   642→
+   643→                {/* Slogan (drives the sign + banner) */}
+   644→                <div className="rounded-xl border-2 border-[#1c1a17]/40 p-3">
+   645→                  <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-[#1c1a17]">
+   646→                    Protest Slogan
+   647→                    <span className="font-bold normal-case text-[#1c1a17]/45">— shown on the sign &amp; banner</span>
+   648→                  </div>
+   649→                  <div className="mt-2 flex gap-2">
+   650→                    <input
+   651→                      value={signText}
+   652→                      maxLength={24}
+   653→                      placeholder="e.g. CHAI > COMMITTEES"
+   654→                      onChange={(e) => setSignText(e.target.value)}
+   655→                      onBlur={saveSign}
+   656→                      onKeyDown={(e) => e.key === 'Enter' && saveSign()}
+   657→                      className="min-w-0 flex-1 rounded-xl border-2 border-[#1c1a17]/70 bg-white/70 px-3 py-2 text-sm font-black uppercase tracking-tight text-[#1c1a17] outline-none focus:border-[#8c1f28]"
+   658→                    />
+   659→                    <button
+   660→                      onClick={saveSign}
+   661→                      className="shrink-0 rounded-xl border-2 border-[#1c1a17]/80 bg-[#f2c14e] px-3 py-2 text-xs font-black uppercase tracking-tight text-[#1c1a17] shadow-[2px_2px_0_#1c1a17] transition-all hover:-translate-y-0.5"
+   662→                    >
+   663→                      Paint It
+   664→                    </button>
+   665→                  </div>
+   666→                  <div className="mt-1 flex justify-between text-[10px] font-bold text-[#1c1a17]/50">
+   667→                    <span>Equip “Protest Sign” or “Cloth Banner” in In&nbsp;Hand to carry it</span>
+   668→                    <span>{signText.length}/24</span>
+   669→                  </div>
+   670→                </div>
+   671→              </div>
+   672→            </div>
+   673→          </section>
+   674→        </div>
+   675→      </div>
+   676→    </div>
+   677→  )
+   678→}
+   679→

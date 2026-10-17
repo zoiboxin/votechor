@@ -35,7 +35,7 @@ import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
 import { sharedGLBAssets, hiFiUrlFor, type GLBInstance } from './glb'
 import { GLBAnimDriver, GlbLocoFallback } from './anim'
-import { applyAvatarPalette } from './avatar-tint'
+import { applyAvatarLook, resolveAvatarLook, type AvatarLook } from './avatar-look'
 import type { LocoState } from './anim'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
@@ -187,7 +187,7 @@ export class Game {
   // ---- High-Fi GLB player model (Step 2/3/4 integration — auto-fallback to procedural) ----
   // sharedGLBAssets: one process-wide cache shared with the wardrobe preview
   private glbMgr = sharedGLBAssets
-  private hiFiPalette: { shirt: string; pants: string; skin: string; accent: string } | null = null
+  private hiFiLook: AvatarLook | null = null
   private hiFiGender: 'male' | 'female' = 'male'
   private role: 'protector' | 'police' = 'protector' // chosen side (profile.role)
   private suspects: SuspectSystem | null = null // offline police-role arrest targets
@@ -741,18 +741,11 @@ export class Game {
     }
     const cosmetics = profile?.cosmetics
     const gender = cosmetics?.gender === 'female' ? 'female' as const : 'male' as const
-    // High-Fi GLB palette — mirrors PlayerController's color resolution exactly
-    {
-      const arch = archetypeById(this.archetype)
-      const pal = { shirt: arch.colors.shirt, pants: arch.colors.pants, skin: arch.colors.skin, accent: arch.colors.accent }
-      if (cosmetics?.skinTone && typeof cosmetics.skinTone === 'string') pal.skin = cosmetics.skinTone
-      if (this.role === 'police') {
-        const u = policeUniformColors(typeof cosmetics?.policeOutfit === 'string' ? cosmetics.policeOutfit : undefined)
-        pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
-      }
-      this.hiFiPalette = pal
-      this.hiFiGender = gender
-    }
+    // High-Fi GLB look — ONE pipeline shared with the wardrobe preview and the
+    // remotes: archetype + outfit + skin tone + police uniform resolve into a
+    // full AvatarLook (normalized tint + bone attachments live in avatar-look.ts)
+    this.hiFiLook = resolveAvatarLook(cosmetics as Record<string, string | boolean | undefined> | undefined, this.archetype, this.role)
+    this.hiFiGender = gender
     this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
       hat: cosmetics?.hat as string | undefined,
       glasses: cosmetics?.glasses as boolean | undefined,
@@ -1141,15 +1134,11 @@ export class Game {
     if (this.remotePlayers.get(id) !== r || !r.rig || !this.store.settings.hiFiModel) { r.glb = null; return }
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) { r.glb = null; return }
-    // palette: solid replace on the rigged family's mesh names, multiply tint on
-    // the textured avatar's (applyAvatarPalette picks the right map per name)
-    const c = r.cosmetics
-    const arch = archetypeById(r.archetype)
-    const pal = {
-      shirt: arch.colors.shirt, pants: arch.colors.pants, accent: arch.colors.accent,
-      skin: typeof c?.skinTone === 'string' ? c.skinTone : arch.colors.skin,
-    }
-    applyAvatarPalette(inst.group, pal)
+    // full look: normalized tint + bone attachments (hair/hat/footwear/gear/
+    // held follow the skeleton — zero extra network traffic, all derived from
+    // the cosmetics fields that already sync). Police remotes never get here
+    // (guard above), so the role is always the people's side.
+    applyAvatarLook(inst.group, resolveAvatarLook(r.cosmetics, r.archetype, 'protector'))
     inst.group.visible = true
     inst.group.position.set(r.target.x, r.target.y, r.target.z)
     inst.group.rotation.y = r.target.ry
@@ -1182,7 +1171,7 @@ export class Game {
    */
   private async tryAttachHiFi() {
     const p = this.player
-    if (!p || p.glb || !this.hiFiPalette) return
+    if (!p || p.glb || !this.hiFiLook) return
     // police play on the procedural rig (uniform/hat identity — see attachRemoteGlb)
     if (this.role === 'police') return
     const url = hiFiUrlFor(this.hiFiGender)
@@ -1191,7 +1180,7 @@ export class Game {
     if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) return
-    applyAvatarPalette(inst.group, this.hiFiPalette)
+    applyAvatarLook(inst.group, this.hiFiLook)
     inst.group.visible = true
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)

@@ -14,7 +14,7 @@ import { archetypeById } from '@/game/shared/constants'
 import { policeUniformColors } from '@/lib/cosmetics'
 import { sharedGLBAssets, hiFiUrlFor, type GLBInstance } from '@/game/glb'
 import { GlbLocoFallback, GLBAnimDriver } from '@/game/anim'
-import { applyAvatarPalette, type AvatarPalette } from '@/game/avatar-tint'
+import { applyAvatarLook, resolveAvatarLook } from '@/game/avatar-look'
 
 export interface PreviewLook {
   archetype: string
@@ -47,14 +47,6 @@ function disposeRig(rig: CharacterRig) {
 }
 
 const glbUrlFor = (gender: 'male' | 'female') => hiFiUrlFor(gender)
-
-/** The preview palette mirrors game.ts startMatch exactly (archetype + skinTone). */
-function paletteFor(look: PreviewLook): AvatarPalette {
-  const arch = archetypeById(look.archetype)
-  const pal = { shirt: arch.colors.shirt, pants: arch.colors.pants, skin: arch.colors.skin, accent: arch.colors.accent }
-  if (look.skinTone) pal.skin = look.skinTone
-  return pal
-}
 
 export default function CharacterPreview({ look, className, hiFi = false }: { look: PreviewLook; className?: string; hiFi?: boolean }) {
   const mountRef = useRef<HTMLDivElement | null>(null)
@@ -200,7 +192,10 @@ export default function CharacterPreview({ look, className, hiFi = false }: { lo
           if (!inst) return
           const loco = new GlbLocoFallback()
           loco.patch(inst.group)
-          applyAvatarPalette(inst.group, paletteFor(lookRef.current))
+          // ONE look pipeline with the in-game model: normalized tint + bone
+          // attachments (hair/hat/face/footwear/gear/held/glasses) — the exact
+          // AvatarLook the match will resolve for this profile
+          applyAvatarLook(inst.group, resolveAvatarLook(lookRef.current, lookRef.current.archetype, lookRef.current.police ? 'police' : 'protector'))
           // rigged asset → play the authored idle clip (real skeletal animation);
           // clip-less asset → the procedural idle layer keeps it alive
           let driver: GLBAnimDriver | null = null
@@ -252,8 +247,8 @@ export default function CharacterPreview({ look, className, hiFi = false }: { lo
         ...(l.police ? { npcType: 'police' as const, policeOutfit: l.policeOutfit, policeHat: l.policeHat } : {}),
       })
       stage.add(rig.group)
-      // High-Fi palette refresh on an already-built GLB (archetype / skinTone change)
-      if (glb) applyAvatarPalette(glb.inst.group, paletteFor(l))
+      // High-Fi look refresh on an already-built GLB (any wardrobe slot change)
+      if (glb) applyAvatarLook(glb.inst.group, resolveAvatarLook(l, l.archetype, l.police ? 'police' : 'protector'))
       retargetCams()
       ensureGlb()
     }

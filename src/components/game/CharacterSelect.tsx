@@ -478,7 +478,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                 </div>
                 {hiFiSetting && !police && (
                   <p className="rounded-lg border border-[#1c1a17]/25 bg-[#f5efdc]/85 px-2.5 py-1.5 text-[9px] font-bold uppercase leading-relaxed tracking-wide text-[#1c1a17]/70">
-                    Showing your in-game High-Fi model — team colours &amp; skin tone apply live. Hats, hair &amp; gear render on the Classic Rig (Options → Character Model).
+                    Showing your in-game High-Fi model — every slot applies live: outfit &amp; team colours, skin tone, hair, headgear, face, footwear, back gear, in-hand item, specs &amp; build.
                   </p>
                 )}
                 {/* Build — male / female selection (round 23) */}
