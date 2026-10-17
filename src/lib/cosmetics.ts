@@ -265,11 +265,14 @@ export const HAIR_CATALOG: CosmeticItem[] = [
   { id: 'default', kind: 'hair', label: 'Classic Cut', emoji: '💇', desc: 'The standard march haircut.', unlock: { type: 'free' } },
   { id: 'buzz', kind: 'hair', label: 'Buzz Cut', emoji: '✂️', desc: 'Low maintenance, high defiance.', unlock: { type: 'free' } },
   { id: 'bald', kind: 'hair', label: 'Bald & Bold', emoji: '🥚', desc: 'Aerodynamic. Committee-proof.', unlock: { type: 'free' } },
+  { id: 'mullet', kind: 'hair', label: 'Party Mullet', emoji: '🪩', desc: 'Business up front, riot out back.', unlock: { type: 'free' } },
+  { id: 'spiky', kind: 'hair', label: 'Spiked Top', emoji: '⚡', desc: '1987 called. It approves of your look.', unlock: { type: 'free' } },
   { id: 'bun', kind: 'hair', label: 'Top Bun', emoji: '🧑‍🦱', desc: 'Keeps hair out of the slogan painting.', unlock: { type: 'free' } },
   { id: 'ponytail', kind: 'hair', label: 'Ponytail', emoji: '🐎', desc: 'Swings with every chant.', unlock: { type: 'free' } },
   { id: 'curly', kind: 'hair', label: 'Curly Top', emoji: '🌀', desc: 'Maximum volume for maximum noise.', unlock: { type: 'level', level: 2 } },
   { id: 'long', kind: 'hair', label: 'Flowing Long', emoji: '👩', desc: 'Wind-machine ready at all times.', unlock: { type: 'level', level: 3 } },
   { id: 'braid', kind: 'hair', label: 'Side Braid', emoji: '🌾', desc: 'Woven with protest songs.', unlock: { type: 'level', level: 4 } },
+  { id: 'afro', kind: 'hair', label: 'Mega Afro', emoji: '🌞', desc: 'Blocks the sun AND the committee.', unlock: { type: 'level', level: 5 } },
 ]
 
 export const FACE_CATALOG: CosmeticItem[] = [
@@ -282,7 +285,11 @@ export const FACE_CATALOG: CosmeticItem[] = [
 
 export const OUTFIT_CATALOG: CosmeticItem[] = [
   { id: 'classic', kind: 'outfit', label: 'Classic Khaki', emoji: '👕', desc: 'The standard protest uniform.', unlock: { type: 'free' } },
+  { id: 'hawaiian', kind: 'outfit', label: 'Rally Hawaiian', emoji: '🌺', desc: 'Open collar, tiny flowers, zero paperwork.', unlock: { type: 'free' } },
+  { id: 'tank', kind: 'outfit', label: 'Street Tank', emoji: '🎽', desc: 'Sleeves are for the compliant.', unlock: { type: 'free' } },
+  { id: 'dress', kind: 'outfit', label: 'March Dress', emoji: '👗', desc: 'Twirl-tested at three rallies.', unlock: { type: 'free' } },
   { id: 'kurta', kind: 'outfit', label: 'Protest Kurta', emoji: '🥻', desc: 'Traditional fit for toppling traditions.', unlock: { type: 'level', level: 2 } },
+  { id: 'suit', kind: 'outfit', label: 'Pastel Blazer', emoji: '🧳', desc: '80s power suit, committee-grade shoulders.', unlock: { type: 'level', level: 3 } },
   { id: 'hoodie', kind: 'outfit', label: 'Revolution Hoodie', emoji: '🧥', desc: 'Hood up, committee down.', unlock: { type: 'level', level: 6 } },
   { id: 'highvis', kind: 'outfit', label: 'High-Vis Vest', emoji: '🦺', desc: 'Safety first. Chaos second.', unlock: { type: 'achievement', code: 'rescuer' } },
 ]
