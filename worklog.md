@@ -1638,3 +1638,28 @@ Stage Summary:
 - Servers left RUNNING for the preview panel via the subshell-spawn pattern (next pid 6347, game-server pid 6324). If they are ever down, restart with: ( cd /home/z/my-project && (bun run dev >> dev.log 2>&1 &) ) and ( cd /home/z/my-project/mini-services/game-server && (bun run dev >> /home/z/my-project/gs-dev.log 2>&1 &) ).
 - Rollback insurance: .backup-pre-archive.tgz in the project root.
 - Risks/notes: (1) preview-panel origin goes through Caddy — always test netcode via :81; (2) background processes from tool calls must use the ( cmd & ) subshell form or they get reaped; (3) suggested next round: multiplayer smoke with 2 tabs, then continue the standing agenda (item persistence, animal polish, horn honks, pet name tags) from the v47 baseline.
+
+---
+Task ID: 50
+Agent: Z.ai Code (main)
+Task: Fix background sound still playing on the main landing page after pressing ESC → Quit to Menu — background sound must only play while a match is running, never on the landing page.
+
+Work Log:
+- Traced the audio lifecycle: AudioManager (src/game/audio.ts) runs an adaptive music step-sequencer (themes: menu/ambient/chase/boss/victory) plus a looping brown-noise crowd bed. Three call sites deliberately played music on non-game screens: engine boot (game.ts ~618: startCrowd() + setTheme('menu')), leaveMatch quit-to-menu (~951: setTheme('menu') + setCrowdLevel(0.25)), and finalizeMatch end screen (~3360: setTheme('menu') + setCrowdLevel(0.2)). So the landing page was NEVER silent — the user heard the menu theme + crowd murmur after ESC → Quit, and perceived it as the match's background sound continuing.
+- Verified the quit wiring first: PauseMenu "Quit to Menu" → uiActions().leaveMatch() → game.leaveMatch(); EndScreen exit → leaveMatch(true) + setUIMode('menu'). All menu returns funnel through exactly the three sites above.
+- audio.ts changes: added 'none' to MusicTheme (tempos map extended; setTheme() returns before scheduling when theme === 'none', so the sequencer timer stays null = silence); added stopCrowd() which stops + disconnects the crowd buffer source and fades crowdGain to 0 (startCrowd() remains idempotent via its crowdSource guard, so matches can rebuild the bed safely).
+- game.ts changes: boot no longer starts crowd/menu music (AudioManager.resume() kept for the gesture unlock); leaveMatch now setTheme('none') + stopCrowd(); finalizeMatch (end screen) now setTheme('none') + stopCrowd() — the victory/defeat stinger (AudioManager.play) still fires at doVictory/doTimeUp; startMatch now calls AudioManager.startCrowd() before setCrowdLevel(0.7) so in-game ambience is unchanged (and works even after a silent-menu stop).
+- Added a QA debug handle next to the existing __vc/__vcStore pattern: window.__vcAudio = AudioManager (exposes theme/musicTimer/crowdSource for verification).
+- Bumped VC_BUILD 'v47' → 'v48' (stale-bundle banner for old tabs). tsc --noEmit clean; eslint clean.
+- Agent-browser QA via the Caddy gateway (:81), asserting the real audio state machine at each step:
+  1. Landing page: {theme:'menu' (idle initial), musicTimer:null, crowdSource:null} → fully silent; v48 build badge visible.
+  2. PLAY SOLO: {uiMode:'playing', theme:'ambient', timer:true, crowd:true} → music + crowd active in-match.
+  3. ESC → QUIT TO MENU: {uiMode:'menu', menuScreen:'main', theme:'none', musicTimer:null, crowdSource:null} → landing page silent again (the reported bug).
+  4. Regression — PLAY SOLO again: {playing, ambient, timer:true, crowd:true} → audio restarts cleanly after 'none'; then quit again → silent. No dev.log errors.
+- Screenshot: tool-results/qa-v48-silent-menu.png (menu with BUILD V48 badge).
+
+Stage Summary:
+- Background sound now plays ONLY while a match runs: landing page (boot, ESC-quit, end-screen exit) is completely silent (no music sequencer, no crowd bed). In-match adaptive music (ambient/chase/boss/victory), crowd level, and all SFX are unchanged; victory/defeat stingers still play at match end before the screen goes quiet.
+- ESC → Quit to Menu verified fixed end-to-end with real state assertions, including the replay-after-quit regression path.
+- Note: the 'menu' theme value remains in the MusicTheme union (unused by game code now) so the setTheme change-guard keeps working; nothing schedules it.
+- Suggested next round: two-tab multiplayer smoke (remote rig visibility + squad flows), then continue the standing agenda (item persistence, animal polish, horn honks, pet name tags).

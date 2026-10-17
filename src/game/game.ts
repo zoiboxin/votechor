@@ -615,13 +615,15 @@ export class Game {
     this.playerBubbles.occlusionCheck = this.npcs.bubbles.occlusionCheck
     this.engine.start()
     AudioManager.resume()
-    AudioManager.startCrowd()
-    AudioManager.setTheme('menu')
+    // v48: menus are silent — no crowd bed, no menu theme on the landing page.
+    // startMatch() starts both; leaveMatch()/finalizeMatch() stop them.
     useGameStore.getState().setUIMode('menu')
     // debug handle for QA tooling
     ;(window as unknown as { __vc: unknown }).__vc = this
     // QA affordance: direct store access for tooling (same contract as __vc)
     ;(window as unknown as { __vcStore: unknown }).__vcStore = useGameStore
+    // QA affordance: audio state for silent-menu verification (theme/crowdSource)
+    ;(window as unknown as { __vcAudio: unknown }).__vcAudio = AudioManager
   }
 
   // ================= match lifecycle =================
@@ -866,6 +868,7 @@ export class Game {
     store.patchHud({ role: this.role, arrests: 0 })
 
     AudioManager.setTheme('ambient')
+    AudioManager.startCrowd() // idempotent — rebuilds the bed after a silent-menu stopCrowd()
     AudioManager.setCrowdLevel(0.7)
     store.setUIMode('playing')
     this.input.setEnabled(true)
@@ -948,8 +951,8 @@ export class Game {
     this.clearPendingInvite()
     useGameStore.getState().patchHud({ hunted: false, rallyReadyAt: 0 })
     useGameStore.getState().setSquad(null)
-    AudioManager.setTheme('menu')
-    AudioManager.setCrowdLevel(0.25)
+    AudioManager.setTheme('none') // v48: landing page is silent — background sound only while a match runs
+    AudioManager.stopCrowd()
     const st = useGameStore.getState()
     st.setUIMode('menu')
     st.setMenuScreen('main')
@@ -3357,8 +3360,8 @@ export class Game {
     const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted, streak, streakUp, solidarityBonus, squadSize, xpMul, unlockedMap }
     store.setMatchSummary(summary)
     store.setUIMode('ended')
-    AudioManager.setTheme('menu')
-    AudioManager.setCrowdLevel(0.2)
+    AudioManager.setTheme('none') // v48: end screen is quiet too — the victory/defeat stinger already played
+    AudioManager.stopCrowd()
   }
 
   // ================= photo mode =================

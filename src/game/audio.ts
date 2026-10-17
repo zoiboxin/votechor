@@ -10,7 +10,11 @@ export type SfxName =
   | 'shout' | 'thunder'
   | 'bark' | 'meow' | 'chirp' | 'crunch'
 
-export type MusicTheme = 'menu' | 'ambient' | 'chase' | 'boss' | 'victory'
+/**
+ * Adaptive music themes. 'none' = sequencer fully stopped (silent menus —
+ * v48: background sound only plays while a match is running).
+ */
+export type MusicTheme = 'menu' | 'ambient' | 'chase' | 'boss' | 'victory' | 'none'
 
 class AudioManagerImpl {
   private ctx: AudioContext | null = null
@@ -523,14 +527,25 @@ class AudioManagerImpl {
     this.crowdGain.gain.setTargetAtTime(v * 0.5, this.ctx.currentTime, 0.8)
   }
 
+  /** Fully stop the crowd bed (menus are silent — v48). startCrowd() rebuilds it safely. */
+  stopCrowd() {
+    if (this.crowdSource) {
+      try { this.crowdSource.stop() } catch { /* already stopped */ }
+      this.crowdSource.disconnect()
+      this.crowdSource = null
+    }
+    if (this.ctx && this.crowdGain) this.crowdGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.4)
+  }
+
   // ---------- adaptive music (tiny step sequencer) ----------
   setTheme(theme: MusicTheme) {
     if (this.theme === theme) return
     this.theme = theme
     this.step = 0
     if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null }
-    if (!this.ctx) return
-    const tempos: Record<MusicTheme, number> = { menu: 2600, ambient: 3200, chase: 1900, boss: 1550, victory: 2000 }
+    // 'none' (or no ctx yet): sequencer stays stopped — silence until the next real theme
+    if (!this.ctx || theme === 'none') return
+    const tempos: Record<MusicTheme, number> = { menu: 2600, ambient: 3200, chase: 1900, boss: 1550, victory: 2000, none: 3200 }
     this.musicTimer = setInterval(() => this.tickMusic(), tempos[theme])
     this.tickMusic()
   }
