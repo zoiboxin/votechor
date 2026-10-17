@@ -231,6 +231,18 @@ export default function GameRoot() {
       })()
     }
 
+    // ---- v53: warm the High-Fi avatar cache in the background ----
+    // The wardrobe preview falls back to the procedural rig while the 21.5 MB
+    // GLB downloads, which read as "old character first, then it changes".
+    // Preloading the saved profile's gender here means the preview's
+    // sharedGLBAssets.load() resolves instantly when the customization opens.
+    const preloadTimer = setTimeout(() => {
+      void import('@/game/glb').then(({ sharedGLBAssets }) => {
+        const g = useGameStore.getState().profile?.cosmetics?.gender === 'female' ? 'female' : 'male'
+        void sharedGLBAssets.load(g === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb')
+      }).catch(() => { /* cosmetic preload is best-effort */ })
+    }, 1500)
+
     // ---- dynamic engine boot (keeps three.js out of the UI bundle) ----
     if (!engineBooted) {
       engineBooted = true
@@ -251,6 +263,8 @@ export default function GameRoot() {
         )
       })
     }
+
+    return () => clearTimeout(preloadTimer)
   }, [])
 
   const inMatch = uiMode === 'playing' || uiMode === 'paused'

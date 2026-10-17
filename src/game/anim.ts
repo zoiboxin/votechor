@@ -103,6 +103,12 @@ export const CLIP_FALLBACK: Record<LocoState, string[]> = {
  *      moving (YXZ order keeps these local to the facing yaw set by the caller).
  *   5. FEEL — damped-spring landing dip on the airborne→grounded transition and a
  *      slow breathing sway/bob when idle so the character never statues.
+ *
+ * v53: apply() takes opts.baseY and writes position.y ABSOLUTELY (baseY + bob −
+ * dip). The bob term is |sin| ≥ 0, so the old incremental += accumulated an
+ * upward drift on any caller that does not re-copy position each frame — the
+ * wardrobe preview visibly floated its character up off the pedestal and out
+ * of frame (user-reported v52 bug).
  * The arm-region constants mirror scripts/fix-avatar-pose.ts, which baked the
  * T-pose into an A-pose (pivot ±0.215/1.547, hands at ±0.37); leg constants come
  * from scripts/measure-avatar.ts (pants |x| ≤ 0.20, waistband top 1.146, feet y 0).
@@ -229,11 +235,22 @@ export class GlbLocoFallback {
 
   /**
    * Advance the fallback and apply bob/lean/dip/flip to the instance group. Call
-   * AFTER the per-frame position/rotation copy so the offsets ride on top (both
-   * call sites re-copy position/rotation.y every frame, so nothing accumulates).
+   * AFTER the per-frame rotation copy.
+   *
+   * POSITION CONTRACT (v53 bug fix): `opts.baseY` is the caller's base/ground Y.
+   * When given, the vertical offset is applied ABSOLUTELY — position.y = baseY +
+   * bob − dip — so repeated calls are IDEMPOTENT even for callers that never
+   * re-copy position (the wardrobe preview). The bob term is |sin| ≥ 0 every
+   * frame, so the legacy incremental `group.position.y +=` path silently
+   * ACCUMULATES an upward drift on such callers (v52 bug: the wardrobe preview
+   * character slowly slid up off the pedestal and vanished — measured +0.006 m
+   * worst-case per frame at 60 Hz ≈ +0.2 m/s). All call sites now pass baseY;
+   * the += fallback remains only for hypothetical callers that re-copy
+   * position.y each frame.
+   *
    * `opts.vy` (m/s) shapes the airborne pitch; omit for distant remotes.
    */
-  apply(group: THREE.Group, dt: number, hSpeed: number, grounded: boolean, opts?: { vy?: number }) {
+  apply(group: THREE.Group, dt: number, hSpeed: number, grounded: boolean, opts?: { vy?: number; baseY?: number }) {
     const vy = opts?.vy ?? 0
     // locomotion amplitude: 0 idle → 1 at a run; a slight air carry keeps the
     // swing from dead-freezing the instant the feet leave the ground
@@ -256,7 +273,9 @@ export class GlbLocoFallback {
     // bob: two footfalls per cycle; idle adds a slow breathing bob
     const bob = Math.abs(Math.sin(this.phase)) * 0.045 * this.amp +
       Math.abs(Math.sin(this.phase * 0.9)) * 0.006 * (1 - this.amp) * (grounded ? 1 : 0)
-    group.position.y += bob - this.dip
+    const offY = bob - this.dip
+    if (opts?.baseY !== undefined) group.position.y = opts.baseY + offY // absolute + idempotent
+    else group.position.y += offY // legacy incremental path (caller must re-copy y each frame)
     // lean while moving + airborne pitch (lean back rising, forward falling)
     const pitch = 0.1 * this.amp + THREE.MathUtils.clamp(-vy * 0.012, -0.08, 0.1) * this.air
     // double-jump flip: 0→2π eased over the first 70%, then hold (mirrors rig.flip)

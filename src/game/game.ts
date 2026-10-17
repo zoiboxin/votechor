@@ -2629,7 +2629,7 @@ export class Game {
         r.glb.inst.group.position.copy(pos)
         r.glb.inst.group.rotation.y = r.rig.group.rotation.y
         // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer
-        if (r.glb.driver.playableClips === 0 && r.glb.loco) r.glb.loco.apply(r.glb.inst.group, animDt, hSpeed, !airborne)
+        if (r.glb.driver.playableClips === 0 && r.glb.loco) r.glb.loco.apply(r.glb.inst.group, animDt, hSpeed, !airborne, { baseY: pos.y })
       }
     }
 

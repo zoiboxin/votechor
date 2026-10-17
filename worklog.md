@@ -1739,3 +1739,29 @@ Stage Summary:
 - The clip-less textured avatar now animates full-body: contralateral arm+leg walk swing, run (same shader, bigger amp), jump air pose (heels-back tuck + arms out + vy pitch), double-jump 360° flip, landing dip, idle breathing — all vertex-shader layers keyed per mesh role so clothing follows the skin.
 - Key lesson recorded: when one onBeforeCompile closure serves different meshes different code, you MUST set a per-role customProgramCacheKey — three's program cache keys on the function SOURCE, so identical sources silently share one program and the first-compiled mesh's code runs on all of them.
 - Suggested next round: two-tab multiplayer smoke (remote GLBs now use the new roles/programs), then the standing agenda (item persistence, animal polish, horn honks, pet name tags).
+
+---
+Task ID: 54
+Agent: Z.ai Code (main)
+Task: "check and update open customized page first its showing old type of character then its changing and show new character then the new character is slowly sliding up and venish from the platform not standing it disappearing check the issue and fix it"
+
+Work Log:
+- Read worklog tail first: Task 53 (v52) shipped the hiFi GLB wardrobe preview + real locomotion. User reported two symptoms on the customization page: (1) an OLD procedural character shows first, then swaps to the new one; (2) the new High-Fi character then SLOWLY SLIDES UP off the platform and vanishes.
+- ROOT CAUSE (part 2, the real bug — proven by code read + live measurement): GlbLocoFallback.apply() applied the idle bob INCREMENTALLY — `group.position.y += bob - dip` — and the bob term is `|sin| ≥ 0` EVERY frame, so any caller that does not re-copy position.y each frame accumulates a monotonic upward drift (+0..0.006 m per frame ≈ +0.2 m/s at 60 Hz → the 1.96 m model floats out of frame in seconds). The contract comment claimed "both call sites re-copy position/rotation.y every frame" — true for player.ts render (position.copy(this.pos)) and game.ts remotes (position.copy(pos)), but FALSE for CharacterPreview.tsx's preview loop, which never resets the group position. Exactly matches "slowly sliding up and vanish from the platform". (Sandbox rAF throttling is why previous screenshot QA missed it; user's real 60 fps device shows it immediately.)
+- FIX (position contract made explicit and idempotent): apply() now takes `opts.baseY` and writes position.y ABSOLUTELY (`group.position.y = baseY + bob - dip`), so repeated calls can never accumulate; the incremental path remains only for callers without baseY. All three call sites updated: player.ts render (`baseY: this.pos.y`), game.ts remote sync (`baseY: pos.y`), CharacterPreview preview loop (`baseY: 0` = pedestal top). rotation.x was already an assignment (no drift). Doc comments updated with the v53 contract + the measured failure mode.
+- FIX (part 1, the old-character flash): GameRoot boot effect now PRELOADS the saved profile's gender GLB through sharedGLBAssets 1.5 s after mount (timer cleared on unmount; best-effort, cached process-wide). The wardrobe's ensureGlb() resolves from cache instantly on open → the HIGH-FI model replaces the fallback rig in the first frames instead of after a 21.5 MB download. First-ever session still shows the procedural rig briefly while downloading (honest fallback with the "Loading High-Fi model…" badge); every later open is instant.
+- VC_BUILD v52 → v53. tsc --noEmit clean; eslint clean.
+- QA (agent-browser via Caddy :81, BUILD V53 badge):
+  1. DRIFT FIX (the reported bug): wardrobe opened → HIGH-FI character standing on the pedestal (v53-wardrobe-t0b.png); after 30 s the character is STILL planted at the identical height, only the turntable angle changed (v53-wardrobe-t30.png). Previously it floated up and vanished.
+  2. Face Check close-up frames the head correctly with the body staying put (v53-face-check.png).
+  3. PRELOAD: after back → CUSTOMIZE again, the HIGH-FI model renders instantly (2 s screenshot, no loading badge, no procedural flash) (v53-wardrobe-reopen.png).
+  4. In-match regression: solo Season #12 joined online; player GLB attached, playableClips 0. Measured `group.position.y − player.pos.y` every few seconds: idle 0.004–0.006 (breathing bob), walk 0.022 (stride bob), jump mid-air at pos.y 1.150 → delta 0.006 (GLB tracks jump height exactly), falling delta 0.008, landed back to 0.006→0.004. All bounded — no accumulation anywhere (v53-inmatch.png, 60 FPS chip, remotes rendering).
+  5. Silent-menu regression: ESC → QUIT TO MENU → uiMode 'menu', audio {theme 'none', musicTimer null, crowdSource false} — Tasks 50/51 silence intact.
+  6. dev.log clean: no THREE/GLSL/WebGL errors, only normal API traffic.
+- Screenshots: tool-results/v53-wardrobe-t0b.png, v53-wardrobe-t30.png, v53-face-check.png, v53-wardrobe-reopen.png, v53-inmatch.png.
+
+Stage Summary:
+- The customization preview now keeps the High-Fi character STANDING on the platform: the vertex-shader idle layer writes its vertical offset absolutely (baseY-anchored), so the preview can never accumulate the float-up-and-vanish drift — and the same explicit contract now protects every current and future apply() caller.
+- The wardrobe opens on the correct character immediately thanks to the boot-time GLB preload; the old procedural flash is gone for cached sessions.
+- Key lesson recorded: an `+=` offset on a shared transform is only safe if EVERY caller resets that transform first — prefer absolute writes anchored to an explicit base.
+- Suggested next round: two-tab multiplayer smoke (remote GLBs use the same baseY path now — verified bounded for the local player; remotes got the identical change), then the standing agenda (item persistence, animal polish, horn honks, pet name tags).

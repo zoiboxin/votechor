@@ -298,8 +298,11 @@ export default function CharacterPreview({ look, className, hiFi = false }: { lo
       stage.rotation.y = spin
       const glbOn = !!(glb && isHiFi())
       if (glbOn && glb) {
-        // the same idle layer the match runs (breathing sway + bob) — a living preview
-        glb.loco.apply(glb.inst.group, dt, 0, true)
+        // the same idle layer the match runs (breathing sway + bob) — a living
+        // preview. baseY: 0 = the pedestal top; apply() writes position.y
+        // ABSOLUTELY (v53) so the idle offset can never accumulate into the
+        // slow float-up-and-vanish the incremental += caused here.
+        glb.loco.apply(glb.inst.group, dt, 0, true, { baseY: 0 })
       } else {
         rig?.update(dt, 'idle', 0)
       }

@@ -436,7 +436,7 @@ export class PlayerController {
       this.glb.inst.group.rotation.y = this.ry
       // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer
       if (this.glb.driver.playableClips === 0) {
-        this.glb.loco.apply(this.glb.inst.group, dt, hSpeed, this.grounded, { vy: this.vel.y })
+        this.glb.loco.apply(this.glb.inst.group, dt, hSpeed, this.grounded, { vy: this.vel.y, baseY: this.pos.y })
       }
     }
     // procedural backend always updates (it holds the name tag + is the fallback)
