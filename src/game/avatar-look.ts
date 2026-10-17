@@ -213,52 +213,66 @@ const CONE = (r: number, h: number, s = 10) => new THREE.ConeGeometry(r, h, s)
 const TOR = (r: number, t: number, s = 12, arc = Math.PI * 2) => new THREE.TorusGeometry(r, t, 8, s, arc)
 const HSPH = (r: number) => new THREE.SphereGeometry(r, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2)
 
-// ---- HAIR (fitted to the male head: joint at local 0, head top +0.377, r≈0.10) ----
+// ---- HAIR (skull-measured wrap; male head-local: cranium |x|max 0.094 @ y .20–.30,
+// back z −0.100, forehead z 0.121, crown y 0.377, brows 0.262–0.302, eyes 0.23–0.26,
+// ears y 0.02–0.08. The old floating hemisphere @ y 0.30 read as a beret with the whole
+// side/back skull bare — the shell must HUG the cranium and tuck inside the face front.) ----
 function buildHair(id: string, color: string): THREE.Group | null {
   if (id === 'bald') return null
   const g = new THREE.Group()
   const c = mat(color, 0.92)
-  const dome = (sy = 0.85) => mesh(HSPH(0.118), c, 0, 0.30, 0.005, 1.04, sy, 1.08)
+  // Three-piece wrap, puff widens side/back volume slightly (0.97 buzz … 1.05 full):
+  //  1. cranium shell — pokes outside on top/sides/back, front surface stays INSIDE the face
+  //  2. nape pad — carries the hair down the back of the head to the neck line
+  //  3. forehead patch — fills the front-top hairline (emerges above y≈0.29, brows untouched)
+  const wrap = (puff = 1) => {
+    const h = new THREE.Group()
+    h.add(mesh(SPH(0.104, 16, 12), c, 0, 0.285, -0.012, 1.06 * puff, 0.96, 1.1 * puff))
+    h.add(mesh(SPH(0.06, 12, 10), c, 0, 0.185, -0.055, 1.5 * puff, 1.35, 0.75 * puff))
+    h.add(mesh(SPH(0.104, 16, 12), c, 0, 0.315, 0.042, 1.06 * puff, 0.68, 0.865 * puff))
+    return h
+  }
   switch (id) {
     case 'buzz':
-      g.add(dome(0.5))
+      g.add(wrap(0.97))
       break
     case 'mullet':
-      g.add(dome(), mesh(BOX(0.15, 0.15, 0.03), c, 0, 0.17, -0.105))
+      g.add(wrap(), mesh(BOX(0.16, 0.16, 0.032), c, 0, 0.155, -0.093))
       break
     case 'spiky': {
-      g.add(dome(0.8))
+      g.add(wrap(1.02))
       const cone = CONE(0.02, 0.055, 6)
       for (const [x, z] of [[0, 0.06], [0.05, 0.02], [-0.05, 0.02], [0.03, -0.05], [-0.03, -0.05]] as const)
-        g.add(mesh(cone, c, x, 0.415, z))
+        g.add(mesh(cone, c, x, 0.408, z))
       break
     }
     case 'bun':
-      g.add(dome(), mesh(SPH(0.048), c, 0, 0.425, -0.02))
+      g.add(wrap(), mesh(SPH(0.048), c, 0, 0.42, -0.02))
       break
     case 'ponytail':
-      g.add(dome(), mesh(new THREE.CapsuleGeometry(0.03, 0.15, 4, 8), c, 0, 0.22, -0.135, 1, 1, 1, 0.55), mesh(SPH(0.033), c, 0, 0.08, -0.175))
+      g.add(wrap(), mesh(new THREE.CapsuleGeometry(0.03, 0.15, 4, 8), c, 0, 0.22, -0.135, 1, 1, 1, 0.55), mesh(SPH(0.033), c, 0, 0.08, -0.175))
       break
     case 'curly': {
+      g.add(wrap())
       const s = SPH(0.042)
-      for (const [x, y, z] of [[0, 0.39, 0.03], [0.07, 0.36, 0], [-0.07, 0.36, 0], [0.09, 0.30, -0.04], [-0.09, 0.30, -0.04], [0, 0.33, -0.09], [0.05, 0.37, -0.06], [-0.05, 0.37, -0.06]] as const)
+      for (const [x, y, z] of [[0, 0.405, 0.02], [0.095, 0.375, 0], [-0.095, 0.375, 0], [0.105, 0.315, -0.05], [-0.105, 0.315, -0.05], [0, 0.36, -0.125], [0.06, 0.395, -0.075], [-0.06, 0.395, -0.075]] as const)
         g.add(mesh(s, c, x, y, z))
       break
     }
     case 'long':
-      g.add(dome(), mesh(BOX(0.17, 0.32, 0.035), c, 0, 0.16, -0.115), mesh(BOX(0.035, 0.22, 0.045), c, 0.098, 0.19, 0.005), mesh(BOX(0.035, 0.22, 0.045), c, -0.098, 0.19, 0.005))
+      g.add(wrap(), mesh(BOX(0.17, 0.32, 0.035), c, 0, 0.16, -0.115), mesh(BOX(0.035, 0.22, 0.045), c, 0.104, 0.19, 0.005), mesh(BOX(0.035, 0.22, 0.045), c, -0.104, 0.19, 0.005))
       break
     case 'braid': {
-      g.add(dome())
+      g.add(wrap())
       const s = SPH(0.027)
-      for (let i = 0; i < 4; i++) g.add(mesh(s, c, 0.078, 0.26 - i * 0.075, -0.085 - i * 0.012))
+      for (let i = 0; i < 4; i++) g.add(mesh(s, c, 0.088, 0.27 - i * 0.075, -0.095 - i * 0.012))
       break
     }
     case 'afro':
       g.add(mesh(SPH(0.165, 14, 12), c, 0, 0.365, -0.012, 1, 0.92, 1))
       break
-    default: // 'default' — Classic Cut: dome + fringe ON THE HAIRLINE (eyes are ~y 0.25–0.27 — a lower slab reads as a black visor over the eyes)
-      g.add(dome(), mesh(BOX(0.19, 0.036, 0.024), c, 0, 0.303, 0.106, 1, 1, 1, -0.22))
+    default: // 'default' — Classic Cut: wrap + fringe peeking over the brow (eyes ~y 0.25–0.27 stay clear)
+      g.add(wrap(), mesh(BOX(0.19, 0.036, 0.024), c, 0, 0.303, 0.106, 1, 1, 1, -0.22))
   }
   return g
 }
