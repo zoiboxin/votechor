@@ -21,6 +21,7 @@ export interface Projectile {
   life: number
   owner: string
   local: boolean // simulate locally
+  impacted?: boolean // landed once — impact callback fired, drop spawned
   onImpact?: (x: number, y: number, z: number) => void
 }
 
@@ -175,7 +176,15 @@ export class ItemSystem {
       const ground = this.physics.groundHeight(p.mesh.position.x, p.mesh.position.z, p.mesh.position.y)
       if (p.mesh.position.y <= ground + 0.1) {
         p.life = 0
+        p.impacted = true
         p.onImpact?.(p.mesh.position.x, ground, p.mesh.position.z)
+      } else if (p.life <= 0 && !p.impacted) {
+        // Never let a thrown item silently vanish: if its airtime ran out without
+        // a registered ground hit (void / NaN terrain / oddball geometry), treat
+        // the current spot as the landing so the world drop + FX still happen.
+        p.impacted = true
+        const gy = Number.isFinite(ground) ? ground : p.mesh.position.y
+        p.onImpact?.(p.mesh.position.x, gy, p.mesh.position.z)
       }
     }
     // remove dead
@@ -211,7 +220,10 @@ export class ItemSystem {
     this.projectiles.push({ id, type: t, mesh, vel: new THREE.Vector3(vx, vy, vz), life: 4, owner: 'remote', local: false, onImpact: () => {} })
   }
 
-  /** Spawn a dropped/extra item at runtime (e.g. player drops inventory) */
+  /** Spawn a dropped/extra item at runtime (e.g. player drops inventory).
+   *  Landed/throwable drops are capped so a long match can't accumulate meshes. */
+  private droppedIds: string[] = []
+  private static MAX_RUNTIME_DROPS = 60
   spawnDropped(def: ItemSpawn): ItemVisual {
     const g = MESH_BUILDERS[def.type]()
     g.position.set(def.x, def.y, def.z)
@@ -219,6 +231,12 @@ export class ItemSystem {
     const iv: ItemVisual = { def, group: g, taken: false, respawnAt: 0, bobPhase: Math.random() * 7 }
     this.items.push(iv)
     this.byId.set(def.id, iv)
+    if (def.id.startsWith('drop_')) {
+      this.droppedIds.push(def.id)
+      if (this.droppedIds.length > ItemSystem.MAX_RUNTIME_DROPS) {
+        this.removeDropped(this.droppedIds.shift()!)
+      }
+    }
     return iv
   }
 

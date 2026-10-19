@@ -116,12 +116,12 @@ export const POLICE_STRIKE = {
 export const ITEM_CONFIG: Record<ItemType, { name: string; icon: string; stack: number; desc: string }> = {
   bottle: { name: 'Plastic Bottle', icon: '🍾', stack: 5, desc: 'Throw to distract police (Q)' },
   sign:   { name: 'Cardboard Sign', icon: '🪧', stack: 3, desc: 'Protest in style. Throwable.' },
-  chai:   { name: 'Chai Cup', icon: '☕', stack: 3, desc: 'Use: +10 HP, full stamina & speed' },
+  chai:   { name: 'Chai Cup', icon: '☕', stack: 3, desc: 'Use: +10 HP, full ⚡ energy & speed' },
   firstaid: { name: 'First-Aid Kit', icon: '🩹', stack: 2, desc: 'Use: heal 50 HP' },
-  snack:  { name: 'Energy Snack', icon: '🍬', stack: 3, desc: 'Use: +5 HP, speed boost 8s' },
+  snack:  { name: 'Energy Snack', icon: '🍬', stack: 3, desc: 'Use: +5 HP, +60 ⚡ instant energy, speed 8s' },
   token:  { name: 'Stolen Vote Token', icon: '🗳️', stack: 99, desc: 'Recover the stolen votes!' },
   foam:   { name: 'Foam Finger', icon: '🖐️', stack: 2, desc: 'Throwable. Very dramatic.' },
-  joke:   { name: 'Mystery Samosa', icon: '🥟', stack: 1, desc: 'Eat: +10 HP. At your own risk.' },
+  joke:   { name: 'Mystery Samosa', icon: '🥟', stack: 1, desc: 'Eat: +10 HP & +30 ⚡ energy. At your own risk.' },
 }
 
 export const INVENTORY_MAX = 8

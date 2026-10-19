@@ -1926,7 +1926,8 @@ export class Game {
         this.fx.burst(p.pos.x, p.pos.y + 0.9, p.pos.z, '#7de3a8', 10, 2.2, 0.5)
         AudioManager.play('heal')
         this.fx.popup('+10 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
-        this.store.notify('Chai break! +10 HP, stamina restored. Zindagi ek baar milta hai.', 'info')
+        this.fx.popup('⚡ FULL ENERGY', '#f2c14e', p.pos.x, 1.6, p.pos.z)
+        this.store.notify('Chai break! +10 HP, instant full energy. Zindagi ek baar milta hai.', 'info')
         break
       case 'firstaid':
         p.heal(50)
@@ -1937,18 +1938,22 @@ export class Game {
         break
       case 'snack':
         p.heal(5)
+        p.stamina = Math.min(p.maxStamina, p.stamina + 60) // instant energy — sprint fuel, user request
         p.speedBoostUntil = this.worldTime + 8
         this.fx.burst(p.pos.x, p.pos.y + 0.9, p.pos.z, '#7de3a8', 7, 1.8, 0.45)
         AudioManager.play('pickup')
         this.fx.popup('+5 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
-        this.store.notify('Sugar rush! +5 HP and speed boost for 8s.', 'info')
+        this.fx.popup('⚡ +60 ENERGY', '#f2c14e', p.pos.x, 1.6, p.pos.z)
+        this.store.notify('Sugar rush! +5 HP, +60 instant energy, speed boost 8s.', 'info')
         break
       case 'joke': {
         const jokes = ['Delicious. Illegal. Worth it.', 'The samosa was filled with classified documents.', 'You feel oddly empowered.', '+10 confidence. -2 health code compliance.']
         p.heal(10)
+        p.stamina = Math.min(p.maxStamina, p.stamina + 30) // instant energy — user request
         this.fx.burst(p.pos.x, p.pos.y + 0.9, p.pos.z, '#7de3a8', 10, 2.2, 0.5)
         AudioManager.play('cash')
         this.fx.popup('+10 HP', '#ff8fa3', p.pos.x, 2.1, p.pos.z)
+        this.fx.popup('⚡ +30 ENERGY', '#f2c14e', p.pos.x, 1.6, p.pos.z)
         this.store.notify(randomOf(jokes), 'info')
         break
       }

@@ -165,6 +165,9 @@ const GIFT_RADIUS = 4.5
 const ITEM_RESPAWN_MS = 30000
 /** Confiscated loot piles vanish this long after being dropped (squad rescue window). */
 const DROP_TTL_MS = 150000
+/** Player-dropped / thrown-item landing spots persist this long (user request:
+ *  thrown items must REMAIN on the ground to grab again — 15 min, not 2.5). */
+const THROWN_DROP_TTL_MS = 900000
 /** Ring layout for confiscated loot scattering around the capture spot. */
 const DROP_RING_RADIUS = 1.5
 const VEHICLE_HIT_COOLDOWN_MS = 1200
@@ -779,7 +782,7 @@ export class Room {
     }
     const pos = this.nudgeDrop(dx, dz, p.x, p.z)
     const id = `drop_${now.toString(36)}_${Math.floor(Math.random() * 46656).toString(36)}d`
-    const drop: DroppedItem = { id, type: t as ItemType, x: pos.x, y: 0.1, z: pos.z, ownerId: p.id, expiresAt: now + DROP_TTL_MS }
+    const drop: DroppedItem = { id, type: t as ItemType, x: pos.x, y: 0.1, z: pos.z, ownerId: p.id, expiresAt: now + THROWN_DROP_TTL_MS }
     this.droppedItems.set(id, drop)
     this.emitRoom('game:dropped', [{ id: drop.id, type: drop.type, x: drop.x, y: drop.y, z: drop.z, expiresAt: drop.expiresAt }])
     return true
