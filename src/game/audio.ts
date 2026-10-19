@@ -9,6 +9,7 @@ export type SfxName =
   | 'shockwave' | 'paperRustle' | 'dizzy' | 'victory' | 'defeat' | 'cash' | 'horn' | 'moo' | 'gate'
   | 'shout' | 'thunder'
   | 'bark' | 'meow' | 'chirp' | 'crunch'
+  | 'growl' | 'howl' | 'sting'
 
 /**
  * Adaptive music themes. 'none' = sequencer fully stopped (silent menus —
@@ -399,6 +400,64 @@ class AudioManagerImpl {
         o.start(t); o.stop(t + 1)
         sub.start(t); sub.stop(t + 1)
         this.noise(0.55, t + 0.1, 0.05 * v, 340, 0.6)
+        break
+      }
+      case 'growl': {
+        // v64 zombie moan — low saw voice with a sickly pitch wobble + breath noise
+        const j = 0.9 + Math.random() * 0.2
+        const o = this.ctx.createOscillator()
+        o.type = 'sawtooth'
+        o.frequency.setValueAtTime(96 * j, t)
+        o.frequency.linearRampToValueAtTime(78 * j, t + 0.35)
+        o.frequency.linearRampToValueAtTime(88 * j, t + 0.7)
+        const g = this.ctx.createGain()
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(0.13 * v, t + 0.12)
+        g.gain.setValueAtTime(0.13 * v, t + 0.55)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9)
+        o.connect(g).connect(this.out())
+        o.start(t); o.stop(t + 0.95)
+        const lfo = this.ctx.createOscillator()
+        lfo.frequency.value = 6.5
+        const lg = this.ctx.createGain()
+        lg.gain.value = 9
+        lfo.connect(lg).connect(o.frequency)
+        lfo.start(t); lfo.stop(t + 0.95)
+        break
+      }
+      case 'howl': {
+        // v64 distant wild howl — sine glide up then down, quiet and lonely
+        const j = 0.94 + Math.random() * 0.12
+        const o = this.ctx.createOscillator()
+        o.type = 'sine'
+        o.frequency.setValueAtTime(196 * j, t)
+        o.frequency.exponentialRampToValueAtTime(392 * j, t + 0.55)
+        o.frequency.exponentialRampToValueAtTime(174 * j, t + 1.5)
+        const g = this.ctx.createGain()
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(0.06 * v, t + 0.3)
+        g.gain.setValueAtTime(0.06 * v, t + 0.9)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6)
+        o.connect(g).connect(this.out())
+        o.start(t); o.stop(t + 1.65)
+        break
+      }
+      case 'sting': {
+        // v64 scare stinger — dissonant tritone stab when a zombie detects you
+        const o = this.ctx.createOscillator()
+        o.type = 'sawtooth'
+        o.frequency.setValueAtTime(466, t)
+        const o2 = this.ctx.createOscillator()
+        o2.type = 'sawtooth'
+        o2.frequency.setValueAtTime(331, t)
+        const g = this.ctx.createGain()
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(0.16 * v, t + 0.03)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.65)
+        o.connect(g); o2.connect(g)
+        g.connect(this.out())
+        o.start(t); o.stop(t + 0.7)
+        o2.start(t); o2.stop(t + 0.7)
         break
       }
       case 'bark': {

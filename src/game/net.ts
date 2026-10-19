@@ -228,6 +228,8 @@ export class NetClient {
   arrest(targetId: string) { this.socket?.emit('game:arrest', { targetId }) }
   /** Police role: lathi strike (F) — server validates and applies the damage. */
   strike(targetId: string) { this.socket?.emit('game:policeHit', { targetId }) }
+  /** v64 — zombie kill in the wild: the server validates the respawn point (whitelist) and adopts it. */
+  wildDeath(x: number, z: number) { this.socket?.emit('game:wildDeath', { x, z }) }
   emote(emote: string) { this.socket?.emit('game:emote', { emote }) }
   quickMsg(msgId: number) { this.socket?.emit('game:quickmsg', { msgId }) }
   /** v44 — free-text chat line (server sanitizes + rate-limits, then relays to the room). */

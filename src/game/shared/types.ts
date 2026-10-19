@@ -19,6 +19,10 @@ export type DecoKind =
   | 'home' | 'wall' | 'clothesline'
   // v43 level-map landmarks — variant-only props appended by buildWorldDef(mapId)
   | 'stringLights' | 'archGate' | 'ferrisWheel' | 'crane'
+  // v64 wild round world — jungle ring, graveyard, countryside, mountain rim
+  | 'jtree' | 'palm' | 'shrub' | 'grass' | 'fern' | 'log' | 'stump'
+  | 'boulder' | 'deadTree' | 'grave' | 'track' | 'hut' | 'hay'
+  | 'mountain'
 
 export interface Deco {
   kind: DecoKind
@@ -33,6 +37,9 @@ export interface Deco {
   color?: string
   sign?: string   // text on signs/billboards
   collider?: boolean // register a static AABB
+  cw?: number     // mountain colorway: 0 granite rim/ridge · 1 green hills · 2 hazy far
+  seed?: number   // mountain shape seed (8 buckets, deterministic)
+  base?: number   // mountain base radius (m)
 }
 
 export type ItemType = 'bottle' | 'sign' | 'chai' | 'firstaid' | 'snack' | 'token' | 'foam' | 'joke'

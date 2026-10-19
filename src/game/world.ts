@@ -3,6 +3,8 @@
 import * as THREE from 'three'
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { WorldDef, Deco } from './shared/types'
+import { WORLD_DISC } from './shared/constants'
+import { profileR, cragVertical, jagTerm, bandJit, snowlineFor, mHash } from './shared/terrain-noise'
 
 const ZONE_COLORS = ['#c96f4a', '#b85c3e', '#7f9a8c', '#c9a86a', '#9a7b5f']
 
@@ -92,6 +94,205 @@ function getTreeGeo(variant: number): THREE.BufferGeometry {
   geo.userData.vcShared = true // v43: survives WorldRenderer.dispose() — reused by rebuilt worlds
   return geo
 }
+
+// ============================================================================
+// v64 REALISTIC MOUNTAINS — one noise-displaced ridged massif per peak.
+// Rebuild of the lost v62 pipeline: cone geometry displaced by two octaves of
+// deterministic value noise sampled on the cos/sin circle (seamless through
+// the wrap), matterhorn-concave flanks, craggy lobes strongest low, jagged-
+// cluster sub-summits, baked vertex colors (forest skirt → rock bands →
+// snow above a jittered snowline). All shape math lives in shared/
+// terrain-noise.ts — mountain-field.ts inverts THE SAME functions, so the
+// collision surface is exactly the drawn surface.
+//
+// REFERENCE SIZE convention: geometry is built at h=100, base=40 and SCALED
+// per peak (scale.y = h/100, scale.xz = base/40). The heightfield divides the
+// world offset by the same factors before inverting. One rotation total: the
+// deco group rotates by d.ry (mesh stays unrotated — cleaner than the lost
+// build's accidental double rotation).
+// ============================================================================
+
+/** Reference build height (m) — peaks scale this. Must match mountain-field REF_H. */
+export const MOUNTAIN_REF_H = 100
+/** Reference base radius (m) — peaks scale this. Must match mountain-field REF_BASE. */
+export const MOUNTAIN_REF_BASE = 40
+
+const mountainGeoCache = new Map<string, THREE.BufferGeometry>()
+const mountainMats = new Map<number, THREE.MeshStandardMaterial>()
+
+/** Fog-immune shared material per colorway — the skyline reads beyond the fog wall. */
+function getMountainMat(cw: number): THREE.MeshStandardMaterial {
+  let m = mountainMats.get(cw)
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, fog: false })
+    mountainMats.set(cw, m)
+  }
+  return m
+}
+
+/**
+ * Build (or fetch from cache) the ridged massif for (seed bucket, variant,
+ * colorway) at reference size. Deterministic — same inputs, same mesh.
+ */
+export function buildMountainGeometry(seed: number, variant: number, cw: number): THREE.BufferGeometry {
+  const key = `${seed}:${variant}:${cw}`
+  const hit = mountainGeoCache.get(key)
+  if (hit) return hit
+
+  const RINGS = 12, SEGS = 24
+  const grid: THREE.Vector3[][] = []
+  const colors: THREE.Color[][] = []
+  const snowline = snowlineFor(cw)
+  // colorway palettes: 0 granite rim/ridge · 1 green hills · 2 hazy far
+  const rockCol = new THREE.Color(cw === 2 ? '#8b939c' : cw === 1 ? '#6b7a5e' : '#6b6f66')
+  const rockLo = new THREE.Color(cw === 2 ? '#78818b' : cw === 1 ? '#5c6b52' : '#565a52')
+  const forestCol = new THREE.Color(cw === 1 ? '#3e5c37' : '#3d5237')
+  const snowCol = new THREE.Color('#e8edf2')
+
+  for (let k = 0; k <= RINGS; k++) {
+    const ny = k / RINGS
+    const ring: THREE.Vector3[] = []
+    const cring: THREE.Color[] = []
+    for (let j = 0; j < SEGS; j++) {
+      const a = (j / SEGS) * Math.PI * 2
+      const prof = profileR(ny, variant)
+      // non-uniform plan scale: ridge-mass elongation + per-seed jitter
+      const ez = variant === 2 ? 1.85 : 0.9 + mHash(seed, 4) * 0.2
+      // vertical-only crags keep R(ny) strictly monotonic — exact heightfield parity
+      const r = MOUNTAIN_REF_BASE * prof
+      const jag = variant === 3 ? jagTerm(a, ny, seed) : 0
+      const y = MOUNTAIN_REF_H * ny * (1 + jag) + cragVertical(a, ny, seed) * MOUNTAIN_REF_H
+      const x = Math.cos(a) * r
+      const z = Math.sin(a) * r * ez
+      ring.push(new THREE.Vector3(x, y, z))
+      // baked vertex colors — forest skirt, noise-irregular rock bands, jittered snowline
+      const nyF = y / MOUNTAIN_REF_H
+      const bjit = bandJit(a, ny, seed)
+      let col: THREE.Color
+      if (nyF < 0.15 + bjit) col = forestCol.clone()
+      else if (snowline > 0 && nyF > snowline + bjit) col = snowCol.clone()
+      else col = rockLo.clone().lerp(rockCol, Math.min(1, (nyF - 0.15) * 2.2))
+      const shade = 0.9 + mHash(seed * 100 + j, k) * 0.16
+      col.multiplyScalar(shade)
+      cring.push(col)
+    }
+    grid.push(ring)
+    colors.push(cring)
+  }
+
+  // stitch rings + cap the summit
+  const pos: number[] = [], colArr: number[] = [], idx: number[] = []
+  for (const ring of grid) for (const v of ring) { pos.push(v.x, v.y, v.z) }
+  for (const ring of colors) for (const c of ring) { colArr.push(c.r, c.g, c.b) }
+  const at = (k: number, j: number) => k * SEGS + (j % SEGS)
+  for (let k = 0; k < RINGS; k++) {
+    for (let j = 0; j < SEGS; j++) {
+      const a0 = at(k, j), a1 = at(k, j + 1), b0 = at(k + 1, j), b1 = at(k + 1, j + 1)
+      idx.push(a0, b0, a1, a1, b0, b1)
+    }
+  }
+  // summit cap: fan from the peak vertex (average top ring, raised to the ref height)
+  const peakIndex = pos.length / 3
+  let px = 0, pz = 0
+  for (let j = 0; j < SEGS; j++) { px += grid[RINGS][j].x; pz += grid[RINGS][j].z }
+  pos.push(px / SEGS, MOUNTAIN_REF_H, pz / SEGS)
+  colArr.push(snowline > 0 ? snowCol.r : rockCol.r, snowline > 0 ? snowCol.g : rockCol.g, snowline > 0 ? snowCol.b : rockCol.b)
+  for (let j = 0; j < SEGS; j++) idx.push(at(RINGS, j), peakIndex, at(RINGS, j + 1))
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3))
+  geo.setIndex(idx)
+  geo.computeVertexNormals()
+  geo.userData.vcShared = true
+  mountainGeoCache.set(key, geo)
+  return geo
+}
+
+// ---- v64 jungle flora geometries — cached merged vertex-colored meshes ----
+const jungleGeoCache = new Map<string, THREE.BufferGeometry>()
+
+function getJungleGeo(kind: 'jtree' | 'deadTree' | 'fern' | 'log' | 'stump' | 'shrub' | 'grass', variant: number): THREE.BufferGeometry {
+  const key = `${kind}:${variant}`
+  const hit = jungleGeoCache.get(key)
+  if (hit) return hit
+  const parts: THREE.BufferGeometry[] = []
+  const bark = new THREE.Color('#4a3826')
+  if (kind === 'jtree') {
+    // massive jungle canopy — thick leaning trunk + 3-4 layered dark-green blobs
+    const trunk = new THREE.CylinderGeometry(0.22, 0.42, 4.6, 7)
+    trunk.translate(0, 2.3, 0)
+    trunk.rotateZ(variant === 1 ? -0.07 : 0.05)
+    parts.push(treePaint(trunk, (_x, y) => bark.clone().multiplyScalar(0.9 + y * 0.03)))
+    const greens = [new THREE.Color('#2e5a2e'), new THREE.Color('#3a6b35'), new THREE.Color('#274d28')]
+    const blobs: Array<[number, number, number, number]> = variant === 0
+      ? [[0, 5.6, 0, 1.7], [1.15, 4.9, 0.4, 1.15], [-1.05, 5.0, -0.4, 1.2], [0.1, 6.6, 0, 1.1]]
+      : variant === 1
+        ? [[0, 6.0, 0, 1.5], [1.3, 5.2, -0.3, 1.0], [-1.2, 5.3, 0.35, 1.05], [-0.2, 6.9, 0.2, 0.95]]
+        : [[0, 5.4, 0, 1.65], [0.9, 6.2, 0.5, 1.0], [-0.95, 4.7, -0.5, 1.1], [0.15, 6.8, -0.15, 1.0]]
+    for (const [bx, by, bz, r] of blobs) {
+      const blob = new THREE.IcosahedronGeometry(r, 1)
+      blob.scale(1.12, 0.82, 1.12)
+      blob.translate(bx, by, bz)
+      parts.push(treePaint(blob, (x, y, z) => jitterColor(greens[(Math.abs(Math.round(x + y + z)) % 3)], x, y, z, 0.16)))
+    }
+  } else if (kind === 'deadTree') {
+    // bare grey-brown snag — trunk + two broken branches, no foliage
+    const trunk = new THREE.CylinderGeometry(0.12, 0.3, 4.2, 6)
+    trunk.translate(0, 2.1, 0)
+    trunk.rotateZ(0.08)
+    parts.push(treePaint(trunk, () => new THREE.Color('#6b5d4a')))
+    for (const [rz, y] of [[0.7, 2.9], [-0.8, 3.4]] as const) {
+      const br = new THREE.CylinderGeometry(0.04, 0.09, 1.3, 5)
+      br.translate(0, 0.65, 0)
+      br.rotateZ(rz)
+      br.translate(0, y, 0)
+      parts.push(treePaint(br, () => new THREE.Color('#7a6b55')))
+    }
+  } else if (kind === 'fern') {
+    for (let i = 0; i < 6; i++) {
+      const frond = new THREE.ConeGeometry(0.16, 1.15, 4)
+      frond.translate(0, 0.575, 0)
+      frond.rotateX(1.0 + (i % 2) * 0.18)
+      frond.rotateY((i / 6) * Math.PI * 2)
+      parts.push(treePaint(frond, () => new THREE.Color(i % 2 ? '#3f6b38' : '#35592f')))
+    }
+  } else if (kind === 'log') {
+    const log = new THREE.CylinderGeometry(0.42, 0.5, 4.4, 8)
+    log.rotateZ(Math.PI / 2)
+    log.translate(0, 0.42, 0)
+    parts.push(treePaint(log, (x) => (Math.abs(x) > 2.0 ? new THREE.Color('#8a7350') : bark.clone().multiplyScalar(0.85))))
+  } else if (kind === 'stump') {
+    const st = new THREE.CylinderGeometry(0.5, 0.62, 0.9, 8)
+    st.translate(0, 0.45, 0)
+    parts.push(treePaint(st, (x, y, z) => (y > 0.82 ? new THREE.Color('#9a8258') : bark.clone())))
+  } else if (kind === 'shrub') {
+    for (const [bx, bz, r] of [[0.35, 0.1, 0.75], [-0.3, -0.2, 0.6]] as const) {
+      const blob = new THREE.DodecahedronGeometry(r, 0)
+      blob.scale(1.25, 0.7, 1.25)
+      blob.translate(bx, r * 0.42, bz)
+      parts.push(treePaint(blob, (x, y, z) => jitterColor(new THREE.Color(['#3d5c34', '#48683c', '#35502f'][variant % 3]), x, y, z, 0.12)))
+    }
+  } else { // grass tuft — three thin tilted blades
+    for (let i = 0; i < 3; i++) {
+      const blade = new THREE.ConeGeometry(0.09, 0.62, 4)
+      blade.translate(0, 0.31, 0)
+      blade.rotateX(0.32 + (i % 2) * 0.14)
+      blade.rotateY((i / 3) * Math.PI * 2)
+      parts.push(treePaint(blade, () => new THREE.Color(i === 1 ? '#5a7a42' : '#4a6b3a')))
+    }
+  }
+  const norm = parts.map(p => (p.index ? p : (mergeVertices(p, 1e-4) ?? p)))
+  const geo = mergeGeometries(norm, false) ?? parts[0]
+  if (geo !== parts[0]) for (const p of norm) p.dispose()
+  geo.computeVertexNormals()
+  geo.userData.vcShared = true
+  jungleGeoCache.set(key, geo)
+  return geo
+}
+
+const jungleMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 })
+
 
 // v43 district tinting: the canvas textures stay the classic colors — a multiply
 // color on the material shifts them per map without new texture uploads.
@@ -303,6 +504,32 @@ export class WorldRenderer {
     ground.position.set(0, -0.02, -280)
     ground.receiveShadow = true
     this.group.add(ground)
+
+    // v64 WILD ROUND WORLD — the 1300 m jungle disc under everything + an apron
+    // that reaches past the Far Range so the world never shows a rectangular edge.
+    const wildTex = canvasTex(256, 256, (ctx) => {
+      ctx.fillStyle = '#4a5c3a'
+      ctx.fillRect(0, 0, 256, 256)
+      for (let i = 0; i < 1100; i++) {
+        ctx.fillStyle = ['#435635', '#516343', '#3e5031', '#49603c'][i % 4]
+        ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 3)
+      }
+    }, 40, 40)
+    const wild = new THREE.Mesh(
+      new THREE.CircleGeometry(WORLD_DISC.r + 6, 96),
+      new THREE.MeshStandardMaterial({ map: wildTex, roughness: 1 }),
+    )
+    wild.rotation.x = -Math.PI / 2
+    wild.position.set(WORLD_DISC.cx, -0.05, WORLD_DISC.cz)
+    wild.receiveShadow = true
+    this.group.add(wild)
+    const apron = new THREE.Mesh(
+      new THREE.CircleGeometry(880, 64),
+      new THREE.MeshStandardMaterial({ color: '#3c4a33', roughness: 1, fog: false }),
+    )
+    apron.rotation.x = -Math.PI / 2
+    apron.position.set(WORLD_DISC.cx, -0.12, WORLD_DISC.cz)
+    this.group.add(apron)
   }
 
   private buildRoads() {
@@ -897,6 +1124,129 @@ export class WorldRenderer {
         const roof = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.15, 2.4), new THREE.MeshStandardMaterial({ color: '#4a5a48' }))
         roof.position.y = 2.5
         g.add(shed, roof)
+        break
+      }
+      // ================= v64 WILD WORLD CASES =================
+      case 'mountain': {
+        // one noise-displaced ridged massif — the collision surface (mountain-field)
+        // is the analytic inverse of exactly this geometry. Group rotation d.ry is
+        // the ONLY rotation (single-rotation convention, see builder docs).
+        const seed = d.seed ?? 0
+        const mesh = new THREE.Mesh(buildMountainGeometry(seed, d.variant ?? 0, d.cw ?? 0), getMountainMat(d.cw ?? 0))
+        mesh.scale.set((d.base ?? 40) / MOUNTAIN_REF_BASE, (d.h ?? 60) / MOUNTAIN_REF_H, (d.base ?? 40) / MOUNTAIN_REF_BASE)
+        mesh.castShadow = true
+        mesh.userData.noCull = true // the skyline survives distance culling
+        g.add(mesh)
+        break
+      }
+      case 'jtree': {
+        const tree = new THREE.Mesh(getJungleGeo('jtree', d.variant ?? 0), jungleMat)
+        tree.scale.setScalar(d.s ?? 1)
+        tree.castShadow = shadow
+        g.add(tree)
+        break
+      }
+      case 'deadTree': {
+        const t = new THREE.Mesh(getJungleGeo('deadTree', 0), jungleMat)
+        t.scale.setScalar(d.s ?? 1)
+        t.castShadow = shadow
+        g.add(t)
+        break
+      }
+      case 'fern': {
+        const f = new THREE.Mesh(getJungleGeo('fern', 0), jungleMat)
+        f.scale.setScalar(d.s ?? 1)
+        g.add(f)
+        break
+      }
+      case 'log': {
+        const l = new THREE.Mesh(getJungleGeo('log', 0), jungleMat)
+        l.scale.setScalar(d.s && d.s > 3 ? d.s / 4.4 : 1) // s carries length; geo is 4.4 m long
+        l.scale.x = Math.max(0.6, Math.min(1.6, (d.s ?? 4) / 4.4))
+        l.castShadow = shadow
+        g.add(l)
+        break
+      }
+      case 'stump': {
+        const st = new THREE.Mesh(getJungleGeo('stump', 0), jungleMat)
+        st.scale.setScalar(d.s ?? 1)
+        st.castShadow = shadow
+        g.add(st)
+        break
+      }
+      case 'shrub': {
+        const sh = new THREE.Mesh(getJungleGeo('shrub', d.variant ?? 0), jungleMat)
+        sh.scale.setScalar(d.s ?? 1)
+        g.add(sh)
+        break
+      }
+      case 'grass': {
+        const gr = new THREE.Mesh(getJungleGeo('grass', 0), jungleMat)
+        gr.scale.setScalar(d.s ?? 1)
+        g.add(gr)
+        break
+      }
+      case 'boulder': {
+        const s = d.s ?? 1
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), new THREE.MeshStandardMaterial({ color: ['#7a7d72', '#6d7066', '#83867a'][(Math.abs(Math.round(d.x + d.z)) % 3)], flatShading: true, roughness: 1 }))
+        rock.scale.y = 0.72
+        rock.position.y = s * 0.55
+        rock.castShadow = shadow
+        g.add(rock)
+        break
+      }
+      case 'grave': {
+        // Kabristan tombstone — three weathered variants, slightly tilted by ry
+        const stone = new THREE.MeshStandardMaterial({ color: ['#9a958a', '#8a857c', '#a8a294'][d.variant ?? 0], flatShading: true, roughness: 1 })
+        if (d.variant === 1) {
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.1, 0.22), stone)
+          slab.position.y = 0.55
+          g.add(slab)
+        } else if (d.variant === 2) {
+          const round = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.45, 1.05, 10), stone)
+          round.position.y = 0.52
+          g.add(round)
+        } else {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.15, 0.24), stone)
+          post.position.y = 0.57
+          const cross = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.24, 0.22), stone)
+          cross.position.y = 0.88
+          g.add(post, cross)
+        }
+        const base = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.14, 0.62), new THREE.MeshStandardMaterial({ color: '#7a756b', flatShading: true }))
+        base.position.y = 0.07
+        g.add(base)
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'track': {
+        // dirt trail patch — flat, slightly stacked to avoid z-fighting
+        const h2 = ((Math.abs(Math.round(d.x * 7 + d.z * 13))) % 6)
+        const patch = new THREE.Mesh(new THREE.CircleGeometry(d.s ?? 5, 9), new THREE.MeshStandardMaterial({ color: '#a3814f', roughness: 1, transparent: true, opacity: 0.85 }))
+        patch.rotation.x = -Math.PI / 2
+        patch.position.y = 0.015 + h2 * 0.004
+        patch.scale.setScalar(1 + (h2 % 3) * 0.14)
+        g.add(patch)
+        break
+      }
+      case 'hut': {
+        const s = d.s ?? 1
+        const body = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 3.2), new THREE.MeshStandardMaterial({ color: '#b8a488', flatShading: true }))
+        body.position.y = 1.3
+        const thatch = new THREE.Mesh(new THREE.ConeGeometry(2.9, 1.6, 4), new THREE.MeshStandardMaterial({ color: '#8a713e', flatShading: true }))
+        thatch.position.y = 3.4
+        thatch.rotation.y = Math.PI / 4
+        g.add(body, thatch)
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'hay': {
+        const s = d.s ?? 1
+        const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 1.3, 10), new THREE.MeshStandardMaterial({ color: '#c2a452', flatShading: true }))
+        roll.rotation.z = Math.PI / 2
+        roll.position.y = 0.8
+        roll.castShadow = shadow
+        g.add(roll)
         break
       }
     }

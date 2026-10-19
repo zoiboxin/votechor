@@ -8,6 +8,8 @@
 // market → checkpoint → avenue → parliament) is untouched down the middle.
 import type { AABB, Deco, DecoKind, ItemSpawn, NpcSpawn, VehicleDef, WorldDef, SearchlightDef, CrossRoadDef } from './types'
 import { mapById } from './maps'
+import { WORLD_BOUNDS, WORLD_DISC } from './constants'
+import { mHash } from './terrain-noise'
 
 function mulberry32(seed: number) {
   let a = seed >>> 0
@@ -113,11 +115,18 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   }
   const clothesline = (x: number, z: number, len: number, ry = 0) => deco({ kind: 'clothesline', x, z, w: len, ry })
 
-  // Invisible world walls
-  box(-124, 0, 10, 124, 14, 12)        // back wall (spawn side)
-  box(-124, 0, -576, 124, 14, -572)    // far wall (parliament end)
-  box(-124, 0, -576, -120, 14, 12)     // left wall
-  box(120, 0, -576, 124, 14, 12)       // right wall
+  // Invisible world walls — v64: the city is now OPEN to the wild on all four
+  // sides through 14 m jungle gates (N x±7, S x±7, E/W z -274..-286). Boulder
+  // gateposts mark every exit; the wall ring continues on the OUTER bounding
+  // square (below) so the 1300 m disc is the real playfield.
+  box(-124, 0, 10, -7, 14, 12)         // back wall (spawn side), west of gate
+  box(7, 0, 10, 124, 14, 12)           // back wall, east of gate
+  box(-124, 0, -576, -7, 14, -572)     // far wall (parliament end), west of gate
+  box(7, 0, -576, 124, 14, -572)       // far wall, east of gate
+  box(-124, 0, 10, -120, 14, -274)     // left wall, north of gate
+  box(-124, 0, -286, -120, 14, -576)   // left wall, south of gate
+  box(120, 0, 10, 124, 14, -274)       // right wall, north of gate
+  box(120, 0, -286, 124, 14, -576)     // right wall, south of gate
 
   // ================= ZONE A — PROTEST GATHERING PLAZA (z 0 .. -80) =================
   const plazaBuilding = (x: number, z: number, i: number) => {
@@ -745,6 +754,172 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   // Boss arena (center z=-520)
   landmarks.push({ name: 'BOSS: Vote Collector', x: 0, z: -520 })
 
+  // ========================================================================
+  // v64 THE WILD ROUND WORLD — countryside fringe, Vanodyan jungle ring,
+  // Kabristan graveyard, and the continuous mountain rim.
+  // Rings measured from the disc center (0,-340): the city rect reaches
+  // r ≈ 350 (north) / 232 (south) / 120 (east+west); jungle fills the gap to
+  // the green hills (470..545), then the snowcap rim (587..647) and the hazy
+  // far range (690..770) conceals the terrain edge on every side. Mountains
+  // NEVER sit inside the city or the playable jungle.
+  // ========================================================================
+  {
+    const CX = WORLD_DISC.cx, CZ = WORLD_DISC.cz
+    const rnd2 = mulberry32(0x5eed1970) // independent stream — the city's rnd sequence above is untouched
+    const distC = (x: number, z: number) => Math.hypot(x - CX, z - CZ)
+    const cityClear = (x: number, z: number, pad = 6) => Math.abs(x) < 120 + pad && z < 10 + pad && z > -572 - pad
+    const inGrave = (x: number, z: number, pad = 0) => Math.abs(x - GRAVE_X) < 96 + pad && Math.abs(z - GRAVE_Z) < 66 + pad
+    const GRAVE_X = -330, GRAVE_Z = -520 // Kabristan — west-southwest wild, r ≈ 376 from center
+
+    // ---- wild gates: boulder gateposts flank every city exit, dirt tracks lead out ----
+    const gatePost = (x: number, z: number) => { deco({ kind: 'boulder', x, z, s: 0.9 + rnd2() * 0.4 }); box(x - 1.1, 0, z - 1.1, x + 1.1, 1.7, z + 1.1) }
+    gatePost(-9, 15); gatePost(9, 15)          // north gate
+    gatePost(-9, -580); gatePost(9, -580)      // south gate
+    gatePost(-127, -270); gatePost(-127, -290) // west gate
+    gatePost(127, -270); gatePost(127, -290)   // east gate
+    const track = (x1: number, z1: number, x2: number, z2: number, w = 5) => {
+      const steps = Math.max(2, Math.ceil(Math.hypot(x2 - x1, z2 - z1) / 9))
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps
+        const jx = (rnd2() - 0.5) * 2.4, jz = (rnd2() - 0.5) * 2.4
+        deco({ kind: 'track', x: x1 + (x2 - x1) * t + jx, z: z1 + (z2 - z1) * t + jz, s: w + rnd2() * 2 })
+      }
+    }
+    track(0, 14, 0, -620); track(0, -580, 0, -950)     // north + south spine tracks
+    track(-122, -280, -600, -420); track(122, -280, 600, -420) // east + west tracks
+    track(-30, -30, -560, -80); track(30, -120, 560, -200)     // two diagonal trails
+
+    // ---- countryside fringe: farms and hay OUTSIDE the city gates (Zone B) ----
+    // north band beyond the back wall (z > 14), south band beyond the far wall
+    // (z < -580), west/east bands beyond the side walls (|x| > 126) — never on
+    // city vehicle routes.
+    for (let i = 0; i < 7; i++) {
+      const side = i % 4
+      const hx = side === 0 ? -60 + rnd2() * 120 : side === 1 ? -60 + rnd2() * 120 : side === 2 ? -128 - rnd2() * 30 : 128 + rnd2() * 30
+      const hz = side === 0 ? 16 + rnd2() * 40 : side === 1 ? -580 - rnd2() * 50 : -320 + (rnd2() - 0.5) * 80
+      deco({ kind: 'hut', x: hx, z: hz, s: 1 + rnd2() * 0.35, ry: rnd2() * 6.28 })
+      box(hx - 2.2, 0, hz - 2.2, hx + 2.2, 3, hz + 2.2)
+    }
+    for (let i = 0; i < 12; i++) {
+      const side = i % 4
+      const hx = side === 0 ? -60 + rnd2() * 120 : side === 1 ? -60 + rnd2() * 120 : side === 2 ? -126 - rnd2() * 40 : 126 + rnd2() * 40
+      const hz = side === 0 ? 16 + rnd2() * 50 : side === 1 ? -582 - rnd2() * 60 : -300 + (rnd2() - 0.5) * 160
+      deco({ kind: 'hay', x: hx, z: hz, s: 0.8 + rnd2() * 0.5, ry: rnd2() * 6.28 })
+    }
+
+    // ---- Vanodyan jungle ring (Zone C) — canopy attempts, giants, undergrowth ----
+    const jtree = (x: number, z: number, r: number, big = false) => {
+      deco({ kind: 'jtree', x, z, s: (big ? 1.7 : 0.9) + r * (big ? 0.9 : 0.5), variant: Math.floor(rnd2() * 3), ry: rnd2() * 6.28 })
+      box(x - 0.45, 0, z - 0.45, x + 0.45, 4.5, z + 0.45) // trunk collider — canopy is walk-through
+    }
+    for (let i = 0; i < 2600; i++) { // canopy — uniform-in-annulus, thinning toward the hills
+      const a = rnd2() * Math.PI * 2
+      const rr = 100 + Math.sqrt(rnd2()) * 540
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z)) continue
+      const d = distC(x, z)
+      if (d > 430 && mHash(x, z) * 120 < d - 430) continue // thinBand — sparse approaching the hills
+      if (inGrave(x, z, 6)) continue
+      jtree(x, z, rnd2())
+    }
+    let giants = 0
+    for (let i = 0; i < 520 && giants < 46; i++) { // 46 giants — ancient canopy
+      const a = rnd2() * Math.PI * 2, rr = 120 + rnd2() * 310
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z) || inGrave(x, z, 6)) continue
+      jtree(x, z, rnd2(), true)
+      giants++
+    }
+    for (let i = 0; i < 1900; i++) { // small grass — walk-through, densifies the floor
+      const a = rnd2() * Math.PI * 2, rr = 100 + Math.sqrt(rnd2()) * 500
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z) || distC(x, z) > 560) continue
+      deco({ kind: 'grass', x, z, s: 0.55 + rnd2() * 0.7, ry: rnd2() * 6.28 })
+    }
+    for (let i = 0; i < 1150; i++) { // boulders
+      const a = rnd2() * Math.PI * 2, rr = 100 + Math.sqrt(rnd2()) * 460
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z)) continue
+      deco({ kind: 'boulder', x, z, s: 0.9 + rnd2() * 0.9, ry: rnd2() * 6.28 })
+      box(x - 0.9, 0, z - 0.9, x + 0.9, 1.4, z + 0.9)
+    }
+    for (let i = 0; i < 200; i++) { // ferns
+      const a = rnd2() * Math.PI * 2, rr = 110 + Math.sqrt(rnd2()) * 380
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z)) continue
+      deco({ kind: 'fern', x, z, s: 0.7 + rnd2() * 0.6, ry: rnd2() * 6.28 })
+    }
+    for (let i = 0; i < 30; i++) { // fallen logs
+      const a = rnd2() * Math.PI * 2, rr = 130 + rnd2() * 280
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z)) continue
+      deco({ kind: 'log', x, z, s: 2.2 + rnd2() * 2.4, ry: rnd2() * 6.28 })
+    }
+    for (let i = 0; i < 38; i++) { // stumps
+      const a = rnd2() * Math.PI * 2, rr = 120 + rnd2() * 320
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z)) continue
+      deco({ kind: 'stump', x, z, s: 0.8 + rnd2() * 0.5, ry: rnd2() * 6.28 })
+    }
+
+    // ---- Kabristan graveyard — tombstones + dead trees in the deep wild (v69) ----
+    for (let i = 0; i < 48; i++) {
+      const gx = GRAVE_X + (rnd2() - 0.5) * 168, gz = GRAVE_Z + (rnd2() - 0.5) * 116
+      deco({ kind: 'grave', x: gx, z: gz, s: 0.85 + rnd2() * 0.5, ry: (rnd2() - 0.5) * 0.9, variant: Math.floor(rnd2() * 3) })
+      box(gx - 0.5, 0, gz - 0.28, gx + 0.5, 1.15, gz + 0.28)
+    }
+    for (let i = 0; i < 14; i++) {
+      const gx = GRAVE_X + (rnd2() - 0.5) * 210, gz = GRAVE_Z + (rnd2() - 0.5) * 150
+      deco({ kind: 'deadTree', x: gx, z: gz, s: 1.1 + rnd2() * 0.7, ry: rnd2() * 6.28 })
+      box(gx - 0.35, 0, gz - 0.35, gx + 0.35, 4, gz + 0.35)
+    }
+
+    // ---- rocky approach to the hills: scree + slope-dead bands (Zone D fringe) ----
+    for (let i = 0; i < 90; i++) {
+      const a = rnd2() * Math.PI * 2, rr = 445 + rnd2() * 110
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      deco({ kind: 'boulder', x, z, s: 0.7 + rnd2() * 1.1, ry: rnd2() * 6.28 })
+    }
+    for (let i = 0; i < 40; i++) {
+      const a = rnd2() * Math.PI * 2, rr = 455 + rnd2() * 90
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      deco({ kind: 'deadTree', x, z, s: 0.9 + rnd2() * 0.6, ry: rnd2() * 6.28 })
+    }
+
+    // ---- the mountain rim — hills, snowcap rim, hazy far range ----
+    // NO base box colliders: the analytic heightfield (mountain-field.ts) is the
+    // collision surface — exactly the geometry the renderer draws.
+    const mountain = (x: number, z: number, h: number, base: number, cw: number) =>
+      deco({ kind: 'mountain', x, z, h, base, cw, seed: Math.floor(mHash(x, z) * 8), variant: Math.floor(rnd2() * 4), ry: rnd2() * 6.28 })
+    for (let i = 0; i < 52; i++) { // green hills — first uplift beyond the jungle
+      const a = rnd2() * Math.PI * 2, rr = 470 + rnd2() * 75
+      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
+      if (cityClear(x, z, 30)) continue
+      mountain(x, z, 18 + rnd2() * 20, 22 + rnd2() * 14, 1)
+    }
+    for (let i = 0; i < 44; i++) { // Vanodyan Rim foothill row
+      const a = rnd2() * Math.PI * 2, rr = 587 + rnd2() * 24
+      mountain(CX + Math.cos(a) * rr, CZ + Math.sin(a) * rr, 60 + rnd2() * 50, 30 + rnd2() * 16, 0)
+    }
+    for (let i = 0; i < 38; i++) { // snowcap row — the big skyline
+      const a = rnd2() * Math.PI * 2, rr = 629 + rnd2() * 18
+      mountain(CX + Math.cos(a) * rr, CZ + Math.sin(a) * rr, 100 + rnd2() * 75, 34 + rnd2() * 20, 0)
+    }
+    for (let i = 0; i < 34; i++) { // Far Range — hazy giants concealing the edge
+      const a = rnd2() * Math.PI * 2, rr = 690 + rnd2() * 80
+      mountain(CX + Math.cos(a) * rr, CZ + Math.sin(a) * rr, 150 + rnd2() * 110, 50 + rnd2() * 40, 2)
+    }
+
+    // ---- wild loot: 8 bonus tokens hidden in the jungle (single-use like city tokens) ----
+    const wildSpots: Array<[number, number]> = [[-220, -140], [210, -170], [-260, -420], [250, -450], [-120, -620], [140, -640], [60, -300], [-60, -200]]
+    for (let i = 0; i < wildSpots.length; i++) {
+      const [wx, wz] = wildSpots[i]
+      if (cityClear(wx, wz, -4)) continue
+      items.push({ id: `W_tok_${i + 1}`, type: 'token', x: wx, y: 1, z: wz })
+    }
+  }
+
+
   // ================= v43 LEVEL-MAP EXTRAS — appended strictly AFTER the skeleton =====
   // Variant-only props: palettes/signage above already differ; these add the
   // district's landmarks + navigation hazards. Ground colliders here are CLIENT
@@ -760,7 +935,7 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   }
 
   return {
-    bounds: { minX: -120, maxX: 120, minZ: -572, maxZ: 10 },
+    bounds: { minX: WORLD_BOUNDS.minX, maxX: WORLD_BOUNDS.maxX, minZ: WORLD_BOUNDS.minZ, maxZ: WORLD_BOUNDS.maxZ },
     spawn: { x: 0, z: -8 },
     zones: [
       { name: 'Protest Plaza', hint: 'Practice here. The cross road south leads to the old galis.', zStart: 4, zEnd: -80 },
@@ -768,6 +943,7 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
       { name: 'Security Checkpoint', hint: 'Fences span the whole city now. No walking around.', zStart: -200, zEnd: -280 },
       { name: 'Grand Avenue', hint: 'Mind the traffic! Neem Park west, City Depot east.', zStart: -280, zEnd: -420 },
       { name: 'Government District', hint: 'The Vote Collector awaits beyond the gate.', zStart: -420, zEnd: -572 },
+      { name: 'Vanodyan Jungle', hint: 'The wild rings the city. Zombies hunt out here — watch your back.', zStart: -572, zEnd: -998 },
     ],
     crossRoads: CROSS_ROADS,
     colliders, decorations, items, npcs, checkpoints: [

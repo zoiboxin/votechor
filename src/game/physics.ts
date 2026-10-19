@@ -8,6 +8,22 @@ export class PhysicsWorld {
   private cell = 12
   /** Moving colliders (vehicles) — NOT in the static grid; linear-scanned each move. */
   private dynamic: AABB[] = []
+  /** v64 analytic terrain heightfield (mountains) — see mountain-field.ts. */
+  private terrain: ((x: number, z: number) => number) | null = null
+
+  /** Wire the mountain heightfield so groundHeight includes solid terrain. */
+  setTerrain(fn: (x: number, z: number) => number) {
+    this.terrain = fn
+  }
+
+  /** True surface height for spawn/teleport placement (mountain-aware). */
+  spawnHeight(x: number, z: number): number {
+    return this.terrain ? this.terrain(x, z) : 0
+  }
+
+  private terrainAt(x: number, z: number): number {
+    return this.terrain ? this.terrain(x, z) : 0
+  }
 
   setColliders(list: AABB[]) {
     this.colliders = list
@@ -44,6 +60,12 @@ export class PhysicsWorld {
   /** Highest solid top under (x,z) at or below maxY. Returns 0 (street) if none. */
   groundHeight(x: number, z: number, maxY: number): number {
     let h = 0
+    // v64 terrain (mountains) — capped by maxY so nothing is teleported ONTO a
+    // peak that looms above the query point
+    if (this.terrain) {
+      const t = this.terrain(x, z)
+      if (t > h && t <= maxY + 0.02) h = t
+    }
     for (const c of this.nearby(x, z, 0.45)) {
       if (x < c.minX - 0.42 || x > c.maxX + 0.42 || z < c.minZ - 0.42 || z > c.maxZ + 0.42) continue
       if (c.maxY <= maxY + 0.02 && c.maxY > h) h = c.maxY
@@ -84,6 +106,12 @@ export class PhysicsWorld {
   ): { grounded: boolean; hitWall: boolean; groundY: number; landed: boolean; vaulted: boolean } {
     let hitWall = false
     let vaulted = false
+    // v64 terrain rise gate — the heightfield is a WALL when the climb is too
+    // steep for the movement mode: grounded frames may climb ≤0.9 m per step
+    // (≈74° world slope), airborne frames ≤0.6 m. Jump arcs still mount ~1.9 m
+    // ledges (the vertical phase lifts the actor onto the surface next frames).
+    const startGrounded = this.groundHeight(pos.x, pos.z, pos.y + 0.35) >= pos.y - 0.05
+    const riseCap = startGrounded ? 0.9 : 0.6
     // --- horizontal X (substepped) ---
     const totalX = vel.x * dt
     const stepsX = Math.max(1, Math.ceil(Math.abs(totalX) / 0.25))
@@ -106,7 +134,11 @@ export class PhysicsWorld {
           break
         }
       }
-      if (!hitWall && !vaulted) pos.x = nx
+      if (!hitWall && !vaulted) {
+        const gNew = this.terrainAt(nx, pos.z)
+        if (gNew - pos.y > riseCap) { hitWall = true } // cliff band — blocked, never penetrated
+        else pos.x = nx
+      }
     }
 
     // --- horizontal Z (substepped) ---
@@ -130,7 +162,11 @@ export class PhysicsWorld {
           break
         }
       }
-      if (!hitWallZ && !vaulted) pos.z = nz
+      if (!hitWallZ && !vaulted) {
+        const gNew = this.terrainAt(pos.x, nz)
+        if (gNew - pos.y > riseCap) { hitWallZ = true }
+        else pos.z = nz
+      }
     }
     if (hitWallZ) hitWall = true
 
@@ -146,6 +182,14 @@ export class PhysicsWorld {
       grounded = true
     } else {
       grounded = pos.y - groundY < 0.06
+      // v64 downhill ground-snap — walking down MOUNTAIN slopes stays grounded
+      // (≤0.85 m per frame); real cliffs still fall normally. Gated on terrain
+      // being wired: the plain AABB world keeps its exact pre-v64 behavior.
+      if (this.terrain && startGrounded && vel.y <= 0 && pos.y - groundY <= 0.85) {
+        pos.y = groundY
+        vel.y = 0
+        grounded = true
+      }
     }
     return { grounded, hitWall, groundY, landed, vaulted }
   }

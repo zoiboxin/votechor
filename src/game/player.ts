@@ -1,7 +1,7 @@
 // VoteChor player controller — acceleration, sprint stamina, jump, slide, damage, states.
 import * as THREE from 'three'
 import { CharacterRig } from './character'
-import { MOVE, DAMAGE, archetypeById } from './shared/constants'
+import { MOVE, DAMAGE, WORLD_DISC, archetypeById } from './shared/constants'
 import { policeUniformColors } from '../lib/cosmetics'
 import { pickLoco, mapToAnimName, GlbLocoFallback } from './anim'
 import type { GLBAnimDriver, LocoState } from './anim'
@@ -126,7 +126,7 @@ export class PlayerController {
     if (!Number.isFinite(this.pos.x + this.pos.y + this.pos.z + this.vel.x + this.vel.y + this.vel.z)) {
       const sx = Number.isFinite(this.lastSafe.x) ? this.lastSafe.x : 0
       const sz = Number.isFinite(this.lastSafe.z) ? this.lastSafe.z : -8
-      this.pos.set(sx, this.physics.groundHeight(sx, sz, 2), sz)
+      this.pos.set(sx, this.physics.spawnHeight(sx, sz), sz)
       this.vel.set(0, 0, 0)
       this.jumpsUsed = 0
       this.coyoteTimer = 0
@@ -135,20 +135,22 @@ export class PlayerController {
       this.onNanRecover?.('nan')
     }
 
-    // ---- world-bounds leash (self-healing) ----
+    // ---- world-bounds leash (self-healing, v64 radial) ----
     // A finite-but-absurd position (flung past the map edge by a physics edge
     // case) does NOT trip the NaN sentinel above, yet leaves every static mesh
-    // beyond the 195 m cull radius — the same sky-only "blue world" report, but
-    // permanent while the player stays out there. The playable city is
-    // z (-580..20), |x| < 130; anything clearly outside is pulled back to the
-    // last safe spot (bounds-checked so a poisoned lastSafe can't become the
-    // rescue point) with velocity zeroed.
-    if (this.pos.z < -620 || this.pos.z > 60 || Math.abs(this.pos.x) > 150) {
+    // beyond the cull radius — the same sky-only "blue world" report, but
+    // permanent while the player stays out there. The playable world is the
+    // 1300 m disc (r 650 around 0,-340); anything clearly outside r 664 is
+    // pulled back to the last safe spot (disc-checked so a poisoned lastSafe
+    // can't become the rescue point) with velocity zeroed.
+    const wdx = this.pos.x - WORLD_DISC.cx, wdz = this.pos.z - WORLD_DISC.cz
+    if (wdx * wdx + wdz * wdz > 664 * 664) {
+      const sdx = this.lastSafe.x - WORLD_DISC.cx, sdz = this.lastSafe.z - WORLD_DISC.cz
       const okSafe = Number.isFinite(this.lastSafe.x) && Number.isFinite(this.lastSafe.z) &&
-        this.lastSafe.z > -600 && this.lastSafe.z < 40 && Math.abs(this.lastSafe.x) < 140
+        sdx * sdx + sdz * sdz < 656 * 656
       const sx = okSafe ? this.lastSafe.x : 0
       const sz = okSafe ? this.lastSafe.z : -8
-      this.pos.set(sx, this.physics.groundHeight(sx, sz, 2), sz)
+      this.pos.set(sx, this.physics.spawnHeight(sx, sz), sz)
       this.vel.set(0, 0, 0)
       this.jumpsUsed = 0
       this.coyoteTimer = 0

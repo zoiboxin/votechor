@@ -121,9 +121,15 @@ export function pickReleasePoint(
 
 export const ROOM_CAP = 20
 export const PLAYER_CAP = 200
-const BOUNDS_X = 47 // ±
-const BOUNDS_Z_MIN = -570
-const BOUNDS_Z_MAX = 9
+// v64 WILD ROUND WORLD — the server accepts the full 1300 m disc (the wild
+// jungle + mountain rim are playable, not just the city).
+const BOUNDS_X = 658 // ±
+const BOUNDS_Z_MIN = -998
+const BOUNDS_Z_MAX = 318
+/** v64 — valid zombie-kill respawn destinations (city checkpoint detentions + spawn plaza). */
+const WILD_RELEASE_POINTS: Array<{ x: number; z: number }> = [
+  { x: 0, z: -8 }, { x: 10, z: -70 }, { x: 12, z: -190 }, { x: 10, z: -268 }, { x: 14, z: -408 },
+]
 // Max horizontal movement accepted between two client state updates (>18 m/tick is a
 // teleport — snap back to the last accepted position). Phase 3/10 tightened from 25:
 // legit sprint tops out ~1 m per 83 ms update, so 18 m is a huge grace margin while
@@ -365,6 +371,28 @@ export class Room {
   // ---------- client-driven actions (validated server-side) ----------
 
   /** Store a validated player state update. Detained players are ignored. */
+  /**
+   * v64 — a zombie killed this protester in the wild. The client already
+   * respawned locally; validate its chosen point against the whitelist and
+   * adopt it so anti-warp accepts the teleport, then reset health server-side.
+   */
+  wildDeath(socketId: string, rx: unknown, rz: unknown) {
+    const p = this.players.get(socketId)
+    if (!p) return
+    const x = num(rx, NaN)
+    const z = num(rz, NaN)
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return
+    const okPoint = WILD_RELEASE_POINTS.some(pt => Math.hypot(pt.x - x, pt.z - z) < 4)
+    if (!okPoint) return
+    const inCity = Math.abs(p.x) < 120 && p.z < 10 && p.z > -572
+    if (inCity) return // died in the city — no wild respawn
+    p.x = x
+    p.z = z
+    p.y = 0
+    p.health = 60
+    console.log(`[wild] ${p.name} was claimed by the Vanodyan wild — respawning in the city`)
+  }
+
   handleState(socketId: string, s: { x?: unknown; y?: unknown; z?: unknown; ry?: unknown; anim?: unknown; carrying?: unknown }) {
     const p = this.players.get(socketId)
     if (!p || p.detained) return // detained → freeze, ignore updates

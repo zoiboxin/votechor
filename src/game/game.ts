@@ -36,6 +36,9 @@ import { SuspectSystem } from './suspects'
 import { sharedGLBAssets, hiFiUrlFor, type GLBInstance } from './glb'
 import { GLBAnimDriver, GlbLocoFallback } from './anim'
 import { applyAvatarLook, resolveAvatarLook, type AvatarLook } from './avatar-look'
+import { ZombieSystem } from './zombies'
+import { initMountainField, mountainHeightAt } from './mountain-field'
+import { WORLD_DISC } from './shared/constants'
 import type { LocoState } from './anim'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
@@ -114,6 +117,11 @@ interface MatchStats {
 export class Game {
   private engine!: Engine
   private physics = new PhysicsWorld()
+  // v64 wild world — zombies + mountain heightfield state
+  private zombies: ZombieSystem | null = null
+  private wildWarnT = 0
+  private wasInWild = false
+  private lastZombieHitAt = 0
   private worldRenderer!: WorldRenderer
   /** Static-geometry distance culling — the measured dominant draw-call cost beyond the fog wall. */
   private culler!: WorldDistanceCuller
@@ -276,6 +284,24 @@ export class Game {
       this.store.notify('Graphics restored', 'info')
     }
     this.physics.setColliders(this.world.colliders)
+    // v64 wild world — the mountain heightfield IS the collision surface, and the
+    // jungle ring is hunted. Zombies ride the same terrain the player walks.
+    initMountainField(this.world.decorations)
+    this.physics.setTerrain(mountainHeightAt)
+    this.zombies = new ZombieSystem({
+      onStrike: (dmg) => {
+        if (!this.player || !this.running) return
+        this.lastZombieHitAt = Date.now()
+        this.applyDamage(dmg, 'zombie')
+        if (this.player.health <= 0) this.wildDeath()
+      },
+      sfx: (name, sx, sz) => {
+        if (!this.player) return
+        AudioManager.playAt(name, sx, sz, this.player.pos.x, this.player.pos.z, this.camRig.yaw, 58)
+      },
+      listener: () => ({ x: this.player?.pos.x ?? 0, z: this.player?.pos.z ?? -8, yaw: this.camRig?.yaw ?? 0 }),
+    })
+    this.engine.scene.add(this.zombies.group)
     // QA/debug handle — lets test scripts probe the live atmosphere state (window.__sky)
     if (typeof window !== 'undefined') {
       (window as unknown as { __sky?: SkySystem }).__sky = this.engine.sky
@@ -676,6 +702,9 @@ export class Game {
       this.worldId = mapId
       this.world = buildWorldDef(mapId)
       this.physics.setColliders(this.world.colliders)
+      // v64: re-derive the heightfield for the rebuilt world
+      initMountainField(this.world.decorations)
+      this.physics.setTerrain(mountainHeightAt)
       this.worldRenderer.dispose()
       this.worldRenderer = new WorldRenderer(this.world, 'high')
       this.engine.scene.add(this.worldRenderer.group)
@@ -2086,6 +2115,61 @@ export class Game {
     this.syncHud()
   }
 
+  /**
+   * v64 — a zombie killed the protester in the wild. Respawn at the nearest
+   * safe release point (the checkpoint detentions, all inside the city) with
+   * 60 health. Multiplayer: the server validates the point against its
+   * whitelist and adopts it (game:wildDeath), so anti-warp accepts the hop.
+   */
+  private wildDeath() {
+    const p = this.player!
+    const pool = [
+      { x: 0, z: -8 }, { x: 10, z: -70 }, { x: 12, z: -190 }, { x: 10, z: -268 }, { x: 14, z: -408 },
+    ]
+    let best = pool[0]
+    let bestD = Infinity
+    for (const pt of pool) {
+      const d = Math.hypot(pt.x - p.pos.x, pt.z - p.pos.z)
+      if (d < bestD) { bestD = d; best = pt }
+    }
+    p.pos.set(best.x, 0, best.z)
+    p.vel.set(0, 0, 0)
+    p.health = 60
+    if (p.state === 'dazed') p.state = 'normal'
+    this.lastZombieHitAt = 0
+    this.syncHud()
+    this.store.notify('The Vanodyan wild claimed you — you wake up back in the city…', 'warning')
+    AudioManager.play('release')
+    if (!this.offline) this.net.wildDeath(best.x, best.z)
+  }
+
+  /** v64 — one-shot danger warning when the protester first leaves the city per crossing. */
+  private updateWildWarnings(dt: number) {
+    if (!this.player) return
+    const inCity = Math.abs(this.player.pos.x) < 120 && this.player.pos.z < 10 && this.player.pos.z > -572
+    if (inCity) {
+      this.wasInWild = false
+      return
+    }
+    this.wildWarnT -= dt
+    if (!this.wasInWild) {
+      this.wasInWild = true
+      if (this.wildWarnT <= 0) {
+        this.wildWarnT = 60
+        this.store.notify('⚠ DANGER: leaving the city — the Vanodyan wild is hunted. Zombies here. No police protection.', 'warning')
+        AudioManager.play('sting')
+      }
+    }
+  }
+
+  /** v64 — outside the city rect the radial wild overrides the z-band zones. */
+  private zoneOverride(x: number, z: number): { name: string; hint: string; zStart: number; zEnd: number } | null {
+    if (Math.abs(x) < 120 && z < 10 && z > -572) return null
+    const d = Math.hypot(x - WORLD_DISC.cx, z - WORLD_DISC.cz)
+    if (d > 460) return { name: 'Vanodyan Rim', hint: 'The mountain rim guards the edge of the world.', zStart: 0, zEnd: 0 }
+    return { name: 'Vanodyan Jungle', hint: 'The wild rings the city. Zombies hunt out here — watch your back.', zStart: 0, zEnd: 0 }
+  }
+
   /** Camera shake — gated by the accessibility setting (Settings.reducedShake). */
   private addShake(v: number) {
     if (useGameStore.getState().settings.reducedShake) return
@@ -2574,6 +2658,11 @@ export class Game {
     // fx update (floating popups) + player speech bubbles (emotes, quick messages)
     this.fx.update(dt)
     this.playerBubbles.update(dt)
+    // v64 wild world — the hunt ticks only while a match runs
+    if (this.zombies && this.running) {
+      this.zombies.update(dt, { x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z })
+      this.updateWildWarnings(dt)
+    }
 
     // boss intro cinematic — orbit the boss once on activation
     this.updateBossCinematic(dt)
@@ -2792,15 +2881,16 @@ export class Game {
       console.warn('[VoteChor] world group was hidden mid-match — restored')
     }
 
-    // zone ambience + music switching
-    const zone = this.world.zones.find(z => focus.z <= z.zStart && focus.z > z.zEnd)
+    // zone ambience + music switching — v64: the radial wild overrides the z-bands
+    const wildZone = this.zoneOverride(focus.x, focus.z)
+    const zone = wildZone ?? this.world.zones.find(z => focus.z <= z.zStart && focus.z > z.zEnd)
     if (zone) {
-      const idx = this.world.zones.indexOf(zone)
-      if (this.lastZoneIdx !== idx) {
-        this.lastZoneIdx = idx
+      const zkey = wildZone ? `w:${wildZone.name}` : `i${this.world.zones.indexOf(zone)}`
+      if (this.lastZoneKey !== zkey) {
+        this.lastZoneKey = zkey
         store.patchHud({ zoneName: zone.name, zoneHint: zone.hint })
         this.lastTokenPos = { x: focus.x, z: focus.z }
-        if (idx === 2) AudioManager.play('whistleFar')
+        if (!wildZone && this.world.zones.indexOf(zone) === 2) AudioManager.play('whistleFar')
       }
     }
     // adaptive music: chase when chased — also drives the WANTED alert.
@@ -2818,7 +2908,7 @@ export class Game {
     else if (this.running) AudioManager.setTheme('ambient')
     AudioManager.setCrowdLevel(chased ? 0.9 : Math.max(0.3, 1 - Math.abs(focus.z) / 560))
   }
-  private lastZoneIdx = -1
+  private lastZoneKey = ''
   private envTick = 0 // 1s cadence for the HUD environment chip
   private lowDcStreak = 0 // consecutive 1Hz samples with a collapsed draw-call count
   private errStreak = 0 // consecutive 1Hz samples while a frame-phase fault keeps firing
@@ -2899,7 +2989,7 @@ export class Game {
   private syncHud() {
     if (!this.player) return
     const p = this.player
-    const zone = this.world.zones.find(z => p.pos.z <= z.zStart && p.pos.z > z.zEnd)
+    const zone = this.zoneOverride(p.pos.x, p.pos.z) ?? this.world.zones.find(z => p.pos.z <= z.zStart && p.pos.z > z.zEnd)
     const store = useGameStore.getState()
     let objective: string
     if (this.role === 'police') {

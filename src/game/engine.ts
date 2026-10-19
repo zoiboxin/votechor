@@ -112,7 +112,7 @@ export class Engine {
     this.scene = new THREE.Scene()
     this.scene.fog = new THREE.Fog(0xe8d5b0, 60, 210) // sky system rewrites color/distance every frame
 
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 420)
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1600) // v64: 1600 far — the 1300 m world's mountain rim (~770 m) must render
 
     // Warm late-afternoon Indian sky
     this.hemi = new THREE.HemisphereLight(0xfff3dd, 0xc4a37a, 0.85)

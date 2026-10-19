@@ -60,6 +60,9 @@ export class WorldDistanceCuller {
       // InstancedMesh IS a Mesh subclass — skip it (instance transforms are baked,
       // and there are only ~13 of them). Sprites/Points fail isMesh and are skipped.
       if ((mesh as THREE.InstancedMesh).isInstancedMesh) continue
+      // v64 — mountains opt out of distance culling: the skyline MUST read from
+      // anywhere on the 1300 m disc (their fog-immune material already beats fog)
+      if (mesh.userData?.noCull) continue
       const bs = mesh.geometry.boundingSphere ?? mesh.geometry.computeBoundingSphere()
       if (!bs || !isFinite(bs.radius)) continue
       mesh.updateWorldMatrix(true, false)

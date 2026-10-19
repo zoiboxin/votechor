@@ -9,7 +9,11 @@ export const TOKENS_NEEDED = 12
 export const MATCH_TIME_LIMIT = 900 // 15 minutes
 
 // ---------- World extent (must match world-def walls; used by maps/minimap/BigMap) ----------
-export const WORLD_BOUNDS = { minX: -120, maxX: 120, minZ: -572, maxZ: 10 }
+// v64 WILD ROUND WORLD: the playable map is a 1300 m disc — the city rectangle
+// sits inside it and the Vanodyan jungle wraps it 360°, out to a continuous
+// mountain rim on the disc edge. Bounds are the wall-ring bounding square.
+export const WORLD_BOUNDS = { minX: -658, maxX: 658, minZ: -998, maxZ: 318 }
+export const WORLD_DISC = { cx: 0, cz: -340, r: 650 }
 
 // ---------- Movement (meters, seconds) ----------
 export const MOVE = {
