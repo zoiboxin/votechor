@@ -432,12 +432,15 @@ const defaultSettings: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  /** DEFAULT OFF (v33) — the procedural rig is the CUSTOMIZED body: every wardrobe
-   *  slot (hat / hair / face / build / outfit / footwear / gear / held) renders on it.
-   *  The High-Fi GLB is a fixed generic mesh (only palette-tinted), so when it was the
-   *  default the whole wardrobe silently vanished in-game ("customized but not
-   *  showing"). GLB stays opt-in via Options → Character Model. */
-  hiFiModel: false,
+  /** DEFAULT ON (v83) — v33 shipped it OFF because the High-Fi GLB dropped every
+   *  wardrobe slot (fixed generic mesh, palette tint only). That cause is GONE:
+   *  the male path now loads the textured skinned hero asset and styling runs
+   *  through resolveAvatarLook → applyAvatarLook (normalized tint + hair / hat /
+   *  face / glasses / footwear / back gear / held items parented to the actual
+   *  BONES, both for the local player and remotes). What you style in the
+   *  wardrobe is what the High-Fi body wears. Opt-out stays in Options →
+   *  Character Model for weak devices (procedural rig unchanged). */
+  hiFiModel: true,
   /** v50 DEFAULT ON — the measured cost of leaving it OFF is ~4,100 draw calls /
    *  ~260k triangles every frame (2,975 static meshes, 61% of them beyond the fog
    *  wall where they are invisible anyway). That is the "game feels heavy" report.

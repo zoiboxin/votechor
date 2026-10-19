@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { ACHIEVEMENTS, VICTORY_TITLES, XP_TABLE, levelFromXp } from '@/game/shared/constants'
 import { mapById, mapForLevel } from '@/game/shared/maps'
@@ -27,6 +28,29 @@ function clampFloat(v: unknown, min: number, max: number): number {
   const n = Number(v)
   if (!Number.isFinite(n)) return min
   return Math.min(max, Math.max(min, n))
+}
+
+/** Idempotent reply for a matchId that is ALREADY recorded — reached either via
+ *  the pre-read below or by losing a concurrent insert race (P2002). Guarantees
+ *  a retried POST never 500s and never double-counts XP for the same match. */
+function duplicateMatchResponse(
+  existing: { xpEarned: number; funnyTitle: string | null },
+  player: { id: string; name: string; level: number; dailyStreak: number; xp: number },
+) {
+  return NextResponse.json({
+    duplicate: true,
+    xpEarned: existing.xpEarned,
+    baseXp: existing.xpEarned,
+    solidarityBonus: 0,
+    squadSize: 1,
+    level: player.level,
+    leveledUp: false,
+    newAchievements: [],
+    streak: player.dailyStreak,
+    streakUp: false,
+    profile: { id: player.id, name: player.name, xp: player.xp, level: player.level },
+    funnyTitle: existing.funnyTitle,
+  })
 }
 
 async function safeBody(req: Request): Promise<Record<string, unknown>> {
@@ -100,20 +124,7 @@ export async function POST(req: Request) {
       if (existing.playerId !== player.id) {
         return NextResponse.json({ error: 'matchId already used by another player' }, { status: 409 })
       }
-      return NextResponse.json({
-        duplicate: true,
-        xpEarned: existing.xpEarned,
-        baseXp: existing.xpEarned,
-        solidarityBonus: 0,
-        squadSize: 1,
-        level: player.level,
-        leveledUp: false,
-        newAchievements: [],
-        streak: player.dailyStreak,
-        streakUp: false,
-        profile: { id: player.id, name: player.name, xp: player.xp, level: player.level },
-        funnyTitle: existing.funnyTitle,
-      })
+      return duplicateMatchResponse(existing, player)
     }
 
     // ---- validate + clamp ----
@@ -179,7 +190,23 @@ export async function POST(req: Request) {
 
     await ensureAchievementsSeeded()
 
-    const outcome = await db.$transaction(async (tx) => {
+    let outcome: {
+      newXp: number
+      newLevel: number
+      updatedPlayer: typeof player
+      newAchievements: { id: string; name: string }[]
+      dailyBonus: number
+      daily: DailyDef | null
+      dailyProgress: number
+      dailyClaimed: boolean
+      dailyJustCompleted: boolean
+      weeklyBonus: number
+      weeklyProgress: number
+      weeklyClaimed: boolean
+      weeklyJustCompleted: boolean
+    }
+    try {
+      outcome = await db.$transaction(async (tx) => {
       // 1. match result
       await tx.matchResult.create({
         data: {
@@ -373,6 +400,17 @@ export async function POST(req: Request) {
 
       return { newXp, newLevel, updatedPlayer, newAchievements, dailyBonus, daily, dailyProgress, dailyClaimed, dailyJustCompleted, weeklyBonus, weeklyProgress, weeklyClaimed, weeklyJustCompleted }
     })
+    } catch (err) {
+      // Lost a concurrent insert race: a sibling POST committed the SAME matchId
+      // between our pre-read and our insert (the client retries after a DB-timeout
+      // while the first request is still committing). The match IS recorded —
+      // answer idempotently instead of 500-ing, and never double-count XP.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const dupe = await db.matchResult.findUnique({ where: { id: matchId } })
+        if (dupe) return duplicateMatchResponse(dupe, player)
+      }
+      throw err
+    }
 
     const wdef2 = weeklyForDate(weekKey())
     return NextResponse.json({

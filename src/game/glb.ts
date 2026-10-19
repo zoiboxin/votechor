@@ -6,18 +6,25 @@
 //  - missing textures            → material.map stays null (loader per-texture onError)
 //  - material arrays             → handled in dispose() (both Material and Material[])
 //  - animation-free models       → asset.animations === [], driver falls back clip chain
+//  - SKINNED models              → instantiated with SkeletonUtils.clone (a plain
+//    Object3D.clone leaves every SkinnedMesh bound to the ORIGINAL skeleton, so
+//    every instance would animate in lockstep from one shared bone set); plain
+//    clone stays for node-TRS rigs (cheaper, no skeleton re-mapping needed)
 //  - asset cleanup               → disposeAsset() frees geometry/material/texture GPU memory
 //
 // Assets are cached per URL; instantiate() clones the cached scene so many
 // characters can share one downloaded asset without re-fetching.
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 
 export interface GLBAsset {
   url: string
   scene: THREE.Group
   animations: THREE.AnimationClip[]
   bytes: number
+  /** true when the graph contains SkinnedMesh (bone-skinning) — instantiate() switches to SkeletonUtils.clone */
+  skinned: boolean
 }
 
 export interface GLBInstance {
@@ -54,8 +61,12 @@ export class GLBAssetManager {
         if (!a && reason) this.onAssetError?.(url, reason)
         resolve(a)
       }
-      // hard timeout — a hung asset fetch must never block the match
-      const timeout = setTimeout(() => done(null, 'timeout after 12s'), 12000)
+      // hard ceiling — must NEVER block the match forever, but it only exists to
+      // catch true HANGS: GLTFLoader emits NO progress during parse, and the 24MB
+      // skinned hero decodes 14 baked textures on the CPU (30s+ on weak devices),
+      // so a generous 120s ceiling + boot-time preload (game.bootUnsafe) keeps a
+      // slow-but-working load alive while a dead fetch still resolves null.
+      const timeout = setTimeout(() => done(null, 'timeout after 120s'), 120000)
       try {
         this.loader.load(
           url,
@@ -66,13 +77,21 @@ export class GLBAssetManager {
               if (!scene) { done(null, 'empty scene'); return }
               // normalize the graph: shadows off (software GPU), sane culling
               let meshes = 0
+              let skinned = false
               scene.traverse((o) => {
                 const m = o as THREE.Mesh
                 if (m.isMesh) {
                   meshes++
                   m.castShadow = false
                   m.receiveShadow = false
-                  m.frustumCulled = true
+                  if ((o as THREE.SkinnedMesh).isSkinnedMesh) {
+                    // skeleton poses move vertices far outside the bind-pose
+                    // bounding box — stock culling would pop whole limbs off-screen
+                    skinned = true
+                    m.frustumCulled = false
+                  } else {
+                    m.frustumCulled = true
+                  }
                   // material arrays stay as-is (three handles multi-primitive);
                   // just guarantee they are valid instances
                   const mats = Array.isArray(m.material) ? m.material : [m.material]
@@ -85,7 +104,7 @@ export class GLBAssetManager {
               })
               if (meshes === 0) { done(null, 'no meshes'); return }
               const anims = Array.isArray(gltf.animations) ? gltf.animations : []
-              done({ url, scene, animations: anims, bytes: 0 })
+              done({ url, scene, animations: anims, bytes: 0, skinned })
             } catch (e) {
               done(null, `normalize failed: ${e instanceof Error ? e.message : String(e)}`)
             }
@@ -109,7 +128,10 @@ export class GLBAssetManager {
    */
   instantiate(asset: GLBAsset): GLBInstance | null {
     try {
-      const group = asset.scene.clone(true)
+      // skinned rigs MUST clone through SkeletonUtils — a plain deep clone shares
+      // the source skeleton, so every instance would pose from ONE bone set and
+      // all characters would animate in perfect (wrong) lockstep
+      const group = (asset.skinned ? skeletonClone(asset.scene) : asset.scene.clone(true)) as THREE.Group
       const mixer = new THREE.AnimationMixer(group)
       const clips = new Map<string, THREE.AnimationClip>()
       for (const c of asset.animations) if (c && typeof c.name === 'string') clips.set(c.name, c)

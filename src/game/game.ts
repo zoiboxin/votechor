@@ -39,6 +39,7 @@ import { SuspectSystem } from './suspects'
 import { GLBAssetManager, type GLBInstance } from './glb'
 import { GLBAnimDriver } from './anim'
 import type { LocoState } from './anim'
+import { resolveAvatarLook, applyAvatarLook } from './avatar-look'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
 /** v51 — soft-escape window: after the LAST chaser drops off, the WANTED badge
@@ -274,6 +275,19 @@ export class Game {
   private async bootUnsafe(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
     this.canvasEl = canvas
+    // GLB asset failures must never be silent — every refused asset leaves a
+    // breadcrumb (QA + field reports: "character fell back to the boxy rig")
+    this.glbMgr.onAssetError = (url, reason) => {
+      console.warn('[VoteChor] GLB asset unavailable:', url, '—', reason)
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      ;(w.__vcDiag ??= []).push({ kind: 'glbAssetError', url, reason, t: Date.now() })
+    }
+    // preload the High-Fi hero assets during the MENU so the 24MB skinned model's
+    // download + texture decode never lands on the match-start critical path —
+    // by the time the player clicks PLAY, the cache is usually warm and the swap
+    // is near-instant. Fire-and-forget: any failure just keeps the procedural rig.
+    void this.glbMgr.load('/models/votechor-male-skinned.glb')
+    void this.glbMgr.load('/models/votechor-female.glb')
     this.engine = new Engine(canvas)
     // lightning → white HUD flash + delayed thunder roll
     this.engine.sky.onLightning = () => {
@@ -841,18 +855,10 @@ export class Game {
     }
     const cosmetics = profile?.cosmetics
     const gender = cosmetics?.gender === 'female' ? 'female' as const : 'male' as const
-    // High-Fi GLB palette — mirrors PlayerController's color resolution exactly
-    {
-      const arch = archetypeById(this.archetype)
-      const pal = { shirt: arch.colors.shirt, pants: arch.colors.pants, skin: arch.colors.skin, accent: arch.colors.accent }
-      if (cosmetics?.skinTone && typeof cosmetics.skinTone === 'string') pal.skin = cosmetics.skinTone
-      if (this.role === 'police') {
-        const u = policeUniformColors(typeof cosmetics?.policeOutfit === 'string' ? cosmetics.policeOutfit : undefined)
-        pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
-      }
-      this.hiFiPalette = pal
-      this.hiFiGender = gender
-    }
+    // High-Fi readiness gate + gender hint — the actual styling now flows through
+    // resolveAvatarLook() at attach time (v83), so no palette duplication here
+    this.hiFiPalette = { shirt: '#888888', pants: '#888888', skin: '#daa88e', accent: '#888888' }
+    this.hiFiGender = gender
     this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
       hat: cosmetics?.hat as string | undefined,
       glasses: cosmetics?.glasses as boolean | undefined,
@@ -1224,33 +1230,26 @@ export class Game {
   }
 
   /**
-   * Attach a gender-matching, archetype-tinted GLB to a remote entry. Reuses the
+   * Attach a gender-matching, fully-styled GLB to a remote entry. Reuses the
    * shared GLBAssetManager cache (no duplicate downloads) and never blocks gameplay:
    * any failure leaves the procedural rig rendering as before.
+   * v83: the TEXTURED male hero asset (votechor-male-skinned.glb) replaces the
+   * flat-tinted rigged body, and styling runs through the SAME wardrobe pipeline
+   * as the wardrobe preview + local player (resolveAvatarLook → applyAvatarLook:
+   * normalized tint + hair/hat/face/glasses/footwear/gear/held attached to bones).
    */
   private async attachRemoteGlb(id: string, r: RemoteEntry) {
     if (r.glb || !r.rig) return
     r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
-    const gender = r.cosmetics?.gender === 'female' ? 'female' : 'male'
-    const url = gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
+    const look = resolveAvatarLook(r.cosmetics, r.archetype, r.role ?? 'protector')
+    const url = look.gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
     const asset = await this.glbMgr.load(url)
     if (!asset) { r.glb = null; return }
     // entry may have been pruned / rig budget-evicted / setting flipped mid-load
     if (this.remotePlayers.get(id) !== r || !r.rig || !this.store.settings.hiFiModel) { r.glb = null; return }
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) { r.glb = null; return }
-    // same palette logic as the procedural rig above (archetype colors + skinTone + police uniform)
-    const c = r.cosmetics
-    const arch = archetypeById(r.archetype)
-    const pal = {
-      shirt: arch.colors.shirt, pants: arch.colors.pants, accent: arch.colors.accent,
-      skin: typeof c?.skinTone === 'string' ? c.skinTone : arch.colors.skin,
-    }
-    if (r.role === 'police') {
-      const u = policeUniformColors(typeof c?.policeOutfit === 'string' ? c.policeOutfit : undefined)
-      pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
-    }
-    this.tintGlb(inst, pal)
+    applyAvatarLook(inst.group, look)
     inst.group.visible = true
     inst.group.position.set(r.target.x, r.target.y, r.target.z)
     inst.group.rotation.y = r.target.ry
@@ -1278,17 +1277,21 @@ export class Game {
    * Load + instantiate the gender-matching GLB and attach it to the local player.
    * NEVER blocks the match and NEVER throws — any failure leaves the procedural
    * rig visible (the pipeline's fallback contract).
+   * v83: males get the TEXTURED skinned hero asset with the FULL wardrobe pipeline
+   * (tint + per-bone attachments); females keep the rigged puppet, now styled by
+   * the same resolveAvatarLook → applyAvatarLook path so both backends match.
    */
   private async tryAttachHiFi() {
     const p = this.player
     if (!p || p.glb || !this.hiFiPalette) return
-    const url = this.hiFiGender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
+    const look = resolveAvatarLook(this.store.profile?.cosmetics, this.archetype, this.role)
+    const url = look.gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
     const asset = await this.glbMgr.load(url)
     if (!asset) return // loader already logged the reason; procedural stays
     if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) return
-    this.tintGlb(inst, this.hiFiPalette)
+    applyAvatarLook(inst.group, look)
     inst.group.visible = true
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
@@ -1297,23 +1300,7 @@ export class Game {
 
   /** Tint the GLB instance to the player's archetype/police palette (clones materials per-instance). */
   private tintGlb(inst: GLBInstance, pal: { shirt: string; pants: string; skin: string; accent: string }) {
-    const map: Record<string, string> = {
-      TorsoMesh: pal.shirt, ArmLMesh: pal.shirt, ArmRMesh: pal.shirt,
-      LegLMesh: pal.pants, LegRMesh: pal.pants,
-      HeadMesh: pal.skin, ArmLHand: pal.skin, ArmRHand: pal.skin,
-      Sash: pal.accent,
-    }
-    inst.group.traverse((o) => {
-      const m = o as THREE.Mesh
-      if (!m.isMesh) return
-      const color = map[m.name]
-      if (!color) return
-      const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial | undefined
-      if (!mat) return
-      const clone = mat.clone()
-      clone.color = new THREE.Color(color)
-      m.material = clone
-    })
+    void inst; void pal // v83: superseded by applyAvatarLook (wardrobe pipeline) — kept for reference removal in a later pass
   }
 
   /** Live settings toggle — swap between the GLB and procedural rigs mid-match. */
