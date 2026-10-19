@@ -2029,3 +2029,22 @@ Stage Summary:
 - Mountains: solid, climbable (gentle hills walkable, short peaks jump-and-stand, steep rims block), and the player can never be inside them; zombies ride the terrain too.
 - GitHub: repo still EMPTY (no credentials in the sandbox). The merged v77 tree is committed locally. A PAT from the user turns every future rollback into a 10-second pull.
 - Next Task ID: 74 (continuing THIS worklog's numbering).
+
+---
+Task ID: 74
+Agent: Z.ai Code (main session)
+Task: Wire the user's GitHub PAT into the repo and push the v77 tree to github.com/zoiboxin/votechor (make the rollback-recovery mechanism real).
+
+Work Log:
+- Round-start checks: worklog tail (last entry Task 73, "Next Task ID: 74"), /api/version via :81 = v77, VC_BUILD 'v77', mountain-field.ts + shared/terrain-noise.ts present, both servers up (next-server pid 5402 on :3000, bun pid 5381 on :3002, gateway :81), branch main HEAD 2c978b7 (39 commits total; eb712ac = v64 rebuild, 2c978b7 = v77 restore+merge).
+- Configured origin with the user-provided fine-grained PAT (stored ONLY in untracked .git/config; the token was never written to any tracked file or the worklog).
+- git push -u origin main → HTTP 403 "Permission to zoiboxin/votechor.git denied to zoiboxin". Retried with the x-access-token:<TOKEN> URL format → identical 403 (auth URL format ruled out as cause).
+- GitHub API evidence gathering (measured, not guessed): GET /user → login "zoiboxin" (token itself is valid); GET /repos/zoiboxin/votechor → permissions object reports push:true/admin:true; side-effect-free Contents WRITE probe (PUT /repos/.../contents/probe.txt with an invalid body) → HTTP 403 with header "x-accepted-github-permissions: contents=write" and message "Resource not accessible by personal access token". CONCLUSION: the token grants Actions read/write (as the user described) but NOT Contents: Read and write — the permission git push actually requires.
+- Live QA baseline while the push is blocked: agent-browser via gateway :81 → menu loads (uiMode "menu") → PLAY SOLO boot ok (running:true, 3,806 world children — exactly the v77 baseline, 34 zombies, badge V77), screenshot /tmp/task74-solo-boot.png, clean leaveMatch, browser closed.
+- Cron housekeeping: the 15-min webDevReview job (id 467383) was found DISABLED ("exec limits exceeded") — deleted and recreated fresh as id 467390 with the same mandate, updated to Task-74 state + PAT blockage.
+
+Stage Summary:
+- Push is fully staged and one command away once the token is fixed: git push -u origin main && git tag -f v77 && git push origin v77, then verify git ls-remote origin main reports 2c978b7.
+- BLOCKER (user action required): the fine-grained PAT lacks Contents: Read and write. Fix path: GitHub → Settings → Developer settings → Fine-grained tokens → edit the token → Repository access includes zoiboxin/votechor (or All repositories) → Permissions → Repository permissions → Contents: Read and write → Save. Editing permissions on an existing fine-grained token keeps the same token string. Alternative: issue a classic token with the `repo` scope and send it.
+- Game health re-verified on v77 (boot, world children, zombies, badge, clean quit). No code changes this round — no tsc/lint run needed.
+- Next Task ID: 75.
