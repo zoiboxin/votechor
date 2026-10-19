@@ -167,6 +167,9 @@ export class ZombieSystem {
   group = new THREE.Group()
   private zombies: Zombie[] = []
   private cb: ZombieCallbacks
+  // v81 — pack gate: a pocket aggroing together fires ONE onSpot scare wave per
+  // window instead of one per zombie (the spatial moan still plays per detector).
+  private spotT = 0
 
   constructor(fx: FxSystem, cb: ZombieCallbacks) {
     this.cb = cb
@@ -197,8 +200,10 @@ export class ZombieSystem {
   get count(): number { return this.zombies.length }
   get chasing(): number { return this.zombies.reduce((n, z0) => n + (z0.state === 'chase' ? 1 : 0), 0) }
 
-  /** After a wild death (or teleport) the whole horde forgets the player. */
+  /** After a wild death (or a fresh match) the whole horde forgets the player —
+   *  states, targets, and the v81 pack-gate timer all reset together. */
   resetAggro() {
+    this.spotT = 0
     for (const z0 of this.zombies) {
       z0.state = 'lurch'
       z0.loseT = 0
@@ -208,6 +213,7 @@ export class ZombieSystem {
   }
 
   update(dt: number, worldTime: number, playerPos: { x: number; y: number; z: number }, listenerYaw: number) {
+    this.spotT -= dt
     for (const zb of this.zombies) {
       const px = zb.group.position.x, pz = zb.group.position.z
       const dx = playerPos.x - px, dz = playerPos.z - pz
@@ -219,7 +225,12 @@ export class ZombieSystem {
           zb.state = 'chase'
           zb.loseT = 0
           zb.strikeT = 0.4 // first swipe comes fast — the scare is the point
-          this.cb.onSpot()
+          // v81 — pack gate: only the first detector of a wave raises the scare
+          // (sting + shake + toast); stragglers in the same window stay silent.
+          if (this.spotT <= 0) {
+            this.spotT = 5
+            this.cb.onSpot()
+          }
           AudioManager.playAt('zombieMoan', px, pz, playerPos.x, playerPos.z, listenerYaw, 48, 1.1)
         }
       } else if (dist > LOSE_R) {

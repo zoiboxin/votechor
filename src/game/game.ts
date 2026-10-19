@@ -47,6 +47,12 @@ import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors }
  *  the chase snaps the badge straight back to full alert. */
 const WANTED_FADE_MS = 5000
 
+/** v81 — undead scare rate-limit: the sting + shake + scent toast are ONE event
+ *  per window. A pocket of undead aggroing together (or re-detections while the
+ *  player roams the jungle) used to stack several full-volume stings and toasts
+ *  per second — this collapses each wave into a single scare. */
+const SCARE_COOLDOWN_MS = 12000
+
 /** A remote protester (human or bot): data always present, rig/GLB attached by budget. */
 interface RemoteEntry {
   rig: import('./character').CharacterRig | null
@@ -135,6 +141,9 @@ export class Game {
   private zombies!: ZombieSystem
   private ambience!: JungleAmbience
   private wildToastShown = false
+  // v81 — timestamp of the last undead scare event (sting+shake+toast); -Infinity
+  // lets the very first detection of a match through immediately.
+  private lastScareMs = -Infinity
   private zombieDeathPending = false
   // v69 — city→wild warning state (cooldown timer + last-seen wildness level)
   private wildWarnT = 4
@@ -377,6 +386,12 @@ export class Game {
     this.zombies = new ZombieSystem(this.fx, {
       onStrike: (amount) => this.applyDamage(amount, 'zombie'),
       onSpot: () => {
+        // v81 — ONE scare event per window: several undead spotting within the
+        // cooldown (a pocket aggroing at once, or re-spots while roaming) merge
+        // into the first sting + shake + toast instead of stacking them.
+        const now = performance.now()
+        if (now - this.lastScareMs < SCARE_COOLDOWN_MS) return
+        this.lastScareMs = now
         // a full-volume sting the instant one of them notices you — no attenuation
         AudioManager.play('scareSting')
         this.addShake(0.35)
@@ -697,6 +712,13 @@ export class Game {
     this.clearOnboarding()
     this.matchEnded = false
     this.endHandled = false
+    // v81 — per-match undead scare state: every match earns the intro toast and
+    // an immediate first scare; the singleton Game used to carry both across.
+    // resetAggro also clears the zombies' own pack-gate timer (it used to leak
+    // across matches and silence the first detection of the next match).
+    this.wildToastShown = false
+    this.lastScareMs = -Infinity
+    this.zombies.resetAggro()
     // force-close any overlays so a fresh match never boots with stuck suppressed input
     useGameStore.getState().toggleMap(false)
     useGameStore.getState().toggleSquad(false)
