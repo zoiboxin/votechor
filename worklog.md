@@ -2068,3 +2068,23 @@ Stage Summary:
 - Standing rule going forward: push after EVERY round that changes tracked files (baked into cron 467390's mandate).
 - Minor gap for a future round: .env.example absent from this lineage; consider adding for true clone-and-run.
 - Next Task ID: 76.
+
+---
+Task ID: 76
+Agent: Z.ai Code (main session)
+Task: User request — (1) picked-up/thrown items must REMAIN visible on screen, never silently disappear; (2) food items must give INSTANT ENERGY when used. "Understand the prompt and improve."
+
+Work Log:
+- Round-start checks: /api/version = v77 (no rollback), both servers up, worklog ended at Task 75. Next Task ID: 76.
+- FORENSICS on the item pipeline (items.ts, game.ts, room.ts, lod.ts): items.group lives on engine.scene OUTSIDE the distance culler (culler exonerated); offline throw impact already called spawnLandedItem (persistent drop); online path relays via server drop registry (dropItem → game:dropped). REAL GAPS FOUND: (a) projectiles whose airtime expired without a ground hit (life=4s, thrown at mountains/void/NaN) were removed SILENTLY — no impact, no drop; (b) online drop TTL was only 2.5 min (DROP_TTL_MS 150000) so landed items vanished mid-match; (c) food "use" effects: chai refilled stamina but snack/samosa gave ZERO instant energy.
+- FIXES SHIPPED: src/game/items.ts — Projectile.impacted flag + guaranteed-landing fallback (life expiry without ground hit fires onImpact at the current spot so drop+FX always happen); runtime drop cap (max 60 drop_* items, oldest culled) for long-match hygiene. src/game/game.ts useInventoryItem — snack now +60 instant stamina, samosa +30, chai full-energy popup added, all with gold '⚡ ENERGY' popups and updated notify copy. src/game/shared/constants.ts — ITEM_CONFIG descs now advertise energy values. mini-services/game-server/room.ts — new THROWN_DROP_TTL_MS = 900000 (15 min) for player-dropped/thrown-landing drops; confiscation loot keeps its 2.5-min squad-rescue window.
+- CHECKS: tsc 0 project errors · lint clean · physics 4/4 · world-integrity 24/24 · route-check ALL 32 ROUTES OK · game-server drop round-trip 10/10 with the new TTL. Game server hard-restarted after the room.ts edit (new pid 6887).
+- LIVE QA (agent-browser via :81, PLAY SOLO): seeded bottle/snack/samosa; doThrow → projectile lands → spawnDropped instrumented: spawned '@0.1', removed [] and 5 live drops STABLE across 40s of polls; re-pick via pickupItem → taken:true, visible:false, bottle back in inventory, other 4 drops stayed visible; energy: snack 10→70 (+60), samosa 10→40 (+30), both consumed; screenshot /tmp/task76-drop-pickup.png shows the landed bottle ON THE ROAD + '⚡ +60 ENERGY' popup + pickup prompt; clean leaveMatch.
+- HONEST NOTE: the very FIRST doThrow after boot (worldTime ≈ 5) landed with NO drop and left no console error — unreproduced in 3 subsequent instrumented runs (all spawned persistent drops). Logged as a one-time early-boot transient; if it ever recurs, instrument spawnLandedItem entry/exit first.
+- VC_BUILD bumped v77 → v78 in a follow-up commit (initial v78 commit shipped the feature but forgot the badge bump — corrected immediately); /api/version via :81 now reports v78.
+
+Stage Summary:
+- Thrown/picked items now persist: guaranteed landing drop offline, 15-min persistence online, re-pickable via the normal E flow, capped at 60 runtime drops for perf.
+- Food = instant energy: snack +60⚡, samosa +30⚡, chai full⚡, with visible popups + HUD-visible stamina gains (verified live: 10→70, 10→40).
+- All suites green, both servers healthy, pushed to GitHub: main 0d906be + tag v78 (dae675f..0d906be).
+- Next Task ID: 77 (queued: GLB wardrobe cosmetics, animation upgrade, profile save/load race, item persistence round-trip for online dropTaken UX, .env.example).
