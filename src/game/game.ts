@@ -32,7 +32,7 @@ import {
   BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES, SHOUT_COOLDOWN_SEC, SHOUT_LINES, PLAYER_ROLE, POLICE_STRIKE,
   FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS, GRAVEYARD, WORLD_DISC, DETECT,
 } from './shared/constants'
-import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
+import type { AABB, AnimName, BossNetState, ItemType, WildEventNet } from './shared/types'
 import { useGameStore, registerUIActions, GLB_CHARACTERS_ENABLED, type MatchSummary } from '@/lib/game-store'
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
@@ -407,23 +407,7 @@ export class Game {
     // v68 — the Vanodyan Dead + their forest's voice (client-local bots + bed)
     this.zombies = new ZombieSystem(this.fx, {
       onStrike: (amount) => this.applyDamage(amount, 'zombie'),
-      onSpot: () => {
-        // v81 — ONE scare event per window: several undead spotting within the
-        // cooldown (a pocket aggroing at once, or re-spots while roaming) merge
-        // into the first sting + shake + toast instead of stacking them.
-        const now = performance.now()
-        if (now - this.lastScareMs < SCARE_COOLDOWN_MS) return
-        this.lastScareMs = now
-        // a full-volume sting the instant one of them notices you — no attenuation
-        AudioManager.play('scareSting')
-        this.addShake(0.35)
-        if (!this.wildToastShown) {
-          this.wildToastShown = true
-          this.store.notify('Something dead is hunting you — RUN!', 'warning')
-        } else {
-          this.store.notify('The undead have your scent…', 'warning')
-        }
-      },
+      onSpot: () => this.wildScare(),
     })
     this.engine.scene.add(this.zombies.group)
     this.ambience = new JungleAmbience()
@@ -446,6 +430,14 @@ export class Game {
         this.observePoliceTelegraphs(npcs)
       },
       onItems: (items) => this.items.applyServerState(items, this.worldTime),
+      // v87 — SHARED WILD: the room-wide horde + animals
+      onWild: (wild) => {
+        this.zombies.enterNetMode() // idempotent — also covers a server without ack.wild
+        this.animals.enterNetMode()
+        this.zombies.applyServerState(wild.z)
+        this.animals.applyServerState(wild.a)
+      },
+      onWildEvent: (ev) => this.onWildEvent(ev),
       onBoss: (boss, ballots) => this.onServerBoss(boss, ballots),
       onCapture: (playerId, until, message, lostTokens) => this.onCapture(playerId, until, message, lostTokens),
       onArrested: (_targetId, targetName, totalArrests) => {
@@ -971,6 +963,9 @@ export class Game {
       this.offline = !this.net.playerId
     }
     if (this.offline) {
+      // v87 — an offline fallback match runs the local wild sims again
+      this.zombies.exitNetMode()
+      this.animals.exitNetMode()
       store.patchHud({ connection: 'offline', playersOnline: 1 })
       store.notify('Offline mode — local patrols active', 'info')
     } else {
@@ -1109,6 +1104,13 @@ export class Game {
     // sync world state
     if (ack.checkpoints) ack.checkpoints.forEach(cp => this.activatedCheckpoints.add(cp))
     if (ack.boss && ack.boss.active) this.bossActiveLocal = true
+    // v87 — SHARED WILD: render the horde + animals exactly where they are NOW
+    if (ack.wild) {
+      this.zombies.enterNetMode()
+      this.animals.enterNetMode()
+      this.zombies.applyServerState(ack.wild.z)
+      this.animals.applyServerState(ack.wild.a)
+    }
     this.syncRoomRoster()
     // invite deep-link (§15): ?squad=CODE auto-joins the cell right after the room
     if (this.mode === 'multiplayer') {
@@ -1596,12 +1598,23 @@ export class Game {
    * Feed a nearby street animal (F key, both roles) — consumes one food item
    * (chai / snack / samosa), drops it as a crumb, and the animal walks over,
    * eats, then follows the player as a pet for PET_FOLLOW_SEC. Feeding a
-   * current pet again extends the friendship. Works offline AND online (the
-   * animal bots are client-side, like the birds).
+   * current pet again extends the friendship. Offline runs the local sim;
+   * online the server validates the feed and the room shares the crumb (v87).
    */
   private feedAnimal(a: AnimalHandle) {
     if (!this.player || !this.running) return
     if (this.player.isDetained || this.player.isDazed) { this.store.notify('Cannot feed while detained or dazed', 'warning'); return }
+    // v87 — SHARED WILD: online matches request a server-validated feed. The
+    // snack is consumed only when the fedStart broadcast confirms; a rejected
+    // request (too far, animal busy) never costs food.
+    if (!this.offline) {
+      if (!this.inventory.some((i) => FEED_FOODS.includes(i.type))) {
+        this.store.notify(`No food to share — ${a.label} loves chai, snacks & samosas!`, 'info')
+        return
+      }
+      this.net.animalFeed(a.idx)
+      return
+    }
     const idx = this.inventory.findIndex((i) => FEED_FOODS.includes(i.type))
     if (idx === -1) {
       this.store.notify(`No food to share — ${a.label} loves chai, snacks & samosas!`, 'info')
@@ -2291,6 +2304,76 @@ export class Game {
     AudioManager.play(kind === 'cow' ? 'moo' : 'horn')
     this.addShake(kind === 'cow' ? 0.3 : 0.8)
     this.applyDamage(0, kind) // trigger HUD update
+  }
+
+  /** v81 — ONE scare event per window: several undead spotting within the
+   *  cooldown (a pocket aggroing at once, or re-spots while roaming) merge
+   *  into the first sting + shake + toast instead of stacking them.
+   *  v87 — also fired by the server's room-wide `spot` event when the shared
+   *  horde acquires THIS player (same contract, single source of truth). */
+  private wildScare() {
+    const now = performance.now()
+    if (now - this.lastScareMs < SCARE_COOLDOWN_MS) return
+    this.lastScareMs = now
+    // a full-volume sting the instant one of them notices you — no attenuation
+    AudioManager.play('scareSting')
+    this.addShake(0.35)
+    if (!this.wildToastShown) {
+      this.wildToastShown = true
+      this.store.notify('Something dead is hunting you — RUN!', 'warning')
+    } else {
+      this.store.notify('The undead have your scent…', 'warning')
+    }
+  }
+
+  /** v87 — SHARED WILD events: scares, feeding confirmations, pet timeouts. */
+  private onWildEvent(ev: WildEventNet) {
+    if (!this.player) return
+    const me = ev.pid === this.net.playerId
+    switch (ev.t) {
+      case 'spot': {
+        if (me) {
+          this.wildScare()
+        } else {
+          // somebody else raised the dead — hear the moan if it's near enough
+          const d = Math.hypot(ev.x - this.player.pos.x, ev.z - this.player.pos.z)
+          if (d < 45) AudioManager.playAt('zombieMoan', ev.x, ev.z, this.player.pos.x, this.player.pos.z, this.camRig.yaw, 48, 1.1)
+        }
+        break
+      }
+      case 'fedStart': {
+        // the server CONFIRMED my feeding — only now does the snack leave my pocket
+        if (!me) break
+        const idx = this.inventory.findIndex((i) => FEED_FOODS.includes(i.type))
+        if (idx === -1) break // drift between client and server inventory — nothing to consume
+        const food = this.inventory[idx]
+        this.inventory.splice(idx, 1)
+        this.player.playAnim('heal', 0.35) // offering gesture
+        AudioManager.play('paperRustle', 0.5) // unwrapping the snack
+        const foodName = ITEM_CONFIG[food.type]?.name ?? food.type
+        const emoji = ev.animal === 'dog' ? '🐕' : ev.animal === 'cat' ? '🐈' : '🐄'
+        this.fx.popup(`${emoji} ${foodName}!`, '#f2c14e', this.player.pos.x, 2.1, this.player.pos.z)
+        this.syncHud()
+        break
+      }
+      case 'fed': {
+        if (!me) break
+        const emoji = ev.animal === 'dog' ? '🐕' : ev.animal === 'cat' ? '🐈' : '🐄'
+        this.store.notify(
+          ev.extended
+            ? `${emoji} ${ev.label} is extra happy! Friendship extended (+${PET_FOLLOW_SEC}s)`
+            : `${emoji} ${ev.label} loved the food! It will follow you for ${PET_FOLLOW_SEC}s — feed again to extend`,
+          'squad',
+        )
+        break
+      }
+      case 'petOver': {
+        if (me) this.store.notify(`${ev.label} wanders off — feed again to be friends`, 'info')
+        break
+      }
+      default:
+        break
+    }
   }
 
   private applyDamage(amount: number, kind: string) {

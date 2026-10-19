@@ -163,6 +163,31 @@ export interface NpcNetState {
 
 export interface ItemNetState { id: string; taken: boolean; takenBy?: string; respawnAt?: number }
 
+/** v87 — SHARED WILD: server-authoritative zombie snapshot (index i = zombie id).
+ *  `chase` drives the run/reach animation, `moving` drives the leg swing. */
+export interface ZombieNetState { i: number; x: number; z: number; ry: number; chase: boolean; moving: boolean; lunge: boolean }
+
+/** v87 — SHARED WILD: server-authoritative street-animal snapshot (index i = animal id).
+ *  `crumb` rides along only while a snack is on the ground; `follow` names the pet owner. */
+export interface AnimalNetState {
+  i: number
+  x: number; z: number; ry: number
+  st: 'idle' | 'wander' | 'goEat' | 'eat' | 'follow' | 'flee'
+  sit: boolean
+  crumb?: { x: number; z: number }
+  follow?: string
+}
+
+export interface WildNetState { z: ZombieNetState[]; a: AnimalNetState[] }
+
+/** v87 — discrete room-wide wild events (spot scares, feeding, pet timeouts). */
+export type WildEventNet =
+  | { t: 'spot'; pid: string; i: number; x: number; z: number }
+  | { t: 'zhit'; pid: string; i: number }
+  | { t: 'fedStart'; pid: string; i: number; label: string; animal: 'dog' | 'cat' | 'cow' }
+  | { t: 'fed'; pid: string; i: number; label: string; animal: 'dog' | 'cat' | 'cow'; extended: boolean }
+  | { t: 'petOver'; pid: string; i: number; label: string }
+
 /**
  * Loot dropped when police confiscate a detainee's inventory cards (game:dropped).
  * Ids are dynamic (`drop_*`) — clients spawn them via ItemSystem.spawnDropped.

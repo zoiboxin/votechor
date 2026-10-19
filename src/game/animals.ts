@@ -9,6 +9,8 @@ import * as THREE from 'three'
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { AudioManager } from './audio'
 import { PET_FOLLOW_SEC } from './shared/constants'
+import { ANIMAL_SPOTS } from './shared/animal-sim'
+import type { AnimalNetState } from './shared/types'
 import type { FxSystem } from './fx'
 import type { PhysicsWorld } from './physics'
 
@@ -48,6 +50,12 @@ interface Animal {
   crumb: THREE.Group | null
   sit: boolean
   wasPet: boolean // was already a pet when the current crumb was dropped
+  // v87 — net rendering state (SHARED WILD)
+  nx: number; nz: number; nry: number
+  tx: number; tz: number; try_: number
+  nstate: AnimalState
+  nsit: boolean
+  ncrumb: { x: number; z: number } | null
 }
 
 interface Bird {
@@ -335,24 +343,9 @@ function buildCrumb(): THREE.Group {
   return g
 }
 
-// ---- world spots (hand-placed on plazas/sidewalk margins, ≥4 m off every
-// vehicle lane verified by tests/route-check.ts data) ----
-const SPOTS: Array<{ kind: AnimalKind; x: number; z: number; r: number }> = [
-  { kind: 'dog', x: 8, z: -66, r: 7 },    // plaza side, north of Plaza Cross Rd
-  { kind: 'dog', x: -7, z: -188, r: 7 },  // Market Exit margin
-  { kind: 'dog', x: 10, z: -462, r: 6 },  // Colony Cross Rd east margin
-  { kind: 'cat', x: -9, z: -270, r: 5 },  // Avenue Cross Rd north margin
-  { kind: 'cat', x: 7, z: -512, r: 5 },   // Parliament Plaza approach
-  { kind: 'cow', x: 8, z: -400, r: 4.5 }, // grand avenue east margin
-  { kind: 'cow', x: -6, z: -505, r: 4 },  // Parliament Plaza north edge
-  // v66 — greater-city wildlife: the jungle ring and the north band are alive too
-  { kind: 'cow', x: -184, z: -160, r: 9 }, // west jungle clearing
-  { kind: 'cow', x: 184, z: -300, r: 9 },  // east jungle clearing
-  { kind: 'cow', x: -30, z: 26, r: 8 },    // north jungle west of the spine road
-  { kind: 'dog', x: -180, z: -420, r: 7 }, // west jungle trail
-  { kind: 'dog', x: 26, z: 26, r: 6 },     // north jungle east of the spine road
-  { kind: 'cat', x: 148, z: -190, r: 6 },  // Committee Square back lane
-]
+// v87 — the world spots now live in src/game/shared/animal-sim.ts (one source
+// of truth for the server sim AND this renderer/local-offline machine).
+const SPOTS = ANIMAL_SPOTS
 
 const BIRD_FLOCKS = [
   { cx: 0, cz: -250, cy: 22, r: 34, count: 6 },
@@ -370,6 +363,8 @@ export class AnimalSystem {
   private animals: Animal[] = []
   private birds: Bird[] = []
   private t = 0
+  // v87 — SHARED WILD: when true, update() only renders server snapshots
+  private netMode = false
 
   constructor(
     private physics: PhysicsWorld,
@@ -401,6 +396,8 @@ export class AnimalSystem {
         phase: Math.random() * 6, moveAmt: 0, ry: Math.random() * 6,
         voiceT: 4 + Math.random() * VOICE_RAND[s.kind],
         eatSfxT: 0, petUntil: 0, heartT: 0, crumb: null, sit: false, wasPet: false,
+        nx: s.x, nz: s.z, nry: 0, tx: s.x, tz: s.z, try_: 0,
+        nstate: 'idle', nsit: false, ncrumb: null,
       })
     }
     for (const f of BIRD_FLOCKS) {
@@ -431,8 +428,142 @@ export class AnimalSystem {
     return best
   }
 
-  /** Drop food beside the animal — it will walk over, eat, then follow the player. */
+  // ---------- v87 — SHARED WILD: server snapshot rendering ----------
+
+  /** Enter server-authoritative mode: snapshots drive every position/state. */
+  enterNetMode() {
+    if (this.netMode) return
+    this.netMode = true
+    for (const a of this.animals) {
+      a.nx = a.group.position.x
+      a.nz = a.group.position.z
+      a.nry = a.ry
+      a.tx = a.nx; a.tz = a.nz; a.try_ = a.nry
+      a.nstate = a.state
+      a.nsit = a.sit
+      a.ncrumb = null
+      a.petUntil = 0
+    }
+  }
+
+  /** Back to the local sim (offline fallback / fresh offline match). */
+  exitNetMode() {
+    if (this.netMode) {
+      for (const a of this.animals) {
+        if (a.crumb) { this.group.remove(a.crumb); a.crumb = null }
+        a.ncrumb = null
+        a.state = 'idle'
+        a.sit = false
+        a.petUntil = 0
+      }
+    }
+    this.netMode = false
+  }
+
+  /** Apply one `game:wild` snapshot (10 Hz): smooth-follow targets + state truth. */
+  applyServerState(list: AnimalNetState[]) {
+    for (const s of list) {
+      const a = this.animals[s.i]
+      if (!a) continue
+      a.tx = s.x
+      a.tz = s.z
+      a.try_ = s.ry
+      a.nstate = s.st
+      a.nsit = s.sit
+      a.ncrumb = s.crumb ?? null
+      a.petUntil = s.follow ? 1 : 0 // tail-wag truth rides on petUntil
+    }
+  }
+
+  /** Create/remove the local crumb mesh to match the server's crumb truth. */
+  private syncNetCrumb(a: Animal) {
+    if (a.ncrumb && !a.crumb) {
+      const crumb = buildCrumb()
+      crumb.position.set(a.ncrumb.x, this.physics.groundHeight(a.ncrumb.x, a.ncrumb.z, 2) + 0.02, a.ncrumb.z)
+      this.group.add(crumb)
+      a.crumb = crumb
+    } else if (!a.ncrumb && a.crumb) {
+      this.group.remove(a.crumb)
+      a.crumb = null
+    }
+  }
+
+  /** Net rendering: smooth-follow + procedural animation + client-local audio/fx. */
+  private updateNetAnimals(dt: number, playerPos: { x: number; y: number; z: number }, listenerYaw: number) {
+    for (const a of this.animals) {
+      const p = a.group.position
+      const k = Math.min(1, dt * 11) // ~90 ms lag — smooths the 10 Hz steps fully
+      let dr = a.try_ - a.nry
+      while (dr > Math.PI) dr -= Math.PI * 2
+      while (dr < -Math.PI) dr += Math.PI * 2
+      a.nry += dr * k
+      a.nx += (a.tx - a.nx) * k
+      a.nz += (a.tz - a.nz) * k
+      p.set(a.nx, this.physics.groundHeight(a.nx, a.nz, 2), a.nz)
+      a.group.rotation.y = a.nry
+      a.ry = a.nry
+      a.state = a.nstate
+      a.sit = a.nsit
+      this.syncNetCrumb(a)
+      const pd = Math.hypot(p.x - playerPos.x, p.z - playerPos.z)
+      // voices (client-local, spatial, from server positions)
+      a.voiceT -= dt
+      if (a.voiceT <= 0) {
+        a.voiceT = VOICE_MIN[a.kind] + Math.random() * VOICE_RAND[a.kind]
+        AudioManager.playAt(VOICE_SFX[a.kind], p.x, p.z, playerPos.x, playerPos.z, listenerYaw, 52, 1.3)
+      }
+      // eating crunch rides on the server's eat state
+      if (a.state === 'eat') {
+        a.eatSfxT -= dt
+        if (a.eatSfxT <= 0) {
+          a.eatSfxT = 0.62
+          AudioManager.playAt('crunch', p.x, p.z, playerPos.x, playerPos.z, listenerYaw, 30, 1.1)
+        }
+      }
+      // follow hearts (fx stay client-local)
+      if (a.state === 'follow') {
+        a.heartT -= dt
+        if (a.heartT <= 0 && pd < 26) {
+          a.heartT = 2.6
+          this.fx.burst(p.x, p.y + (a.kind === 'cow' ? 1.9 : 1.0), p.z, '#ff8fa3', 2, 0.7, 0.6)
+        }
+      }
+      // procedural animation — same drivers as the local machine, speed from
+      // the snapshot delta (10 Hz steps → m/s estimate)
+      const speedEst = Math.hypot(a.tx - a.nx, a.tz - a.nz) * 10
+      const moving = speedEst > 0.35 && a.state !== 'idle' && a.state !== 'eat'
+      a.moveAmt += ((moving ? 1 : 0) - a.moveAmt) * Math.min(1, dt * 8)
+      a.phase += dt * (2.1 + a.moveAmt * (a.kind === 'cow' ? 2.6 : 4.6))
+      const swing = (a.kind === 'cow' ? 0.42 : 0.6) * a.moveAmt
+      const off = [0, Math.PI, Math.PI, 0]
+      for (let i = 0; i < a.legs.length; i++) a.legs[i].rotation.x = Math.sin(a.phase + off[i]) * swing
+      if (a.tail) {
+        if (a.kind === 'dog') a.tail.rotation.z = Math.sin(this.t * (a.petUntil > 0 ? 9 : 2.2)) * (a.petUntil > 0 ? 0.5 : 0.16)
+        else if (a.kind === 'cat') { a.tail.rotation.z = Math.sin(this.t * 1.6) * 0.3; a.tail.rotation.x = -0.45 + Math.sin(this.t * 0.9) * 0.2 }
+        else a.tail.rotation.z = Math.sin(this.t * 1.3 + a.phase * 0.1) * 0.35
+      }
+      if (a.head) {
+        let hx = 0
+        if (a.state === 'eat') hx = a.kind === 'cow' ? 1.0 : 0.85
+        else if (a.state === 'idle' && a.kind === 'cow') hx = 0.55 + Math.sin(this.t * 0.8) * 0.15 // grazing idle
+        if (a.sit && a.state === 'idle') a.head.rotation.y = Math.sin(this.t * 0.7) * 0.55
+        else a.head.rotation.y = 0
+        a.head.rotation.x += (hx + Math.sin(this.t * 1.7 + a.phase) * 0.04 - a.head.rotation.x) * Math.min(1, dt * 6)
+      }
+      const breathe = 1 + Math.sin(this.t * 2.1 + a.phase) * 0.012
+      const targetScaleY = (a.sit && a.state === 'idle' ? 0.82 : 1) * breathe
+      a.bodyRoot.scale.y += (targetScaleY - a.bodyRoot.scale.y) * Math.min(1, dt * 6)
+      // pet hop — a little joy jump right after eating
+      if (a.state === 'follow' && a.heartT > 2.2) a.bodyRoot.position.y = Math.max(0, Math.sin((2.9 - a.heartT) * 9)) * 0.14
+      else a.bodyRoot.position.y = 0
+    }
+  }
+
+  /** Drop food beside the animal — it will walk over, eat, then follow the player.
+   *  v87 — online matches request the feed from the server instead (game.ts
+   *  routes through net; the food is consumed only when the server confirms). */
   feed(idx: number, worldTime: number, playerPos: { x: number; z: number }): { label: string; kind: AnimalKind; extended: boolean } | null {
+    if (this.netMode) return null
     const a = this.animals[idx]
     if (!a) return null
     a.wasPet = a.petUntil > 0
@@ -454,7 +585,10 @@ export class AnimalSystem {
   update(dt: number, worldTime: number, playerPos: { x: number; y: number; z: number }, playerSpeed: number, listenerYaw = 0) {
     this.t += dt
     const t = this.t
-    for (const a of this.animals) {
+    // v87 — SHARED WILD: online matches render server snapshots; the local AI
+    // machines below remain the OFFLINE path (identical feel, no server).
+    if (this.netMode) this.updateNetAnimals(dt, playerPos, listenerYaw)
+    else for (const a of this.animals) {
       const p = a.group.position
       const pd = Math.hypot(p.x - playerPos.x, p.z - playerPos.z)
 

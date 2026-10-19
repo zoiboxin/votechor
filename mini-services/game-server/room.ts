@@ -20,6 +20,19 @@ import {
   dropBallotsOf,
   type BossBrain,
 } from '../../src/game/shared/boss-brain'
+// v87 — SHARED WILD: server-authoritative zombies + street animals (was client-local)
+import {
+  createZombieSimStates,
+  tickZombies,
+  type ZombieSimState,
+} from '../../src/game/shared/zombie-sim'
+import {
+  createAnimalSimStates,
+  tickAnimals,
+  feedAnimalById,
+  type AnimalSimState,
+  type AnimalSimEvent,
+} from '../../src/game/shared/animal-sim'
 import {
   TOKENS_NEEDED,
   DETENTION_SECONDS,
@@ -44,6 +57,10 @@ import type {
   MatchEndPayload,
   NpcNetState,
   PlayerNetState,
+  WildNetState,
+  ZombieNetState,
+  AnimalNetState,
+  WildEventNet,
 } from '../../src/game/shared/types'
 
 // One shared immutable world (defs are pure data; brains are per-room).
@@ -260,6 +277,11 @@ export class Room {
   itemStates = new Map<string, ItemState>()
   droppedItems = new Map<string, DroppedItem>()
   boss: BossBrain
+  // v87 — SHARED WILD: one authoritative horde + one set of street animals per room
+  zombies: ZombieSimState[] = createZombieSimStates()
+  animals: AnimalSimState[] = createAnimalSimStates()
+  private zPackGate = { spotT: 0 }
+  private lastTickPos = new Map<string, { x: number; z: number }>()
   checkpoints = new Set<number>()
   tokens = 0
   gateOpen = false
@@ -279,6 +301,11 @@ export class Room {
     this.npcs = createNpcStates(WORLD.npcs)
     this.boss = createBossBrain(WORLD.bossArena)
     this.itemStates = new Map(WORLD.items.map(i => [i.id, { taken: false } as ItemState]))
+    // v87 — fresh horde + fresh animals every match (everyone sees the same wild)
+    this.zombies = createZombieSimStates()
+    this.animals = createAnimalSimStates()
+    this.zPackGate.spotT = 0
+    this.lastTickPos.clear()
   }
 
   get size(): number {
@@ -295,6 +322,7 @@ export class Room {
     // immediate first snapshots so fresh joiners render instantly
     this.emitRoom('game:npcs', this.npcsArray())
     this.emitRoom('game:items', this.itemsArray())
+    this.emitRoom('game:wild', this.wildPayload())
   }
 
   /** Stop all timers when the room empties. */
@@ -901,6 +929,39 @@ export class Room {
     for (const v of views) if (v.hidden) hiddenIds.add(v.id)
     propagateChase(this.npcs, DETECT.packChaseRadius, now, hiddenIds)
 
+    // 1.5 v87 — SHARED WILD: authoritative zombies + street animals. One horde,
+    // one set of animals per room — every client renders the same creatures at
+    // the same places (the old client-local sims each rolled their own world).
+    const speeds = new Map<string, number>()
+    for (const v of views) {
+      const last = this.lastTickPos.get(v.id)
+      speeds.set(v.id, last ? Math.hypot(v.x - last.x, v.z - last.z) / dt : 0)
+      this.lastTickPos.set(v.id, { x: v.x, z: v.z })
+    }
+    const zEvents: import('../../src/game/shared/zombie-sim').ZombieSimEvent[] = []
+    const aEvents: AnimalSimEvent[] = []
+    tickZombies(this.zombies, views, dt, now, zEvents, this.zPackGate)
+    tickAnimals(this.animals, views, speeds, dt, now, aEvents)
+    for (const ev of zEvents) {
+      if (ev.kind === 'strike') {
+        // server-owned health — identical channel to the NPC melee (victim client
+        // plays the zombie hit feel from game:damage kind 'zombie')
+        this.damagePlayer(ev.playerId, ev.amount, 'zombie', now)
+        this.emitRoom('game:wildEvent', { t: 'zhit', pid: ev.playerId, i: ev.zombieId } satisfies WildEventNet)
+      } else {
+        this.emitRoom('game:wildEvent', { t: 'spot', pid: ev.playerId, i: ev.zombieId, x: Math.round(ev.x), z: Math.round(ev.z) } satisfies WildEventNet)
+      }
+    }
+    for (const ev of aEvents) {
+      if (ev.kind === 'fedStart') {
+        this.emitRoom('game:wildEvent', { t: 'fedStart', pid: ev.playerId, i: ev.animalId, label: ev.label, animal: ev.animal } satisfies WildEventNet)
+      } else if (ev.kind === 'fed') {
+        this.emitRoom('game:wildEvent', { t: 'fed', pid: ev.playerId, i: ev.animalId, label: ev.label, animal: ev.animal, extended: ev.extended } satisfies WildEventNet)
+      } else {
+        this.emitRoom('game:wildEvent', { t: 'petOver', pid: ev.playerId, i: ev.animalId, label: ev.label } satisfies WildEventNet)
+      }
+    }
+
     // 2. Searchlight rotation
     for (const sl of this.searchlights) sl.ry += sl.speed * dt
 
@@ -970,8 +1031,11 @@ export class Room {
       if (gone.length) this.emitRoom('game:dropGone', gone)
     }
 
-    // 10. NPC snapshots at 10 Hz (searchlights included)
-    if (this.players.size > 0) this.emitRoom('game:npcs', this.npcsArray())
+    // 10. NPC snapshots at 10 Hz (searchlights included) + the shared wild
+    if (this.players.size > 0) {
+      this.emitRoom('game:npcs', this.npcsArray())
+      this.emitRoom('game:wild', this.wildPayload())
+    }
 
     // 11. Boss broadcasts: 10 Hz while active, 1 Hz idle
     if (this.boss.started) this.emitBoss()
@@ -1025,6 +1089,11 @@ export class Room {
     this.npcs = createNpcStates(WORLD.npcs)
     this.boss = createBossBrain(WORLD.bossArena)
     this.itemStates = new Map(WORLD.items.map(i => [i.id, { taken: false } as ItemState]))
+    // v87 — a fresh match means a fresh wild: horde home, animals home, gate closed
+    this.zombies = createZombieSimStates()
+    this.animals = createAnimalSimStates()
+    this.zPackGate.spotT = 0
+    this.lastTickPos.clear()
     this.vehicleHitAt.clear()
     if (this.droppedItems.size > 0) {
       const gone = [...this.droppedItems.keys()]
@@ -1049,6 +1118,7 @@ export class Room {
     this.emitRoom('game:items', this.itemsArray())
     this.emitRoom('game:tokens', this.tokens)
     this.emitRoom('game:gate', false)
+    this.emitRoom('game:wild', this.wildPayload()) // v87 — every client re-renders the fresh horde
     this.emitBoss()
   }
 
@@ -1092,6 +1162,46 @@ export class Room {
       out.push({ id, taken: st.taken, takenBy: st.takenBy, respawnAt: st.respawnAt })
     }
     return out
+  }
+
+  /** v87 — SHARED WILD snapshot: the horde + the street animals, quantized.
+   *  Zombie/animal index IS the id (renderer builds the same visual per index). */
+  wildPayload(): WildNetState {
+    const z: ZombieNetState[] = []
+    for (const zb of this.zombies) {
+      z.push({
+        i: zb.id,
+        x: round2(zb.x), z: round2(zb.z), ry: round2(zb.ry),
+        chase: zb.state === 'chase',
+        moving: (zb as ZombieSimState & { moving?: boolean }).moving ?? false,
+        lunge: zb.lunge > 0.35,
+      })
+    }
+    const a: AnimalNetState[] = []
+    for (const an of this.animals) {
+      const net: AnimalNetState = {
+        i: an.id,
+        x: round2(an.x), z: round2(an.z), ry: round2(an.ry),
+        st: an.state, sit: an.sit && an.state === 'idle',
+      }
+      if (an.crumb) net.crumb = { x: round2(an.crumb.x), z: round2(an.crumb.z) }
+      if (an.followId) net.follow = an.followId
+      a.push(net)
+    }
+    return { z, a }
+  }
+
+  /** v87 — validated feeding request from a client (game:animalFeed). The crumb,
+   *  the eat timer and the follow are room truth; the feeder's client consumes
+   *  its food only when the fedStart broadcast confirms. */
+  feedAnimal(playerId: string, animalId: number): boolean {
+    const p = this.players.get(playerId)
+    if (!p || p.detained || p.dazed) return false
+    const evs: AnimalSimEvent[] = []
+    const ev = feedAnimalById(this.animals, animalId, playerId, p.x, p.z, Date.now(), evs)
+    if (!ev || ev.kind !== 'fedStart') return false
+    this.emitRoom('game:wildEvent', { t: 'fedStart', pid: ev.playerId, i: ev.animalId, label: ev.label, animal: ev.animal } satisfies WildEventNet)
+    return true
   }
 
   bossPayload(): { boss: BossNetState; ballots: { id: string; x: number; z: number; taken: boolean }[] } {

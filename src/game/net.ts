@@ -3,6 +3,7 @@
 import { io, type Socket } from 'socket.io-client'
 import type {
   AnimName, BossNetState, DroppedItemNetState, ItemNetState, MatchEndPayload, NpcNetState, PlayerNetState,
+  WildNetState, WildEventNet,
 } from './shared/types'
 
 export interface JoinPayload {
@@ -34,6 +35,8 @@ export interface JoinAck {
   players: PlayerNetState[]
   npcs: NpcNetState[]
   items: ItemNetState[]
+  /** v87 — SHARED WILD: the authoritative horde + animals, exactly where they are right now. */
+  wild?: WildNetState | null
   checkpoints: number[]
   tokensNeeded: number
   tokensCollected: number
@@ -47,6 +50,10 @@ export type NetEvents = {
   onPlayers: (players: PlayerNetState[]) => void
   onNpcs: (npcs: NpcNetState[]) => void
   onItems: (items: ItemNetState[]) => void
+  /** v87 — SHARED WILD: 10 Hz zombie + animal snapshots (single room-wide truth). */
+  onWild: (wild: WildNetState) => void
+  /** v87 — discrete wild events: spot scares, zombie hits, feeding, pet timeouts. */
+  onWildEvent: (ev: WildEventNet) => void
   onBoss: (boss: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) => void
   onCapture: (playerId: string, until: number, message: string, lostTokens?: number) => void
   /** Police role: server confirmed one of OUR arrests (honest counting). */
@@ -151,6 +158,9 @@ export class NetClient {
         })
         socket.on('game:npcs', (n: NpcNetState[]) => this.ev.onNpcs?.(n))
         socket.on('game:items', (i: ItemNetState[]) => this.ev.onItems?.(i))
+        // v87 — SHARED WILD
+        socket.on('game:wild', (w: WildNetState) => this.ev.onWild?.(w))
+        socket.on('game:wildEvent', (e: WildEventNet) => this.ev.onWildEvent?.(e))
         socket.on('game:boss', (b: BossNetState, ballots: { id: string; x: number; z: number; taken: boolean }[]) => this.ev.onBoss?.(b, ballots))
         socket.on('game:capture', (playerId: string, until: number, message: string, lostTokens?: number) => this.ev.onCapture?.(playerId, until, message, lostTokens))
         socket.on('game:arrested', (targetId: string, targetName: string, total: number) => this.ev.onArrested?.(targetId, targetName, total))
@@ -242,6 +252,10 @@ export class NetClient {
   /** v68 — killed by the deep-jungle undead: the server picks a random validated
    *  respawn point (re-baselining its anti-warp tracker) and answers game:release. */
   wildDeath() { this.socket?.emit('game:wildDeath', {}) }
+
+  /** v87 — ask the server to feed street animal #i (validated room-wide; the
+   *  requester's food is consumed only when the fedStart broadcast confirms). */
+  animalFeed(i: number) { this.socket?.emit('game:animalFeed', { i }) }
   bossHit() { this.socket?.emit('game:bossHit', {}) }
   bossGrabBallot(x: number, z: number) { this.socket?.emit('game:bossBallot', { x, z }) }
   bossDeposit(x: number, z: number) { this.socket?.emit('game:bossDeposit', { x, z }) }

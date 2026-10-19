@@ -373,6 +373,7 @@ io.on('connection', (socket) => {
       players: room.playersArray(true),
       npcs: room.npcsArray(),
       items: room.itemsArray(),
+      wild: room.wildPayload(), // v87 — joiner renders the horde exactly where it is right now
       checkpoints: [...room.checkpoints],
       tokensNeeded: TOKENS_NEEDED,
       tokensCollected: room.tokens,
@@ -517,6 +518,16 @@ io.on('connection', (socket) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined
     room?.handleWildDeath(socket.id)
+  })
+
+  // v87 — SHARED WILD: feed a street animal; the server validates range + state,
+  // drops the room-wide crumb and announces fedStart (the requester's client then
+  // consumes its food exactly once — rejected requests never cost a snack).
+  socket.on('game:animalFeed', (data: { i?: unknown } = {}) => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    const i = Number(data.i)
+    if (Number.isInteger(i)) room?.feedAnimal(socket.id, i)
   })
 
   // ---------- squad handlers ----------
