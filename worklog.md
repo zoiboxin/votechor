@@ -2125,3 +2125,21 @@ Stage Summary:
 - The "rain-ish sound outside the city" is gone at both layers: in-match (crowd floor removed + rain canopy-scoped) and on the menu (jungle/wind beds finally retire on quit — a real v68-era bug found by this round's QA).
 - All suites green, pushed to GitHub: main 22af111 + tag v80. /api/version = v80.
 - Next Task ID: 79 (queued: GLB wardrobe cosmetics, 8-step animation upgrade, profile save/load race, online dropTaken UX, .env.example).
+
+---
+Task ID: 79
+Agent: Z.ai Code (main session)
+Task: User request — "check and fix when player going in jungle and romaing around so many notification come at once 'the undead has your scent'".
+
+Work Log:
+- Round-start checks: /api/version = v80 (no rollback), worklog ended at Task 78, both servers up.
+- FORENSICS: every one of the 33 undead independently transitions lurch→chase inside DETECT_R 14 and EACH transition called cb.onSpot(); game.ts's handler played a FULL-VOLUME scareSting, added a 0.35 shake and pushed a toast per call (first = intro, then "The undead have your scent…"). Zombie pockets (e.g. [-110,-715] + [-105,-730], 15.8m apart) aggro simultaneously → 4-6 stings/shakes/toasts in seconds while roaming; the store only keeps the last 6 toasts, so the stack filled with scare spam.
+- FIXES SHIPPED (two layers + one bonus bug): src/game/zombies.ts — pack gate: a system-level spotT timer fires onSpot ONCE per 5 game-seconds (first detector of a wave raises the scare; stragglers stay silent; per-zombie spatial moans unchanged). src/game/game.ts — SCARE_COOLDOWN_MS = 12000 gates sting + shake + toast together as ONE scare event (re-spots while roaming can no longer machine-gun the player); per-match reset in startMatch: wildToastShown = false, lastScareMs = -Infinity — the singleton Game used to carry both across matches. BONUS BUG (found by QA, fixed): ZombieSystem.spotT leaked across matches (system lives on the singleton) and SILENCED the first detection of the next match — resetAggro() now clears spotT, and startMatch calls zombies.resetAggro() so every match opens with the horde home, the gate open and the intro toast armed. VC_BUILD v80 → v81 same commit.
+- CHECKS: tsc 0 project errors · lint clean · client-only change (no game-server restart needed).
+- LIVE QA (agent-browser via :81, PLAY SOLO, persistent store-subscription scare log because toasts auto-dismiss at 4.5s): Test 1 cluster midpoint → chasing:2 but EXACTLY 1 toast ("Something dead is hunting you — RUN!") — old code would fire 2. Test 2 fresh pocket inside the window → 0 new toasts (gate held). Test 3 after both gates expired (~2min roam) → exactly 1 "The undead have your scent…", correctly sequenced after the intro. Strike test: standing on a zombie hp 100→68 (= 2×16 exactly; melee pipeline untouched). Match 2 pre-fix exposed the spotT leak (silent first detection) → fix applied → match 3 re-verified: intro toast returns, chasing:2 → 1 toast. Cleanup: watchdog hold cleared, distanceCulling restored true, clean leaveMatch.
+- QA HAZARD HIT + HANDLED: mid-test the page auto-reloaded — confirmed via the sessionStorage 'vc_gl_reload_at' marker as guardedReload (v55 watchdog: collapsed draw-call samples in headless deep-jungle slow-mo), NOT a game bug; the standard 400ms streak-holder interval was installed for all subsequent tests.
+
+Stage Summary:
+- Undead encounters now read as ONE dramatic scare per wave: a single sting + shake + toast, max one scent warning per 12s while roaming, packs collapse into the first detector, every match re-arms the intro toast, and strikes/kill flow are untouched (hp math verified live).
+- Pushed to GitHub: main 767750f + tag v81. /api/version = v81, on-screen badge V81.
+- Next Task ID: 80 (queued: GLB wardrobe cosmetics, 8-step animation upgrade, profile save/load race, online dropTaken UX, .env.example, animal polish, spawn-billboard polish).
