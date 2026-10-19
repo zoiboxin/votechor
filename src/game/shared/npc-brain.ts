@@ -260,7 +260,10 @@ export function tickNpc(
         n.x += (dx / d) * step; n.z += (dz / d) * step
         moved = true
       }
-      if (d < reachXZ(DETECT.captureRadius, target.y)) { // v51 — can grab UP onto platforms
+      // v86 — a graced (hidden) target can never be grabbed: the escape/release
+      // grace is an anti-ambush window, but an officer already holding chase state
+      // used to bypass it because only ACQUISITION checked `hidden`.
+      if (!target.hidden && d < reachXZ(DETECT.captureRadius, target.y)) { // v51 — can grab UP onto platforms
         // weakened targets (< weakenedHealth HP) get grabbed at the multiplied capture time
         const weakened = typeof target.health === 'number' && target.health < POLICE_ATTACK.weakenedHealth
         const captureTime = DETECT.captureTime * (weakened ? POLICE_ATTACK.weakenedCaptureMul : 1)
@@ -333,7 +336,7 @@ export function applyNoise(npcs: NpcBrainState[], x: number, z: number, duration
  * respect their own same-target cooldown (a constable who just cuffed this
  * protester won't instantly re-join), and searchlights are never moved.
  */
-export function propagateChase(npcs: NpcBrainState[], radius = DETECT.packChaseRadius, now = 0) {
+export function propagateChase(npcs: NpcBrainState[], radius = DETECT.packChaseRadius, now = 0, hiddenIds?: ReadonlySet<string>) {
   // cheap pre-check — most steps have no active chase at all
   let first = -1
   for (let i = 0; i < npcs.length; i++) {
@@ -350,6 +353,7 @@ export function propagateChase(npcs: NpcBrainState[], radius = DETECT.packChaseR
       const c = npcs[k]
       if (c.state !== 'chase' || !c.targetId || c === n) continue
       if (n.cooldownTarget === c.targetId && now < n.cooldownUntil) continue // own cuff cooldown
+      if (hiddenIds?.has(c.targetId)) continue // v86 — graced targets can't be pack-joined either
       const dx = n.x - c.x, dz = n.z - c.z
       if (dx * dx + dz * dz < r2) {
         n.state = 'chase'

@@ -53,7 +53,7 @@ export type NetEvents = {
   onArrested: (targetId: string, targetName: string, totalArrests: number) => void
   /** Police-role baton strike (F) landed somewhere in the room — swing anim + impact FX. */
   onStrike: (fromId: string, targetId: string, x: number, z: number) => void
-  onRelease: (playerId: string, x: number, z: number) => void
+  onRelease: (playerId: string, x: number, z: number, label?: string) => void
   onDropped: (drops: DroppedItemNetState[]) => void
   onDropTaken: (itemId: string, byId: string, byName: string) => void
   onDropGone: (itemIds: string[]) => void
@@ -155,7 +155,7 @@ export class NetClient {
         socket.on('game:capture', (playerId: string, until: number, message: string, lostTokens?: number) => this.ev.onCapture?.(playerId, until, message, lostTokens))
         socket.on('game:arrested', (targetId: string, targetName: string, total: number) => this.ev.onArrested?.(targetId, targetName, total))
         socket.on('game:strike', (fromId: string, targetId: string, x: number, z: number) => this.ev.onStrike?.(fromId, targetId, x, z))
-        socket.on('game:release', (playerId: string, x: number, z: number) => this.ev.onRelease?.(playerId, x, z))
+        socket.on('game:release', (playerId: string, x: number, z: number, label?: string) => this.ev.onRelease?.(playerId, x, z, label))
         socket.on('game:dropped', (drops: DroppedItemNetState[]) => this.ev.onDropped?.(drops))
         socket.on('game:dropTaken', (itemId: string, byId: string, byName: string) => this.ev.onDropTaken?.(itemId, byId, byName))
         socket.on('game:dropGone', (itemIds: string[]) => this.ev.onDropGone?.(itemIds))

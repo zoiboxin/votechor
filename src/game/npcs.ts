@@ -11,6 +11,10 @@ import type { PhysicsWorld } from './physics'
 import { SpeechBubbleSystem, NPC_LINES } from './bubbles'
 import { AudioManager, type SfxName } from './audio'
 
+// v86 — the offline player's id is always 'me'; used as the pack-join hidden set
+// while a release/escape grace window is active (see propagateChase).
+const LOCAL_PLAYER_HIDDEN: ReadonlySet<string> = new Set(['me'])
+
 interface NpcVisual {
   brain: NpcBrainState
   rig: CharacterRig
@@ -89,7 +93,8 @@ export class NpcSystem {
         v.target.x = v.brain.x; v.target.z = v.brain.z; v.target.ry = v.brain.ry
       }
       // v51 — pack pursuit: an active chase is contagious to nearby officers
-      propagateChase(this.brainsCache, undefined, now)
+      // v86 — but never onto the graced player (release/escape anti-ambush window)
+      propagateChase(this.brainsCache, undefined, now, player.hidden ? LOCAL_PLAYER_HIDDEN : undefined)
       for (const ev of events) {
         if (ev.kind === 'capture') this.onLocalCapture?.(ev.npcId)
         else if (ev.kind === 'hit') this.onLocalHit?.(ev.amount ?? 12)

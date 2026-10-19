@@ -30,7 +30,7 @@ import {
   MOVE, TOKENS_NEEDED, DETENTION_SECONDS, MATCH_TIME_LIMIT, ITEM_CONFIG, INVENTORY_MAX,
   archetypeById, XP_TABLE, levelFromXp, CAPTURE_MESSAGES, RANDOM_NOTIFICATIONS, BOSS_NAME,
   BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES, SHOUT_COOLDOWN_SEC, SHOUT_LINES, PLAYER_ROLE, POLICE_STRIKE,
-  FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS, GRAVEYARD, WORLD_DISC,
+  FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS, GRAVEYARD, WORLD_DISC, DETECT,
 } from './shared/constants'
 import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, GLB_CHARACTERS_ENABLED, type MatchSummary } from '@/lib/game-store'
@@ -190,6 +190,14 @@ export class Game {
   private inventory: { uid: string; type: ItemType }[] = []
   private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0, arrests: 0 }
   private detainUntil = 0
+  /** v86 — anti-ambush window after a COMPLETED escape (badge fully cleared):
+   *  fresh officer acquisitions cannot windup/strike/grab the player for 3 s.
+   *  Mirrors the v49 post-release grace; online the room grants the same. */
+  private escapeGraceUntil = 0
+  /** v86 — id of the LAST checkpoint this player activated. The offline release
+   *  used to index checkpoints by the COUNT of activations, which released
+   *  out-of-order progress at a checkpoint the player never visited. */
+  private lastCheckpointId: number | null = null
   /** v49 — until this timestamp the just-released local player is `hidden` to NPC
    *  brains (invisible beyond 3 m) and the WANTED banner stays cleared, so a fresh
    *  respawn cannot be instantly re-chased or re-flagged. */
@@ -733,6 +741,9 @@ export class Game {
     this.wildToastShown = false
     this.lastScareMs = -Infinity
     this.zombies.resetAggro()
+    // v86 — chase/escape bookkeeping must never leak across matches (singleton Game)
+    this.escapeGraceUntil = 0
+    this.lastCheckpointId = null
     // force-close any overlays so a fresh match never boots with stuck suppressed input
     useGameStore.getState().toggleMap(false)
     useGameStore.getState().toggleSquad(false)
@@ -1474,24 +1485,44 @@ export class Game {
     }
   }
 
+  /** v86 — the checkpoint the player ACTIVATED LAST (id-tracked), falling back to
+   *  the first activated one, then checkpoints[0]. The old pick used the COUNT of
+   *  activations as an array index — activating checkpoints out of order (or
+   *  skipping one) released the player at a checkpoint they never visited, which
+   *  read as "I escaped and suddenly went to another location". */
+  private detentionCheckpoint() {
+    const cps = this.world.checkpoints
+    if (this.lastCheckpointId != null) {
+      const last = cps.find(c => c.id === this.lastCheckpointId)
+      if (last) return last
+    }
+    if (this.activatedCheckpoints.size > 0) {
+      const first = cps.find(c => this.activatedCheckpoints.has(c.id))
+      if (first) return first
+    }
+    return cps[0]
+  }
+
   /** v49 — shared local release contract: teleport out of detention, clear the
    *  WANTED banner + chase bookkeeping, and open a 6 s police-invisible grace so
    *  officers loitering near the release point cannot instantly re-catch. */
-  private releaseLocal(x: number, z: number) {
+  private releaseLocal(x: number, z: number, label?: string) {
     this.player!.release(x, z)
     this.lastHunted = false
     this.wantedFadeUntil = 0 // v51 — a release supersedes any in-flight badge fade
     this.lastFading = false
     this.releaseGraceUntil = Date.now() + 6000
     useGameStore.getState().patchHud({ hunted: false, wantedFading: false })
-    this.store.notify('Released! The paperwork was, tragically, in order.', 'info')
+    this.store.notify(label
+      ? `Released at ${label}! The paperwork was, tragically, in order.`
+      : 'Released! The paperwork was, tragically, in order.', 'info')
     AudioManager.play('release')
   }
 
-  private onRelease(playerId: string, x: number, z: number) {
+  private onRelease(playerId: string, x: number, z: number, label?: string) {
     if (!this.player) return
     if (playerId === this.net.playerId || this.offline) {
-      this.releaseLocal(x, z)
+      this.releaseLocal(x, z, label)
       if (this.zombieDeathPending) {
         // v68 — this release is the wild-death respawn: wake up battered, not doomed
         this.zombieDeathPending = false
@@ -1507,6 +1538,7 @@ export class Game {
   private onCheckpoint(cp: number, byName: string, total: number) {
     if (this.activatedCheckpoints.has(cp)) return
     this.activatedCheckpoints.add(cp)
+    this.lastCheckpointId = cp // v86 — release point = last checkpoint YOU activated
     this.stats.checkpoints = total
     if (this.player) this.fx.popup('CHECKPOINT +60 XP', '#4e9b6e', this.player.pos.x, 2.1, this.player.pos.z)
     this.store.notify(`Checkpoint ${cp} unlocked by ${byName}! (${total}/4)`, 'achievement')
@@ -2472,9 +2504,9 @@ export class Game {
     if (this.player.isDetained) {
       const remain = Math.max(0, (this.detainUntil - Date.now()) / 1000)
       if (remain <= 0) {
-        const cp = this.activatedCheckpoints.size > 0 ? this.world.checkpoints[Math.min(this.activatedCheckpoints.size, this.world.checkpoints.length) - 1] : this.world.checkpoints[0]
+        const cp = this.detentionCheckpoint()
         const dp = cp.detention
-        if (this.offline) this.releaseLocal(dp.x, dp.z) // v49 — shared contract: clears the WANTED banner + opens the grace window
+        if (this.offline) this.releaseLocal(dp.x, dp.z, cp.name) // v49 — shared contract: clears the WANTED banner + opens the grace window
         // server path: server sends game:release
       }
     }
@@ -2485,6 +2517,7 @@ export class Game {
         if (this.activatedCheckpoints.has(cp.id)) continue
         if (Math.hypot(this.player.pos.x - cp.x, this.player.pos.z - cp.z) < cp.radius) {
           this.activatedCheckpoints.add(cp.id)
+          this.lastCheckpointId = cp.id // v86 — release point = last checkpoint YOU activated
           this.stats.checkpoints = this.activatedCheckpoints.size
           AudioManager.play('checkpoint')
           this.fx.popup('CHECKPOINT +60 XP', '#4e9b6e', this.player.pos.x, 2.1, this.player.pos.z)
@@ -2499,7 +2532,8 @@ export class Game {
         id: 'me', x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z,
         detained: this.player.isDetained, dazed: this.player.isDazed,
         hidden: (this.matchTime < 8 && Math.hypot(this.player.pos.x - this.world.spawn.x, this.player.pos.z - this.world.spawn.z) < 16)
-          || Date.now() < this.releaseGraceUntil, // v49 — post-detention grace: brains cannot re-acquire the fresh respawn
+          || Date.now() < this.releaseGraceUntil // v49 — post-detention grace: brains cannot re-acquire the fresh respawn
+          || Date.now() < this.escapeGraceUntil, // v86 — post-escape grace: no instant windup/grab from a fresh acquirer
         police: this.role === 'police', // fellow officers never chase the officer-player
       }
       this.npcs.simulateLocal(dt, pv, this.world.colliders, Date.now())
@@ -3158,7 +3192,13 @@ export class Game {
       // WANTED_FADE_MS and then clears itself. Any fresh chaser snaps it back to
       // full alert instantly. Detention/release paths reset the window.
       const meId = this.offline ? 'me' : this.net.playerId
-      const chased = this.role !== 'police' && this.npcs.nearestChaserDistance(focus.x, focus.z, meId) < 18
+      // v86 — the badge now tells the truth about the chase: brains keep pursuing
+      // until viewDist×escapeMul (≈33 m) after 6 s, but the badge used to clear at
+      // 18 m — a 15 m dead zone where the HUD said "escaped", the music went calm,
+      // and the still-chasing officer (faster than a walking, stamina-drained
+      // player) silently closed in and re-detained. Threshold now matches the
+      // brains' give-up distance +3 m of sampling margin.
+      const chased = this.role !== 'police' && this.npcs.nearestChaserDistance(focus.x, focus.z, meId) < DETECT.viewDist * DETECT.escapeMul + 3
       const nowMs = Date.now()
       if (chased) {
         this.wantedFadeUntil = 0
@@ -3168,6 +3208,12 @@ export class Game {
       if (this.wantedFadeUntil !== 0 && nowMs >= this.wantedFadeUntil) {
         this.wantedFadeUntil = 0
         this.lastHunted = false
+        // v86 — the escape is now COMPLETE: the pursuit genuinely ended (brains
+        // dropped the chase), so confirm it in words and open a 3 s anti-ambush
+        // grace — a fresh officer nearby cannot windup/strike/grab while it runs
+        // (mirrors the v49 post-release grace; the online room grants the same).
+        this.escapeGraceUntil = nowMs + 3000
+        this.store.notify('You lost the police — stay sharp!', 'info')
       }
       const badge = chased || this.wantedFadeUntil !== 0
       const fading = !chased && badge
@@ -3623,9 +3669,7 @@ export class Game {
     // the server releases at the same shared-world coords.
     let releaseTarget: { x: number; z: number } | null = null
     if (p.isDetained) {
-      const cp = this.activatedCheckpoints.size > 0
-        ? this.world.checkpoints[Math.min(this.activatedCheckpoints.size, this.world.checkpoints.length) - 1]
-        : this.world.checkpoints[0]
+      const cp = this.detentionCheckpoint() // v86 — id-tracked, not count-indexed
       if (cp) releaseTarget = { x: cp.detention.x, z: cp.detention.z }
     }
     // squadmates bright, nearby protesters/bots dim (capped — seasons hold 100)

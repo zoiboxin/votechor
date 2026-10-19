@@ -58,6 +58,10 @@ const RELEASE_PAD = 1.2 // clearance required from every (non-walkable) collider
  *  brains (invisible beyond 3 m) and immune to human-officer arrest/baton for this
  *  long, so nobody gets re-caught the instant they respawn. */
 const RELEASE_GRACE_MS = 6000
+/** v86 — anti-ambush window granted when a pursuit ends WITHOUT a capture (the
+ *  npc-brain soft-escape drop): the quarry just outran the officer, so nearby
+ *  fresh acquisitions can't instantly windup/strike/cuff/grab them. */
+const ESCAPE_GRACE_MS = 3000
 
 /**
  * Candidates derived from WORLD data: the four checkpoint detention spots, the plaza
@@ -870,6 +874,8 @@ export class Room {
 
     // 1. NPC brains
     for (const n of this.npcs) {
+      const prevState = n.state
+      const prevTarget = n.targetId
       const res = tickNpc(n, views, WORLD.colliders, dt, now)
       for (const ev of res.events) {
         if (ev.kind === 'capture') this.capturePlayer(ev.playerId, now)
@@ -879,9 +885,21 @@ export class Room {
           this.damagePlayer(ev.playerId, ev.amount ?? POLICE_ATTACK.fallbackDmg, 'police', now)
         }
       }
+      // v86 — escape grace: a pursuit that ends WITHOUT a capture (soft-escape drop
+      // in npc-brain, or the target went hidden) grants the quarry the same
+      // anti-ambush window a released detainee gets. Capture/detention drops are
+      // already covered by the detention flow (releasePlayerWith re-opens 6 s).
+      if (prevState === 'chase' && prevTarget && res.npc.state === 'return' && !res.npc.targetId) {
+        const tp = this.players.get(prevTarget)
+        if (tp && !tp.detained && now >= tp.releaseGraceUntil) tp.releaseGraceUntil = now + ESCAPE_GRACE_MS
+      }
     }
     // v51 — pack pursuit: an active chase is contagious to nearby officers
-    propagateChase(this.npcs, DETECT.packChaseRadius, now)
+    // v86 — but never onto a graced (hidden) target: the pack-join used to bypass
+    // the release/escape grace and ambush the player anyway.
+    const hiddenIds = new Set<string>()
+    for (const v of views) if (v.hidden) hiddenIds.add(v.id)
+    propagateChase(this.npcs, DETECT.packChaseRadius, now, hiddenIds)
 
     // 2. Searchlight rotation
     for (const sl of this.searchlights) sl.ry += sl.speed * dt
