@@ -1453,6 +1453,83 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
         deco({ kind: 'mountain', x: fx, z: fz, s: fs, h: fh, ry: rnd2() * 6.28, color: '#a7b0ba', variant: rnd2() < 0.5 ? 2 : 0, cw: 2 })
       }
     }
+
+    // ================= v80 DEEP-JUNGLE THICKENING =================
+    // "The deeper you go, the wilder it gets": a depth-weighted extra canopy
+    // pass over everything past the countryside fringe (distOut ≥ 96). ALL
+    // placement here runs on a local mulberry32 PRNG (fixed seed) — the shared
+    // rnd2() stream is never touched, so every coordinate above (graves, crypts,
+    // fields, loot, landmarks) stays byte-identical. Acceptance AND tree scale
+    // ramp with depth: the fringe still reads as open farmland, the interior
+    // closes into a real jungle, and the Vanodyan Deep south gets the densest
+    // canopy on the map. Keep-clears mirror the existing passes (river, trail,
+    // mountains, wild clearings, cow trails, graveyard + mini graves, tracks,
+    // lanes, cross roads, ring roads, disc leash).
+    {
+      const deepRand = (() => {
+        let s = 0x1b873593
+        return () => {
+          s = (s + 0x6d2b79f5) | 0
+          let t = Math.imul(s ^ (s >>> 15), 1 | s)
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+        }
+      })()
+      const MINI80: Array<[number, number]> = [[300, -620], [-30, 62], [-330, -100]]
+      const deepReject = (x: number, z: number) =>
+        distOut(x, z) < 96 ||
+        Math.hypot(x - WORLD_DISC.cx, z - WORLD_DISC.cz) > WORLD_DISC.r - 16 ||
+        onCrossRoad(z) || onLane(z, 3.5) || onTrack(x, z, 6.5) ||
+        inRiver(z) || onTrail(x, z) || nearMountain(x, z) || nearRim(x, z, 7) || nearHills(x, z, 7) ||
+        nearWildClear(x, z, 6) ||
+        nearSeg(x, z, 8, -606, 24, -634, 4) || nearSeg(x, z, 58, -716, 72, -738, 4) ||
+        Math.hypot(x - GRAVEYARD.x, z - GRAVEYARD.z) < GRAVEYARD.r + 12 ||
+        MINI80.some(([cx, cz]) => Math.hypot(x - cx, z - cz) < 30) ||
+        Math.abs(Math.abs(x) - 166) < 11 // the ring roads
+      // depth 0..1 — 0 at the farmland edge, 1 deep in; the wild south stacks a
+      // bonus so the Vanodyan Deep is the wildest point of the map.
+      const depthOf = (x: number, z: number) => {
+        const bo = Math.min(1, Math.max(0, (distOut(x, z) - 96) / 150))
+        const south = Math.min(1, Math.max(0, (-z - 560) / 120))
+        return Math.min(1, Math.max(bo, south * 0.95))
+      }
+      const jtreeH = (x: number, z: number, s: number) => {
+        deco({ kind: 'tree', x, z, s: 1.15 + s, variant: Math.floor(deepRand() * 4) })
+        box(x - 0.4, 0, z - 0.4, x + 0.4, 3.4, z + 0.4)
+      }
+      // canopy — acceptance 0.22 at the fringe → 0.85 deep, scale grows too
+      for (let i = 0; i < 2200; i++) {
+        const x = -436 + deepRand() * 872
+        const z = -798 + deepRand() * 826
+        if (deepReject(x, z)) continue
+        const d = depthOf(x, z)
+        if (deepRand() > 0.22 + 0.63 * d) continue
+        jtreeH(x, z, 0.4 + d * 1.3 + deepRand() * 0.5)
+      }
+      // undergrowth — ferns + shrubs thicken the floor with the same gradient
+      for (let i = 0; i < 700; i++) {
+        const x = -436 + deepRand() * 872
+        const z = -798 + deepRand() * 826
+        if (deepReject(x, z)) continue
+        const d = depthOf(x, z)
+        if (deepRand() > 0.25 + 0.6 * d) continue
+        if (deepRand() < 0.55) deco({ kind: 'fern', x, z, s: 0.75 + d * 0.85 + deepRand() * 0.4, ry: deepRand() * 6.28 })
+        else deco({ kind: 'shrub', x, z, s: 0.5 + d * 0.7 + deepRand() * 0.4, ry: deepRand() * 6.28 })
+      }
+      // fallen logs — mossy deadfall deep in the green (low solid, vaultable)
+      let deepLogs = 0
+      for (let i = 0; i < 420 && deepLogs < 26; i++) {
+        const x = -436 + deepRand() * 872
+        const z = -798 + deepRand() * 826
+        if (deepReject(x, z)) continue
+        if (deepRand() > 0.4 + 0.5 * depthOf(x, z)) continue
+        const len = 2.8 + deepRand() * 2.2
+        deco({ kind: 'log', x, z, w: len, ry: deepRand() * 6.28 })
+        box(x - len * 0.45, 0, z - 0.6, x + len * 0.45, 0.95, z + 0.6)
+        deepLogs++
+      }
+    }
+
     npcs.push(
       { id: 'npcX1', type: 'police', x: -152, z: -96, patrol: [[-152, -96], [-130, -98], [-130, -150], [-152, -148]], zone: 1 },
       { id: 'npcX2', type: 'police', x: 128, z: -86, patrol: [[128, -86], [152, -88], [152, -104], [128, -102]], zone: 1 },

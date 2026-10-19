@@ -625,6 +625,21 @@ export class SkySystem {
     return this.exposureBase * (1 - this.cur.cloudDark * 0.3) + this.flashBoost * 0.5
   }
 
+  // v80 — deep-jungle atmosphere. Called by game AFTER update() each frame with
+  // the player's wildness 0..1: the fog wall closes in and drifts jungle-green
+  // so walking deeper into the wild is FELT. Runs after the weather-set fog is
+  // recomputed, so it modulates (never accumulates on) the base values.
+  private wildFogColor = new THREE.Color(0x24371f)
+  applyWildTint(w: number) {
+    const fog = this.scene.fog as THREE.Fog | null
+    if (!fog) return
+    const k = Math.max(0, Math.min(1, w))
+    if (k < 0.02) return
+    fog.far *= 1 - k * 0.42
+    fog.near *= 1 - k * 0.55
+    fog.color.lerp(this.wildFogColor, k * 0.38)
+  }
+
   get rainLevel() {
     return this.cur.rain
   }

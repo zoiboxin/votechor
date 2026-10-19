@@ -705,9 +705,11 @@ class AudioManagerImpl {
       this.jungleLfoGain = lfoGain
     }
     if (this.jungleGain && this.ctx) {
-      this.jungleGain.gain.setTargetAtTime(level * 0.05, this.ctx.currentTime, 1.6)
+      // v80 — bed doubled (0.05 → 0.10): at the old gain the cicada chorus was
+      // effectively inaudible under the music — players reported "no jungle sound"
+      this.jungleGain.gain.setTargetAtTime(level * 0.1, this.ctx.currentTime, 1.6)
       // the AM wobble scales WITH the bed — subtle at the jungle fringe, eerie deep in
-      this.jungleLfoGain?.gain.setTargetAtTime(level * 0.022, this.ctx.currentTime, 1.6)
+      this.jungleLfoGain?.gain.setTargetAtTime(level * 0.045, this.ctx.currentTime, 1.6)
       if (level <= 0.01 && this.jungleSrc) {
         const src = this.jungleSrc
         const lfo = this.jungleLfo
@@ -717,6 +719,86 @@ class AudioManagerImpl {
         this.jungleLfoGain = null
         try { src.stop(this.ctx.currentTime + 5) } catch { /* already stopped */ }
         try { lfo?.stop(this.ctx.currentTime + 5) } catch { /* already stopped */ }
+      }
+    }
+  }
+
+  // ---------- v80 jungle wind + canopy rustle (looping, gain-driven) ----------
+  private windSrc: AudioBufferSourceNode | null = null
+  private windBodyGain: GainNode | null = null
+  private windLeafGain: GainNode | null = null
+  private windLfos: OscillatorNode[] = []
+  private windLfoDepths: GainNode[] = []
+
+  /** level 0..1 — how deep in the wild the player is. Builds a TWO-BAND wind bed:
+   *  a low body (air pushing through the trunks) and a bright leaf-rustle shimmer
+   *  (canopy leaves), each breathing on its own slow gust LFO so the wind never
+   *  reads as a loop. Same retire-at-zero contract as setRain/setJungle so the
+   *  graph stays clean when the player walks back into the city. */
+  setJungleWind(level: number) {
+    if (!this.ctx || !this.master) return
+    if (level > 0.01 && !this.windSrc) {
+      const len = this.ctx.sampleRate * 3
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
+      const data = buf.getChannelData(0)
+      let last = 0
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1
+        last = (last + 0.18 * white) / 1.18
+        data[i] = last * 2.2 + white * 0.3
+      }
+      const src = this.ctx.createBufferSource()
+      src.buffer = buf
+      src.loop = true
+      // band 1 — wind body: soft low whoosh through the trunks
+      const lp = this.ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.value = 340
+      const bodyG = this.ctx.createGain()
+      bodyG.gain.value = 0
+      src.connect(lp); lp.connect(bodyG); bodyG.connect(this.master)
+      // band 2 — canopy rustle: bright, airy leaf shimmer (the "trees" voice)
+      const bp = this.ctx.createBiquadFilter()
+      bp.type = 'bandpass'
+      bp.frequency.value = 2500
+      bp.Q.value = 0.45
+      const leafG = this.ctx.createGain()
+      leafG.gain.value = 0
+      src.connect(bp); bp.connect(leafG); leafG.connect(this.master)
+      // gusts — two independent LFOs so body and leaves swell out of phase;
+      // depths also scale with level so the whole bed breathes more when deep
+      const lfoBody = this.ctx.createOscillator()
+      lfoBody.frequency.value = 0.06
+      const lfoBodyD = this.ctx.createGain()
+      lfoBodyD.gain.value = 0
+      lfoBody.connect(lfoBodyD); lfoBodyD.connect(bodyG.gain)
+      const lfoLeaf = this.ctx.createOscillator()
+      lfoLeaf.frequency.value = 0.43
+      const lfoLeafD = this.ctx.createGain()
+      lfoLeafD.gain.value = 0
+      lfoLeaf.connect(lfoLeafD); lfoLeafD.connect(leafG.gain)
+      src.start(); lfoBody.start(); lfoLeaf.start()
+      this.windSrc = src
+      this.windBodyGain = bodyG
+      this.windLeafGain = leafG
+      this.windLfos = [lfoBody, lfoLeaf]
+      this.windLfoDepths = [lfoBodyD, lfoLeafD]
+    }
+    if (this.windBodyGain && this.windLeafGain && this.ctx) {
+      this.windBodyGain.gain.setTargetAtTime(level * 0.055, this.ctx.currentTime, 2.2)
+      this.windLeafGain.gain.setTargetAtTime(level * 0.035, this.ctx.currentTime, 1.8)
+      this.windLfoDepths[0]?.gain.setTargetAtTime(level * 0.028, this.ctx.currentTime, 2.2)
+      this.windLfoDepths[1]?.gain.setTargetAtTime(level * 0.022, this.ctx.currentTime, 1.8)
+      if (level <= 0.01 && this.windSrc) {
+        const src = this.windSrc
+        const lfos = this.windLfos
+        this.windSrc = null
+        this.windBodyGain = null
+        this.windLeafGain = null
+        this.windLfos = []
+        this.windLfoDepths = []
+        try { src.stop(this.ctx.currentTime + 6) } catch { /* already stopped */ }
+        for (const l of lfos) { try { l.stop(this.ctx.currentTime + 6) } catch { /* already stopped */ } }
       }
     }
   }

@@ -2,7 +2,8 @@
 // wild south (or the jungle rings), the louder and creepier the forest gets.
 //
 // Two layers, both fully synthesized (see audio.ts):
-//  1. a continuous cicada bed (AudioManager.setJungle) whose level tracks the
+//  1. a continuous cicada bed (AudioManager.setJungle) + a two-band wind/canopy
+//     rustle bed (AudioManager.setJungleWind, v80) whose levels track the
 //     player's "wildness" 0..1;
 //  2. one-shot spatial voices — canopy birds and cicada bursts everywhere in
 //     the jungle, owl hoots and distant big-cat GROWLS reserved for the deep —
@@ -39,10 +40,12 @@ export class JungleAmbience {
   update(dt: number, worldTime: number, px: number, pz: number, yaw: number): number {
     const w = wildnessAt(px, pz)
 
-    // continuous cicada bed — only push on meaningful changes (audio targets smooth)
+    // continuous cicada bed + wind/canopy bed — only push on meaningful changes
+    // (audio targets smooth)
     const level = Math.round(w * 20) / 20
     if (level !== this.lastLevel) {
       AudioManager.setJungle(level)
+      AudioManager.setJungleWind(level)
       this.lastLevel = level
     }
     if (w < 0.05) {
@@ -87,11 +90,12 @@ export class JungleAmbience {
     return w
   }
 
-  /** Match teardown / quit-to-menu: retire the bed immediately. */
+  /** Match teardown / quit-to-menu: retire the beds immediately. */
   reset() {
     this.voiceT = 6
     this.dreadT = 26
     this.lastLevel = -1
     AudioManager.setJungle(0)
+    AudioManager.setJungleWind(0)
   }
 }

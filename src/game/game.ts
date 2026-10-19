@@ -1035,6 +1035,7 @@ export class Game {
     AudioManager.setTheme('menu')
     AudioManager.setCrowdLevel(0.25)
     AudioManager.setRain(0) // v50 — a mid-storm quit used to keep the rain bed looping on the menu
+    this.ambience.reset() // v80 — same contract for the jungle beds: quitting from the wild used to leave cicadas + wind looping on the menu forever
     this.weatherOverride = null // v52 — the menu obeys the settings panel again
     const st = useGameStore.getState()
     st.setUIMode('menu')
@@ -2964,7 +2965,13 @@ export class Game {
     this.engine.renderer.toneMappingExposure = sky.exposure
     this.worldRenderer.setNight(sky.nightFactor, focus)
     if (this.running) {
-      AudioManager.setRain(sky.rainLevel)
+      // v80 — deep-jungle mood: as the wild closes in, the fog thickens and
+      // drifts green so depth is FELT, not just heard (city stays crisp).
+      this.engine.sky.applyWildTint(wildnessAt(focus.x, focus.z))
+      // v80 — rain AUDIO is canopy-scoped: under deep cover the storm fades to a
+      // muffled whisper and the jungle's own voices take over (visual rain stays
+      // world-wide). Fixes the "rain sound keeps playing outside the city" report.
+      AudioManager.setRain(sky.rainLevel * (1 - wildnessAt(focus.x, focus.z) * 0.85))
       this.envTick += dt
       if (this.envTick >= 1) {
       this.envTick = 0
@@ -3158,7 +3165,12 @@ export class Game {
       if (this.bossActiveLocal) AudioManager.setTheme('boss')
       else if (badge) AudioManager.setTheme('chase') // chase bed holds through the fade — the escape isn't over yet
       else AudioManager.setTheme('ambient')
-      AudioManager.setCrowdLevel(badge ? 0.9 : Math.max(0.3, 1 - Math.abs(focus.z) / 560))
+      // v80 — the crowd murmur is a CITY sound: the old Math.max(0.3, …) floor
+      // kept a rain-ish brown-noise hiss looping even deep in the jungle. Now it
+      // fades with distance from the city core AND dies entirely once the wild
+      // takes over (the jungle beds replace it).
+      const wildCrowd = wildnessAt(focus.x, focus.z)
+      AudioManager.setCrowdLevel(badge ? 0.9 : Math.max(0, 1 - Math.abs(focus.z) / 560) * (1 - wildCrowd))
     }
   }
   private lastZoneIdx = -1
@@ -3812,6 +3824,7 @@ export class Game {
     AudioManager.setTheme('menu')
     AudioManager.setCrowdLevel(0.2)
     AudioManager.setRain(0) // v50 — end screen keeps music + faint crowd, never the storm
+    this.ambience.reset() // v80 — jungle beds retire with the match too
     this.weatherOverride = null // v52 — end screen never re-pins a district storm
   }
 
