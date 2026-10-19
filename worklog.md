@@ -2048,3 +2048,23 @@ Stage Summary:
 - BLOCKER (user action required): the fine-grained PAT lacks Contents: Read and write. Fix path: GitHub → Settings → Developer settings → Fine-grained tokens → edit the token → Repository access includes zoiboxin/votechor (or All repositories) → Permissions → Repository permissions → Contents: Read and write → Save. Editing permissions on an existing fine-grained token keeps the same token string. Alternative: issue a classic token with the `repo` scope and send it.
 - Game health re-verified on v77 (boot, world children, zombies, badge, clean quit). No code changes this round — no tsc/lint run needed.
 - Next Task ID: 75.
+
+---
+Task ID: 75
+Agent: Z.ai Code (main session)
+Task: Push the v77 tree to GitHub after the user fixed token permissions, and prove the recovery path with a fresh clone.
+
+Work Log:
+- User reported they set the token's repo content to read & write. Verified no rollback first (/api/version = v77; HEAD dae675f = platform auto-snapshot commit on top of 2c978b7 v77; worklog ends at Task 74).
+- git push -u origin main → SUCCESS: "* [new branch] main -> main", tracking set.
+- Tagged the known-good build: git tag -f v77; git push origin v77 → SUCCESS: "* [new tag] v77 -> v77".
+- ls-remote verification: refs/heads/main = dae675f and refs/tags/v77 = dae675f — both exactly match local HEAD.
+- FRESH-CLONE RECOVERY PROOF: cloned github.com/zoiboxin/votechor.git into /tmp/votechor-recovery-test with the credentialed URL → 40 commits, full history back to "a83c97e Initial commit". Markers verified inside the clone: VC_BUILD 'v77' in src/lib/build-version.ts; src/game/mountain-field.ts + src/game/shared/terrain-noise.ts present; worklog.md ends at Task ID 74; character assets preserved (public/models/votechor-female.glb 95K, votechor-male-rigged.glb 91K, votechor-male-skinned.glb 24M); README.md present. Clone cleaned up afterwards.
+- Gap noted during clone check: .env.example does not exist in the current restored lineage (it belonged to the lost v63-prep timeline). README.md IS present. Adding .env.example is a candidate for a future round; not a blocker (net.ts defaults to /?XTransformPort=3002; DATABASE_URL documented in README).
+- No code changes this round → no tsc/lint/test run needed; game health was fully QA'd in Task 74 (V77 badge, 3,806 children, 34 zombies, clean quit).
+
+Stage Summary:
+- GITHUB RECOVERY MECHANISM IS LIVE: github.com/zoiboxin/votechor now holds the full 40-commit history + tag v77 marking the known-good build. Any future platform rollback = verify era, then: git fetch origin && git reset --hard origin/main (10 seconds).
+- Standing rule going forward: push after EVERY round that changes tracked files (baked into cron 467390's mandate).
+- Minor gap for a future round: .env.example absent from this lineage; consider adding for true clone-and-run.
+- Next Task ID: 76.
