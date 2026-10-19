@@ -1865,6 +1865,11 @@ export class Game {
       case 'strike': this.doBatonStrike(); break // touch button — police role only
       case 'shout': this.doShout(); break
       case 'heal': this.quickHeal(); break
+      // Number keys 1–8 — use the item in that hotbar slot (badge numbers match)
+      case 'slot1': case 'slot2': case 'slot3': case 'slot4':
+      case 'slot5': case 'slot6': case 'slot7': case 'slot8':
+        this.useInventorySlot(Number(a.slice(4)) - 1)
+        break
     }
   }
 
@@ -1909,6 +1914,17 @@ export class Game {
     this.player.playAnim('throw', 0.35)
     AudioManager.play('throw')
     this.syncHud()
+  }
+
+  /** Number keys 1–8 — use the item in that hotbar slot (HUD badge numbers match).
+   *  Consumables consume + the dashboard refreshes through useInventoryItem → syncHud;
+   *  throwables fall through to useInventoryItem's "press Q" guidance; empty slots
+   *  stay silent so raking across the row never spams toasts. */
+  private useInventorySlot(index: number) {
+    if (!this.player || this.player.isDetained || this.player.isDazed) return
+    const it = this.inventory[index]
+    if (!it) return
+    this.useInventoryItem(it.uid)
   }
 
   private useInventoryItem(uid: string) {

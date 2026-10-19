@@ -12,7 +12,7 @@ export interface InputState {
   lookDy: number
 }
 
-type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem' | 'gift' | 'shout' | 'heal' | 'strike'
+type OneShot = 'jump' | 'slide' | 'interact' | 'throw' | 'emote' | 'map' | 'squad' | 'pause' | 'respawn' | 'useItem' | 'gift' | 'shout' | 'heal' | 'strike' | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8'
 
 export class InputManager {
   state: InputState = { forward: 0, strafe: 0, jump: false, sprint: false, slide: false, interact: false, lookDx: 0, lookDy: 0 }
@@ -103,6 +103,11 @@ export class InputManager {
       if (bind('gift')) this.onOneShot?.('gift')
       if (bind('shout')) this.onOneShot?.('shout')
       if (bind('heal')) this.onOneShot?.('heal')
+      // Number keys 1–8 (top row + numpad) use the matching hotbar slot — fixed
+      // binding; the slot badge numbers on the HUD are the documentation. Safe
+      // here: typing surfaces returned early, auto-repeat is ignored above.
+      const slot = /^(?:Digit|Numpad)([1-8])$/.exec(code)
+      if (slot) this.onOneShot?.(`slot${slot[1]}` as OneShot)
     }
     this.sync()
   }
