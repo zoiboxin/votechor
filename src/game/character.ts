@@ -16,7 +16,9 @@ const G = {
   leg: new THREE.BoxGeometry(0.14, 0.5, 0.15),
   hand: new THREE.SphereGeometry(0.06, 6, 5),
   foot: new THREE.BoxGeometry(0.15, 0.09, 0.26),
-  hair: new THREE.SphereGeometry(0.163, 10, 8, 0, Math.PI * 2, 0, Math.PI / 1.9),
+  // task 82: cap rim lifted OFF the brow line (π/1.9 ended the shell at eye-brow
+  // height and shadowed the arch) — π/2.35 ends the shell just above the brows.
+  hair: new THREE.SphereGeometry(0.163, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2.35),
   cap: new THREE.SphereGeometry(0.17, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
   capBrim: new THREE.BoxGeometry(0.2, 0.02, 0.16),
   glasses: new THREE.BoxGeometry(0.24, 0.05, 0.05),
@@ -106,6 +108,14 @@ const G = {
   medalBar: new THREE.BoxGeometry(0.1, 0.032, 0.018),
   beltStrip: new THREE.BoxGeometry(0.445, 0.055, 0.26),
   vestStripeThin: new THREE.BoxGeometry(0.3, 0.035, 0.02),
+  // ---- task 82: gender styles + wardrobe detail geometry ----
+  hairSpike: new THREE.ConeGeometry(0.026, 0.075, 5),
+  mulletBack: new THREE.BoxGeometry(0.24, 0.2, 0.05),
+  bobSide: new THREE.BoxGeometry(0.055, 0.24, 0.075),
+  dressSkirt: new THREE.CylinderGeometry(0.18, 0.3, 0.5, 10),
+  dressHem: new THREE.TorusGeometry(0.295, 0.018, 6, 12),
+  waistBelt: new THREE.TorusGeometry(0.172, 0.024, 6, 12),
+  bottleCyl: new THREE.CylinderGeometry(0.042, 0.042, 0.14, 8),
 }
 
 export interface RigOptions {
@@ -121,14 +131,14 @@ export interface RigOptions {
   isBoss?: boolean
   // ---- round 23: identity + police department slots ----
   gender?: 'male' | 'female'
-  hair?: string      // 'default' | 'buzz' | 'bald' | 'bun' | 'ponytail' | 'curly' | 'long' | 'braid'
+  hair?: string      // male: 'default' | 'buzz' | 'spiky' | 'bald' | 'afro' | 'mullet' · female: 'ponytail' | 'bun' | 'bob' | 'curly' | 'long' | 'braid'
   policeOutfit?: string // POLICE_UNIFORMS key — only read when npcType === 'police'
   policeHat?: string    // 'peak' | 'beret' | 'turban' | 'helmet' | 'none' — only when npcType === 'police'
   // hair default: female rigs get a ponytail, male rigs the classic cut
   // ---- wardrobe expansion slots (default when omitted) ----
   face?: string     // 'clean' | 'beard' | 'moustache' | 'warpaint' | 'scar'
-  outfit?: string   // 'classic' | 'kurta' | 'hoodie' | 'highvis'
-  footwear?: string // 'shoes' | 'boots' | 'chappal' | 'glow'
+  outfit?: string   // 'classic' | 'kurta' | 'highvis' · male: 'hoodie' | 'jacket' · female: 'dress' | 'anarkali'
+  footwear?: string // 'shoes' | 'chappal' | 'glow' · male: 'boots' · female: 'heels'
   gear?: string     // 'none' | 'backpack' | 'jhola' | 'bannerroll' | 'dhol' | 'umbrella'
   held?: string     // 'none' | 'sign' | 'banner' | 'flag' | 'bat' | 'lathi' | 'shoppingbag' | 'megaphone'
   build?: string // 'regular' | 'slim' | 'sturdy' — body shape (normalized inside the rig)
@@ -207,13 +217,12 @@ function faceGeometryFor(skinHex: string, hairHex: string, female: boolean): THR
     place(G.iris, '#4a2c16', side * 0.056, 0.112, 0.152, 1, 1, 0.55)
     place(G.pupil, dark, side * 0.056, 0.112, 0.158, 1, 1, 0.6)
     place(G.spec, '#ffffff', side * 0.05 + side * -0.008, 0.118, 0.1635)
-    // lash line — thin dark arc hugging the top of the eye
-    place(G.lash, dark, side * 0.056, 0.1325, 0.146, 1.05, 1, 1, side * -0.1)
   }
-  // brows — two segments per side forming a gentle expressive arch
+  // brows — task 82 "double eyebrow" fix: the old lash bar sat right under a
+  // two-segment brow arch, stacking TWO dark lines above every eye. One tapered,
+  // tilted bar per side now forms a single clean arch (female: thinner + higher).
   for (const side of [1, -1]) {
-    place(G.brow, shade(hairHex, 10), side * 0.036, 0.156, 0.144, 1, female ? 0.85 : 1, 1, side * -0.07)
-    place(G.brow, shade(hairHex, 4), side * 0.076, 0.161, 0.138, 0.82, female ? 0.8 : 0.95, 1, side * 0.3)
+    place(G.brow, shade(hairHex, 6), side * 0.054, 0.151, 0.148, female ? 0.92 : 1.04, female ? 0.78 : 1, 1, side * -0.13)
   }
   // female-only: soft cheek blush baked as a skin/rose blend (vertex colors only)
   if (female) {
@@ -388,6 +397,15 @@ function shoeGeometry(footwear: string, accent: string): THREE.BufferGeometry {
       add(G.moustache, '#5c3820', 0.042, -0.852, 0.05, 0.34, 0.8, 5.4, 0, -0.38, 0) // V-strap L
       add(G.moustache, '#5c3820', -0.042, -0.852, 0.05, 0.34, 0.8, 5.4, 0, 0.38, 0)  // V-strap R
       add(G.hand, '#4a2c18', 0, -0.845, 0.155, 0.42, 0.42, 0.42) // toe knob
+    } else if (footwear === 'heels') {
+      // task 82 (female book): low block heels — slim sole, pointed toe, heel
+      // peg, toe + ankle straps in the accent, tiny gold buckle
+      add(G.foot, '#3a2418', 0, -0.878, 0.05, 1.02, 0.5, 1.1)     // slim sole
+      add(G.hand, accent, 0, -0.832, 0.115, 1.1, 0.62, 1.15)      // pointed toe box
+      add(G.hand, shade(accent, -30), 0, -0.825, -0.07, 0.34, 1.25, 0.42) // heel peg
+      add(G.moustache, accent, 0, -0.802, 0.055, 1.15, 0.55, 1.5) // toe strap
+      add(G.moustache, accent, 0, -0.745, -0.005, 1.25, 0.5, 1.3) // ankle strap
+      add(G.spec, '#f2c14e', 0.03, -0.798, 0.062, 1.2, 1.2, 1.2)  // buckle sparkle
     } else {
       // sneaker (also the 'glow' base, in night colors)
       const glow = footwear === 'glow'
@@ -547,12 +565,14 @@ export class CharacterRig {
         cap.position.y = 0.13
       }
       this.headPivot.add(cap)
-      // swept fringe for the feminine gathered styles (bun / ponytail / long / braid)
-      const femaleStyle = hairSlot === 'bun' || hairSlot === 'ponytail' || hairSlot === 'long' || hairSlot === 'braid'
+      // swept fringe for the feminine gathered styles (bun / ponytail / long / braid / bob)
+      // task 82: raised from EYE level (0.122 — read as a second brow!) to the
+      // hairline, where it hangs from the cap rim as real bangs.
+      const femaleStyle = hairSlot === 'bun' || hairSlot === 'ponytail' || hairSlot === 'long' || hairSlot === 'braid' || hairSlot === 'bob'
       if (femaleStyle) {
         const fringe = new THREE.Mesh(G.fringe, hair)
-        fringe.position.set(0, 0.122, 0.132)
-        fringe.rotation.x = 0.62
+        fringe.position.set(0, 0.178, 0.126)
+        fringe.rotation.x = 0.4
         fringe.scale.set(0.95, 0.9, 0.8)
         this.headPivot.add(fringe)
       }
@@ -609,6 +629,50 @@ export class CharacterRig {
         band.scale.setScalar(0.62)
         band.position.set(0.105, 0.005, -0.15)
         this.headPivot.add(band)
+      } else if (hairSlot === 'spiky') {
+        // task 82 (male book): gel spikes across the crown
+        for (const [x, z, r] of [[0, 0.1, 0.5], [0.075, 0.05, -0.35], [-0.075, 0.05, 0.35], [0.045, -0.06, -0.15], [-0.045, -0.06, 0.15], [0, -0.02, 0]] as const) {
+          const spike = new THREE.Mesh(G.hairSpike, hair)
+          spike.position.set(x, 0.262, z)
+          spike.rotation.z = r
+          this.headPivot.add(spike)
+        }
+      } else if (hairSlot === 'mullet') {
+        // task 82 (male book): business up front (the cap) + party at the back
+        const back = new THREE.Mesh(G.mulletBack, hair)
+        back.position.set(0, 0.02, -0.135)
+        back.castShadow = true
+        const nape = new THREE.Mesh(G.mulletBack, hair)
+        nape.position.set(0, -0.1, -0.115)
+        nape.scale.set(0.8, 0.7, 0.75)
+        this.headPivot.add(back, nape)
+      } else if (hairSlot === 'afro') {
+        // task 82 (male book): one proud puff pushed back off the face + curl ring
+        const puff = new THREE.Mesh(G.hairBack, hair)
+        puff.position.set(0, 0.17, -0.05)
+        puff.scale.set(1.15, 1.05, 1.15)
+        puff.castShadow = true
+        this.headPivot.add(puff)
+        for (const [x, y, z] of [[0, 0.32, 0], [0.14, 0.26, 0.03], [-0.14, 0.26, 0.03], [0.1, 0.29, -0.12], [-0.1, 0.29, -0.12]] as const) {
+          const curl = new THREE.Mesh(G.curl, hair)
+          curl.position.set(x, y, z)
+          curl.scale.setScalar(0.8)
+          this.headPivot.add(curl)
+        }
+      } else if (hairSlot === 'bob') {
+        // task 82 (female book): chin-length curtain + face-framing side flaps
+        const back = new THREE.Mesh(G.hairBack, hair)
+        back.position.set(0, 0.02, -0.05)
+        back.scale.set(1.08, 0.92, 0.78)
+        back.castShadow = true
+        this.headPivot.add(back)
+        for (const side of [1, -1]) {
+          const flap = new THREE.Mesh(G.bobSide, hair)
+          flap.position.set(side * 0.132, 0.02, 0.052)
+          flap.rotation.z = side * -0.05
+          flap.castShadow = true
+          this.headPivot.add(flap)
+        }
       }
     }
 
@@ -684,10 +748,35 @@ export class CharacterRig {
       const brim = new THREE.Mesh(G.capBrim, mat('#14251c'))
       brim.position.set(0, 0.17, 0.16)
       this.headPivot.add(brim)
+      // task 82 polish: crown button + brim stitch line + side eyelets
+      const button = new THREE.Mesh(G.badge, mat(shade(colors.accent, 18), false))
+      button.position.set(0, 0.345, 0)
+      this.headPivot.add(button)
+      const stitch = new THREE.Mesh(G.moustache, mat(shade(colors.accent, -30), false))
+      stitch.scale.set(1.45, 0.45, 0.5)
+      stitch.position.set(0, 0.163, 0.225)
+      this.headPivot.add(stitch)
+      for (const side of [1, -1]) {
+        const eyelet = new THREE.Mesh(G.spec, mat('#14251c', false))
+        eyelet.scale.setScalar(1.5)
+        eyelet.position.set(side * 0.115, 0.22, 0.105)
+        this.headPivot.add(eyelet)
+      }
     } else if (opts.hat === 'topi') {
       const hat = new THREE.Mesh(G.hat, mat('#f0e6d2'))
       hat.position.y = 0.24
       this.headPivot.add(hat)
+      // task 82 polish: ribbon band + gold front emblem
+      const band = new THREE.Mesh(G.dholRim, mat('#8c1f28'))
+      band.rotation.x = Math.PI / 2
+      band.scale.setScalar(1.28)
+      band.position.y = 0.195
+      this.headPivot.add(band)
+      const emblem = new THREE.Mesh(G.badge, mat('#d4a017', false))
+      emblem.material.metalness = 0.55
+      emblem.rotation.x = Math.PI / 2
+      emblem.position.set(0, 0.26, 0.2)
+      this.headPivot.add(emblem)
     } else if (opts.hat === 'cone') {
       // Traffic Cone of Shame — earned through 10 glorious detentions
       const cone = new THREE.Mesh(G.cone, mat('#e8641c'))
@@ -729,6 +818,21 @@ export class CharacterRig {
       const knot = new THREE.Mesh(G.bandanaKnot, mat(colors.accent))
       knot.position.set(0, 0.14, -0.16)
       this.headPivot.add(knot)
+      // task 82 polish: knotted tails + wax-print dots
+      for (const side of [1, -1]) {
+        const tail = new THREE.Mesh(G.bobSide, mat(colors.accent))
+        tail.position.set(side * 0.045, 0.045, -0.17)
+        tail.rotation.x = 0.35
+        tail.rotation.z = side * 0.18
+        tail.scale.set(0.8, 0.7, 0.55)
+        this.headPivot.add(tail)
+      }
+      for (const [x, z] of [[0.105, 0.115], [-0.105, 0.115], [0, 0.155]] as const) {
+        const dot = new THREE.Mesh(G.spec, mat('#f5efdc', false))
+        dot.scale.setScalar(1.7)
+        dot.position.set(x, 0.2, z)
+        this.headPivot.add(dot)
+      }
     } else if (opts.hat === 'hardhat') {
       // Site Hardhat — yellow dome + brim + ridge
       const dome = new THREE.Mesh(G.hardhat, mat('#f2c14e'))
@@ -816,6 +920,54 @@ export class CharacterRig {
         stripe.position.y = y
         this.torsoPivot.add(stripe)
       }
+    } else if (outfitSlot === 'jacket') {
+      // task 82 (male book): denim layer — folded collar, half-zip placket,
+      // chest pockets and a shoulder yoke over the archetype tee
+      const denim = mat(shade(colors.shirt, -26))
+      const denimDark = mat(shade(colors.shirt, -44))
+      for (const side of [1, -1]) {
+        const collar = new THREE.Mesh(G.pocket, denim)
+        collar.position.set(side * 0.075, 0.5, 0.115)
+        collar.scale.set(0.42, 0.5, 0.6)
+        collar.rotation.z = side * 0.5
+        collar.rotation.x = 0.25
+        this.torsoPivot.add(collar)
+        const chestPocket = new THREE.Mesh(G.pocket, denim)
+        chestPocket.position.set(side * 0.13, 0.3, 0.125)
+        chestPocket.scale.set(0.55, 0.62, 0.5)
+        this.torsoPivot.add(chestPocket)
+      }
+      const placket = new THREE.Mesh(G.tie, denimDark)
+      placket.position.set(0, 0.26, 0.128)
+      placket.scale.set(0.5, 0.85, 1)
+      this.torsoPivot.add(placket)
+      const zip = new THREE.Mesh(G.scar, mat('#9aa3ad', false))
+      zip.material.metalness = 0.5
+      zip.material.roughness = 0.4
+      zip.scale.set(0.9, 4.6, 0.8)
+      zip.position.set(0, 0.28, 0.142)
+      this.torsoPivot.add(zip)
+      const yoke = new THREE.Mesh(G.vestStripeThin, denim)
+      yoke.position.set(0, 0.435, 0.1)
+      yoke.scale.set(1.45, 1.15, 1.35)
+      this.torsoPivot.add(yoke)
+    } else if (outfitSlot === 'dress' || outfitSlot === 'anarkali') {
+      // task 82 (female book): A-line skirt from the waist + accent belt + hem
+      const long = outfitSlot === 'anarkali'
+      const skirt = new THREE.Mesh(G.dressSkirt, shirt)
+      skirt.position.y = long ? -0.33 : -0.27
+      skirt.scale.set(1, long ? 1.35 : 1, 1)
+      skirt.castShadow = true
+      this.torsoPivot.add(skirt)
+      const hem = new THREE.Mesh(G.dressHem, mat(colors.accent))
+      hem.rotation.x = Math.PI / 2
+      hem.position.y = long ? -0.665 : -0.52
+      hem.scale.setScalar(long ? 1.12 : 1)
+      this.torsoPivot.add(hem)
+      const belt = new THREE.Mesh(G.waistBelt, mat(colors.accent))
+      belt.rotation.x = Math.PI / 2
+      belt.position.y = -0.03
+      this.torsoPivot.add(belt)
     }
 
     // arms — pivot at shoulder; sleeve (shirt) + forearm+fist (skin), both merged
@@ -874,6 +1026,33 @@ export class CharacterRig {
       const flap = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.03), mat('#2c2c2c'))
       flap.position.set(0, 0.38, -0.275)
       this.torsoPivot.add(flap)
+      // task 82 polish: rounded top lid, side bottle pocket, chest straps +
+      // shoulder straps visible from the front, gold buckle pin on the flap
+      const lid = new THREE.Mesh(G.hand, mat(shade(bpColor, -14)))
+      lid.position.set(0, 0.455, -0.21)
+      lid.scale.set(1.75, 0.8, 0.95)
+      this.torsoPivot.add(lid)
+      const bottle = new THREE.Mesh(G.bottleCyl, mat('#3d5a80'))
+      bottle.position.set(0.18, 0.24, -0.2)
+      this.torsoPivot.add(bottle)
+      const bottleCap = new THREE.Mesh(G.spec, mat('#c9c2ae', false))
+      bottleCap.scale.setScalar(2.6)
+      bottleCap.position.set(0.18, 0.33, -0.2)
+      this.torsoPivot.add(bottleCap)
+      for (const side of [1, -1]) {
+        const strap = new THREE.Mesh(G.strap, mat(shade(bpColor, -22)))
+        strap.position.set(side * 0.09, 0.3, 0.135)
+        strap.scale.set(0.6, 0.85, 0.8)
+        this.torsoPivot.add(strap)
+      }
+      const chest = new THREE.Mesh(G.vestStripeThin, mat(shade(bpColor, -22)))
+      chest.position.set(0, 0.36, 0.135)
+      chest.scale.set(0.75, 0.75, 0.7)
+      this.torsoPivot.add(chest)
+      const pin = new THREE.Mesh(G.badge, mat('#d4a017', false))
+      pin.material.metalness = 0.5
+      pin.position.set(0, 0.385, -0.288)
+      this.torsoPivot.add(pin)
     } else if (gearSlot === 'jhola') {
       const strap = new THREE.Mesh(G.strap, mat('#8a6b4a'))
       strap.position.set(0.08, 0.24, 0.13)
@@ -883,6 +1062,22 @@ export class CharacterRig {
       bag.position.set(-0.26, -0.06, 0.04)
       bag.castShadow = true
       this.torsoPivot.add(bag)
+      // task 82 polish: cloth fold lines + stitched strap edge + buttoned flap
+      for (const dy of [0.02, -0.03]) {
+        const fold = new THREE.Mesh(G.scar, mat(shade('#c9b98a', -18)))
+        fold.scale.set(12, 0.35, 0.5)
+        fold.position.set(-0.26, -0.06 + dy, 0.082)
+        this.torsoPivot.add(fold)
+      }
+      const stitch = new THREE.Mesh(G.scar, mat('#6b4a2e'))
+      stitch.scale.set(0.5, 5.2, 0.6)
+      stitch.rotation.z = 0.55
+      stitch.position.set(0.095, 0.24, 0.148)
+      this.torsoPivot.add(stitch)
+      const button = new THREE.Mesh(G.spec, mat('#8c1f28', false))
+      button.scale.setScalar(1.6)
+      button.position.set(-0.26, 0, 0.085)
+      this.torsoPivot.add(button)
     } else if (gearSlot === 'bannerroll') {
       const roll = new THREE.Mesh(G.bannerRoll, mat('#e8e2d0'))
       roll.rotation.z = Math.PI / 2.3
@@ -893,6 +1088,16 @@ export class CharacterRig {
       rollEdge.rotation.z = Math.PI / 2.3
       rollEdge.position.set(-0.24, 0.36, -0.2)
       this.torsoPivot.add(rollEdge)
+      // task 82 polish: binding strap around the roll + paper core on the end
+      const bind = new THREE.Mesh(G.hairTie, mat('#8c1f28'))
+      bind.rotation.y = Math.PI / 2
+      bind.scale.setScalar(1.6)
+      bind.position.set(0.1, 0.25, -0.2)
+      this.torsoPivot.add(bind)
+      const core = new THREE.Mesh(G.spec, mat('#b8a888', false))
+      core.scale.setScalar(3.2)
+      core.position.set(-0.245, 0.36, -0.2)
+      this.torsoPivot.add(core)
     } else if (gearSlot === 'dhol') {
       const drum = new THREE.Mesh(G.dhol, mat('#b3854a'))
       drum.rotation.x = Math.PI / 2
@@ -941,6 +1146,22 @@ export class CharacterRig {
       const texMesh2 = texMesh.clone()
       texMesh2.rotation.y = Math.PI
       this.signGroup.add(pole, board, texMesh, texMesh2)
+      // task 82 polish: rear cross-brace, corner bolts, pole grip wrap
+      const brace = new THREE.Mesh(G.scar, mat('#8a6b4a'))
+      brace.scale.set(0.5, 6.5, 0.55)
+      brace.rotation.z = 0.62
+      brace.position.set(0, 0.55, -0.014)
+      this.signGroup.add(brace)
+      for (const [bx, by] of [[-0.21, 0.66], [0.21, 0.66], [-0.21, 0.44], [0.21, 0.44]] as const) {
+        const bolt = new THREE.Mesh(G.spec, mat('#3a2d1a', false))
+        bolt.scale.setScalar(1.4)
+        bolt.position.set(bx, by, 0.013)
+        this.signGroup.add(bolt)
+      }
+      const grip = new THREE.Mesh(G.moustache, mat('#5c3a24'))
+      grip.scale.set(0.5, 1.1, 1.6)
+      grip.position.set(0, 0.06, 0)
+      this.signGroup.add(grip)
       this.signGroup.position.y = -0.45
       this.armR.add(this.signGroup)
       this.armR.rotation.x = -0.9
@@ -955,6 +1176,12 @@ export class CharacterRig {
       cloth.position.set(-0.36, 0.78, 0)
       cloth.castShadow = true
       this.heldProp.add(pole, cloth)
+      // task 82 polish: gold finial on the pole top
+      const finial = new THREE.Mesh(G.spec, mat('#f2c14e', false))
+      finial.material.metalness = 0.5
+      finial.scale.setScalar(2.2)
+      finial.position.set(0, 0.865, 0)
+      this.heldProp.add(finial)
       const backCloth = cloth.clone()
       backCloth.rotation.y = Math.PI
       backCloth.position.z = -0.005
@@ -971,6 +1198,11 @@ export class CharacterRig {
       const cloth = new THREE.Mesh(G.flagCloth, new THREE.MeshStandardMaterial({ color: colors.accent, side: THREE.DoubleSide, roughness: 0.9 }))
       cloth.position.set(0.15, 0.72, 0)
       this.heldProp.add(pole, cloth)
+      // task 82 polish: contrast stripe riding the rippling cloth (child mesh)
+      const stripe = new THREE.Mesh(G.flagCloth, mat('#f5efdc'))
+      stripe.scale.set(1.01, 0.28, 1)
+      stripe.position.set(0, -0.055, 0.004)
+      cloth.add(stripe)
       const tip = new THREE.Mesh(G.hand, mat('#f2c14e', false))
       tip.scale.setScalar(0.5)
       tip.position.y = 0.85
@@ -988,6 +1220,14 @@ export class CharacterRig {
       const knob = new THREE.Mesh(G.batKnob, mat('#8a6b4a'))
       knob.position.y = 0
       this.heldProp.add(barrel, knob)
+      // task 82 polish: tape rings on the grip
+      for (const gy of [0.06, 0.1]) {
+        const tape = new THREE.Mesh(G.hairTie, mat('#2c2c2c'))
+        tape.rotation.x = Math.PI / 2
+        tape.scale.setScalar(1.15)
+        tape.position.y = gy
+        this.heldProp.add(tape)
+      }
       this.heldProp.rotation.x = -0.45
       this.heldProp.position.y = -0.44
       this.armR.add(this.heldProp)
@@ -998,6 +1238,14 @@ export class CharacterRig {
       stick.position.y = 0.3
       stick.castShadow = true
       this.heldProp.add(stick)
+      // task 82 polish: grip tape rings near the top
+      for (const gy of [0.5, 0.54]) {
+        const tape = new THREE.Mesh(G.hairTie, mat('#2c2c2c'))
+        tape.rotation.x = Math.PI / 2
+        tape.scale.setScalar(0.8)
+        tape.position.y = gy
+        this.heldProp.add(tape)
+      }
       this.heldProp.rotation.x = -0.35
       this.heldProp.position.y = -0.44
       this.armR.add(this.heldProp)
@@ -1031,6 +1279,12 @@ export class CharacterRig {
       handle.position.set(0, -0.04, 0)
       handle.rotation.x = Math.PI / 2
       this.heldProp.add(cone, body, handle)
+      // task 82 polish: lanyard loop under the handle
+      const loop = new THREE.Mesh(G.hairTie, mat('#3a4046'))
+      loop.scale.setScalar(1.15)
+      loop.position.set(0, -0.14, 0.05)
+      loop.rotation.x = 0.5
+      this.heldProp.add(loop)
       this.heldProp.position.y = -0.48
       this.armR.add(this.heldProp)
       this.armR.rotation.x = -1.35

@@ -64,6 +64,9 @@ const OUTFIT_TINTS: Record<string, { shirt?: string; pants?: string; accent?: st
   suit: { shirt: '#d9c8b4', pants: '#43485a', accent: '#8c1f28' },
   hoodie: { shirt: '#3a4046', pants: '#2b3036', accent: '#2e6e4e' },
   highvis: { shirt: '#dff03c', pants: '#3a3f46', accent: '#6b7280' },
+  // task 82 gender-book outfits (the GLB path is kill-switched off, tables kept in sync)
+  jacket: { shirt: '#4a5f78', pants: '#3a3f46', accent: '#c9a06a' },
+  anarkali: { shirt: '#8c1f28', pants: '#8c1f28', accent: '#f2c14e' },
 }
 
 const FOOTWEAR_TINTS: Record<string, string> = {
@@ -71,6 +74,7 @@ const FOOTWEAR_TINTS: Record<string, string> = {
   boots: '#6b4a2e',
   chappal: '#9a6a3e',
   glow: '#2a3038',
+  heels: '#8c3a4e', // task 82 female book
 }
 
 type LooseCosmetics = unknown

@@ -167,7 +167,9 @@ export interface Settings {
   minimapRotate: boolean
   /** accessibility — dampens camera shake on hits/explosions */
   reducedShake: boolean
-  /** High-Fi GLB player model (keyframed animation clips) — auto-falls back to the procedural rig when unavailable */
+  /** High-Fi GLB player model (keyframed animation clips) — auto-falls back to the procedural rig when unavailable.
+   *  task 82: the GLB backend is DISABLED platform-wide (GLB_CHARACTERS_ENABLED below) — the procedural
+   *  rig is the active character because it renders the full wardrobe. The setting stays for the return. */
   hiFiModel: boolean
   /** Distance culling for static world geometry (big draw-call win). Off = the
    *  pre-optimization rendering path (everything always drawn). The culler also
@@ -422,6 +424,15 @@ export const DEFAULT_KEYBINDS: Record<string, string> = {
   gift: 'KeyF', heal: 'KeyH', shout: 'KeyV',
 }
 
+/**
+ * task 82 KILL-SWITCH — GLB characters are disabled by user request ("disable glb
+ * character for now just work this"): the customization preview + every player now
+ * use the procedural rig, whose wardrobe (gender styles, outfits, footwear, gear)
+ * is the product. Flip to true to re-enable the v83 skinned-GLB path (game.ts
+ * gates tryAttachHiFi / attachRemoteGlb / applyHiFiSetting on this flag).
+ */
+export const GLB_CHARACTERS_ENABLED = false
+
 const defaultSettings: Settings = {
   masterVolume: 0.8, musicVolume: 0.5, sfxVolume: 0.9,
   mouseSensitivity: 1, invertY: false, quality: 'auto',
@@ -432,15 +443,10 @@ const defaultSettings: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  /** DEFAULT ON (v83) — v33 shipped it OFF because the High-Fi GLB dropped every
-   *  wardrobe slot (fixed generic mesh, palette tint only). That cause is GONE:
-   *  the male path now loads the textured skinned hero asset and styling runs
-   *  through resolveAvatarLook → applyAvatarLook (normalized tint + hair / hat /
-   *  face / glasses / footwear / back gear / held items parented to the actual
-   *  BONES, both for the local player and remotes). What you style in the
-   *  wardrobe is what the High-Fi body wears. Opt-out stays in Options →
-   *  Character Model for weak devices (procedural rig unchanged). */
-  hiFiModel: true,
+  /** task 82: default OFF — GLB characters are platform-disabled (see
+   *  GLB_CHARACTERS_ENABLED). The procedural rig renders the full wardrobe. When
+   *  the GLB path returns, flip the kill-switch AND this default together. */
+  hiFiModel: false,
   /** v50 DEFAULT ON — the measured cost of leaving it OFF is ~4,100 draw calls /
    *  ~260k triangles every frame (2,975 static meshes, 61% of them beyond the fog
    *  wall where they are invisible anyway). That is the "game feels heavy" report.

@@ -33,7 +33,7 @@ import {
   FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS, GRAVEYARD, WORLD_DISC,
 } from './shared/constants'
 import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
-import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
+import { useGameStore, registerUIActions, GLB_CHARACTERS_ENABLED, type MatchSummary } from '@/lib/game-store'
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
 import { GLBAssetManager, type GLBInstance } from './glb'
@@ -1239,6 +1239,7 @@ export class Game {
    * normalized tint + hair/hat/face/glasses/footwear/gear/held attached to bones).
    */
   private async attachRemoteGlb(id: string, r: RemoteEntry) {
+    if (!GLB_CHARACTERS_ENABLED) return // task 82: GLB characters disabled — procedural rigs stay
     if (r.glb || !r.rig) return
     r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
     const look = resolveAvatarLook(r.cosmetics, r.archetype, r.role ?? 'protector')
@@ -1282,6 +1283,7 @@ export class Game {
    * the same resolveAvatarLook → applyAvatarLook path so both backends match.
    */
   private async tryAttachHiFi() {
+    if (!GLB_CHARACTERS_ENABLED) return // task 82: GLB characters disabled — procedural rig is the player
     const p = this.player
     if (!p || p.glb || !this.hiFiPalette) return
     const look = resolveAvatarLook(this.store.profile?.cosmetics, this.archetype, this.role)
@@ -1303,8 +1305,11 @@ export class Game {
     void inst; void pal // v83: superseded by applyAvatarLook (wardrobe pipeline) — kept for reference removal in a later pass
   }
 
-  /** Live settings toggle — swap between the GLB and procedural rigs mid-match. */
+  /** Live settings toggle — swap between the GLB and procedural rigs mid-match.
+   *  task 82: GLB_CHARACTERS_ENABLED=false pins this to OFF regardless of the
+   *  stored setting, so a stale `hiFiModel: true` can never spawn GLB bodies. */
   private applyHiFiSetting(on: boolean) {
+    if (!GLB_CHARACTERS_ENABLED) on = false
     const p = this.player
     if (!p) return
     if (!on) {

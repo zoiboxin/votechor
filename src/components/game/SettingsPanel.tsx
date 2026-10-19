@@ -228,21 +228,24 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Model</div>
-                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig = your full customized look (hat, hair, shoes…). High-Fi = generic GLB (wardrobe hidden)</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig = your full customized look (hat, hair, shoes…). High-Fi is parked for now — the wardrobe lives on the Classic rig</div>
               </div>
+              {/* task 82: GLB characters are platform-disabled (GLB_CHARACTERS_ENABLED = false).
+                  The toggle stays readable but the High-Fi option is parked. */}
               <Select
-                value={settings.hiFiModel ? 'hifi' : 'classic'}
+                value="classic"
                 onValueChange={(v) => {
-                  update({ hiFiModel: v === 'hifi' })
-                  notify(v === 'hifi' ? 'High-Fi GLB on — your wardrobe items are hidden on this fixed model' : 'Classic rig on — your full customized look is back', 'info')
+                  if (v === 'hifi') return // kill-switch: option is parked
+                  update({ hiFiModel: false })
+                  notify('Classic rig on — your full customized look is front and center', 'info')
                 }}
               >
                 <SelectTrigger className="w-40 rounded-xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] font-black">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="vc-paper border-2 border-[#1c1a17]/70">
-                  <SelectItem value="hifi" className="font-bold">High-Fi GLB</SelectItem>
                   <SelectItem value="classic" className="font-bold">Classic Rig</SelectItem>
+                  <SelectItem value="hifi" disabled className="font-bold text-[#1c1a17]/40">High-Fi GLB (soon)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

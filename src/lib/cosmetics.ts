@@ -16,6 +16,8 @@ export interface CosmeticItem {
   emoji: string
   desc: string
   unlock: CosmeticUnlock
+  /** task 82: gender-exclusive styling — undefined = wearable by both. */
+  gender?: 'male' | 'female'
 }
 
 export const HAT_CATALOG: CosmeticItem[] = [
@@ -261,15 +263,24 @@ export const SKIN_TONES: { id: string; hex: string; label: string }[] = [
   { id: 'midnight', hex: '#6b4226', label: 'Midnight Filter Coffee' },
 ]
 
+// task 82: the two genders carry DISTINCT style books — switching gender swaps
+// the whole catalog (hair / outfit / footwear), so each look reads unmistakably
+// male or female at march distance.
 export const HAIR_CATALOG: CosmeticItem[] = [
-  { id: 'default', kind: 'hair', label: 'Classic Cut', emoji: '💇', desc: 'The standard march haircut.', unlock: { type: 'free' } },
-  { id: 'buzz', kind: 'hair', label: 'Buzz Cut', emoji: '✂️', desc: 'Low maintenance, high defiance.', unlock: { type: 'free' } },
-  { id: 'bald', kind: 'hair', label: 'Bald & Bold', emoji: '🥚', desc: 'Aerodynamic. Committee-proof.', unlock: { type: 'free' } },
-  { id: 'bun', kind: 'hair', label: 'Top Bun', emoji: '🧑‍🦱', desc: 'Keeps hair out of the slogan painting.', unlock: { type: 'free' } },
-  { id: 'ponytail', kind: 'hair', label: 'Ponytail', emoji: '🐎', desc: 'Swings with every chant.', unlock: { type: 'free' } },
-  { id: 'curly', kind: 'hair', label: 'Curly Top', emoji: '🌀', desc: 'Maximum volume for maximum noise.', unlock: { type: 'level', level: 2 } },
-  { id: 'long', kind: 'hair', label: 'Flowing Long', emoji: '👩', desc: 'Wind-machine ready at all times.', unlock: { type: 'level', level: 3 } },
-  { id: 'braid', kind: 'hair', label: 'Side Braid', emoji: '🌾', desc: 'Woven with protest songs.', unlock: { type: 'level', level: 4 } },
+  // — male book —
+  { id: 'default', kind: 'hair', label: 'Classic Cut', emoji: '💇', desc: 'The standard march haircut.', unlock: { type: 'free' }, gender: 'male' },
+  { id: 'buzz', kind: 'hair', label: 'Buzz Cut', emoji: '✂️', desc: 'Low maintenance, high defiance.', unlock: { type: 'free' }, gender: 'male' },
+  { id: 'spiky', kind: 'hair', label: 'Street Spikes', emoji: '⚡', desc: 'Gel budget: exceeded. Purpose: clear.', unlock: { type: 'free' }, gender: 'male' },
+  { id: 'bald', kind: 'hair', label: 'Bald & Bold', emoji: '🥚', desc: 'Aerodynamic. Committee-proof.', unlock: { type: 'free' }, gender: 'male' },
+  { id: 'afro', kind: 'hair', label: 'Protest Afro', emoji: '🌟', desc: 'Maximum volume for maximum noise.', unlock: { type: 'level', level: 2 }, gender: 'male' },
+  { id: 'mullet', kind: 'hair', label: 'Party Mullet', emoji: '🦉', desc: 'Business up front, barricade behind.', unlock: { type: 'level', level: 3 }, gender: 'male' },
+  // — female book —
+  { id: 'ponytail', kind: 'hair', label: 'Ponytail', emoji: '🐎', desc: 'Swings with every chant.', unlock: { type: 'free' }, gender: 'female' },
+  { id: 'bun', kind: 'hair', label: 'Top Bun', emoji: '🧑‍🦱', desc: 'Keeps hair out of the slogan painting.', unlock: { type: 'free' }, gender: 'female' },
+  { id: 'bob', kind: 'hair', label: 'March Bob', emoji: '💬', desc: 'Chin-length and uncompromising.', unlock: { type: 'free' }, gender: 'female' },
+  { id: 'curly', kind: 'hair', label: 'Curly Locks', emoji: '🌀', desc: 'Bounce that out-chants the drums.', unlock: { type: 'level', level: 2 }, gender: 'female' },
+  { id: 'long', kind: 'hair', label: 'Flowing Long', emoji: '👩', desc: 'Wind-machine ready at all times.', unlock: { type: 'level', level: 3 }, gender: 'female' },
+  { id: 'braid', kind: 'hair', label: 'Side Braid', emoji: '🌾', desc: 'Woven with protest songs.', unlock: { type: 'level', level: 4 }, gender: 'female' },
 ]
 
 export const FACE_CATALOG: CosmeticItem[] = [
@@ -281,18 +292,46 @@ export const FACE_CATALOG: CosmeticItem[] = [
 ]
 
 export const OUTFIT_CATALOG: CosmeticItem[] = [
+  // shared staples
   { id: 'classic', kind: 'outfit', label: 'Classic Khaki', emoji: '👕', desc: 'The standard protest uniform.', unlock: { type: 'free' } },
   { id: 'kurta', kind: 'outfit', label: 'Protest Kurta', emoji: '🥻', desc: 'Traditional fit for toppling traditions.', unlock: { type: 'level', level: 2 } },
-  { id: 'hoodie', kind: 'outfit', label: 'Revolution Hoodie', emoji: '🧥', desc: 'Hood up, committee down.', unlock: { type: 'level', level: 6 } },
   { id: 'highvis', kind: 'outfit', label: 'High-Vis Vest', emoji: '🦺', desc: 'Safety first. Chaos second.', unlock: { type: 'achievement', code: 'rescuer' } },
+  // male-exclusive
+  { id: 'hoodie', kind: 'outfit', label: 'Revolution Hoodie', emoji: '🧥', desc: 'Hood up, committee down.', unlock: { type: 'level', level: 6 }, gender: 'male' },
+  { id: 'jacket', kind: 'outfit', label: 'Denim Jacket', emoji: '🧢', desc: 'Collar up. Zip stuck at 70% on principle.', unlock: { type: 'level', level: 3 }, gender: 'male' },
+  // female-exclusive
+  { id: 'dress', kind: 'outfit', label: 'March Dress', emoji: '👗', desc: 'A-line liberty with an accent belt.', unlock: { type: 'free' }, gender: 'female' },
+  { id: 'anarkali', kind: 'outfit', label: 'Anarkali Flair', emoji: '🌅', desc: 'Full-skirted grace for long marches.', unlock: { type: 'level', level: 6 }, gender: 'female' },
 ]
 
 export const FOOTWEAR_CATALOG: CosmeticItem[] = [
   { id: 'shoes', kind: 'footwear', label: 'Protest Sneakers', emoji: '👟', desc: 'Broken in at exactly one rally.', unlock: { type: 'free' } },
-  { id: 'boots', kind: 'footwear', label: 'Marching Boots', emoji: '🥾', desc: 'Stomp approved by three aunties.', unlock: { type: 'free' } },
   { id: 'chappal', kind: 'footwear', label: 'Trusted Chappal', emoji: '🩴', desc: 'Flies straighter than any placard.', unlock: { type: 'level', level: 2 } },
   { id: 'glow', kind: 'footwear', label: 'Neon Runners', emoji: '✨', desc: 'LED soles for midnight marches.', unlock: { type: 'level', level: 8 } },
+  // male-exclusive
+  { id: 'boots', kind: 'footwear', label: 'Marching Boots', emoji: '🥾', desc: 'Stomp approved by three aunties.', unlock: { type: 'free' }, gender: 'male' },
+  // female-exclusive
+  { id: 'heels', kind: 'footwear', label: 'March Heels', emoji: '👠', desc: 'Clicks louder than the lathi charge.', unlock: { type: 'free' }, gender: 'female' },
 ]
+
+/** Catalog for one wardrobe slot filtered to a gender (task 82) — items without
+ *  a gender tag are unisex and always included. */
+export function itemsForKind(kind: CosmeticKind, gender: 'male' | 'female'): CosmeticItem[] {
+  return CATALOGS[kind].filter((i) => !i.gender || i.gender === gender)
+}
+
+/** True if `id` exists in the gender-filtered catalog for `kind`. */
+export function itemFitsGender(kind: CosmeticKind, id: string, gender: 'male' | 'female'): boolean {
+  return itemsForKind(kind, gender).some((i) => i.id === id)
+}
+
+/** Gender-aware fallback for a slot — used when a saved pick belongs to the
+ *  other gender's book (e.g. boots on a female rig after a gender swap). */
+export function genderDefaultFor(kind: 'hair' | 'outfit' | 'footwear', gender: 'male' | 'female'): string {
+  if (kind === 'hair') return gender === 'female' ? 'ponytail' : 'default'
+  if (kind === 'outfit') return 'classic'
+  return 'shoes'
+}
 
 export const GEAR_CATALOG: CosmeticItem[] = [
   { id: 'none', kind: 'gear', label: 'Empty Back', emoji: '🚫', desc: 'Travels light, protests heavy.', unlock: { type: 'free' } },
@@ -451,24 +490,26 @@ export function sanitizeCosmetics(raw: unknown): Record<string, string | boolean
 }
 
 /** Deterministic-ish random free-tier look for season bots — variety without unlock logic.
- *  Female bots lean hard into the ponytail (the signature feminine style). */
+ *  task 82: hair/outfit/footwear draw from the GENDER's own book so bot crowds
+ *  read male/female at a glance. */
 export function randomFreeCosmetics(rand: () => number = Math.random): Record<string, string | boolean> {
   const pick = (arr: CosmeticItem[]) => {
     const free = arr.filter((i) => i.unlock.type === 'free')
     return free[Math.floor(rand() * free.length)]?.id
   }
   const female = rand() < 0.5
+  const gender: 'male' | 'female' = female ? 'female' : 'male'
   const hairRoll = rand()
   const out: Record<string, string | boolean> = {
     hat: pick(CATALOGS.hat),
     hair: female
-      ? (hairRoll < 0.5 ? 'ponytail' : hairRoll < 0.8 ? 'bun' : pick(CATALOGS.hair))
-      : pick(CATALOGS.hair),
-    gender: female ? 'female' : 'male',
+      ? (hairRoll < 0.5 ? 'ponytail' : hairRoll < 0.8 ? 'bun' : pick(itemsForKind('hair', gender)))
+      : pick(itemsForKind('hair', gender)),
+    gender,
     face: pick(CATALOGS.face),
     build: pick(CATALOGS.build),
-    outfit: pick(CATALOGS.outfit),
-    footwear: pick(CATALOGS.footwear),
+    outfit: pick(itemsForKind('outfit', gender)),
+    footwear: pick(itemsForKind('footwear', gender)),
     gear: pick(CATALOGS.gear),
     held: pick(CATALOGS.held),
   }

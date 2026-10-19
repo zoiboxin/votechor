@@ -9,7 +9,8 @@ import { ARCHETYPES, ACHIEVEMENTS } from '@/game/shared/constants'
 import {
   HAT_CATALOG, HAIR_CATALOG, FACE_CATALOG, BUILD_CATALOG, OUTFIT_CATALOG, FOOTWEAR_CATALOG, GEAR_CATALOG, HELD_CATALOG,
   POLICE_OUTFIT_CATALOG, POLICE_HAT_CATALOG,
-  SKIN_TONES, unlockLabel, anyItemIsUnlocked, type CosmeticItem, type CosmeticKind,
+  SKIN_TONES, unlockLabel, anyItemIsUnlocked, itemsForKind, itemFitsGender, genderDefaultFor,
+  type CosmeticItem, type CosmeticKind,
 } from '@/lib/cosmetics'
 import { ArrowLeft, Check, Dices, Gem, Lock, Save, Shield, Siren, Unlock } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -25,11 +26,11 @@ interface SlotSpec {
 
 const SLOTS: SlotSpec[] = [
   { kind: 'hat', label: 'Headgear', hint: 'Caps, cones & crowns', catalog: HAT_CATALOG },
-  { kind: 'hair', label: 'Hair', hint: 'Cuts, buns & braids', catalog: HAIR_CATALOG },
+  { kind: 'hair', label: 'Hair', hint: 'Your gender’s own style book', catalog: HAIR_CATALOG },
   { kind: 'face', label: 'Face', hint: 'Beards & battle paint', catalog: FACE_CATALOG },
   { kind: 'build', label: 'Build', hint: 'Body shape & fit', catalog: BUILD_CATALOG },
-  { kind: 'outfit', label: 'Outfit', hint: 'Dress for the cause', catalog: OUTFIT_CATALOG },
-  { kind: 'footwear', label: 'Footwear', hint: 'March in style', catalog: FOOTWEAR_CATALOG },
+  { kind: 'outfit', label: 'Outfit', hint: 'Gender-cut fits for the cause', catalog: OUTFIT_CATALOG },
+  { kind: 'footwear', label: 'Footwear', hint: 'Gender-fit march gear', catalog: FOOTWEAR_CATALOG },
   { kind: 'gear', label: 'Back Gear', hint: 'Drums, bags & rolls', catalog: GEAR_CATALOG },
   { kind: 'held', label: 'In Hand', hint: 'Signs, flags & bats', catalog: HELD_CATALOG },
 ]
@@ -201,19 +202,21 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     void persist({ skinTone: next })
   }
 
-  /** Male / female build — also nudges hair to a fitting style while untouched. */
+  /** Male / female build — task 82: each gender owns a DISTINCT style book, so
+   *  switching swaps any hair / outfit / footwear pick that belongs to the other
+   *  book for that gender's signature default (one persisted patch). */
   const chooseGender = (next: 'male' | 'female') => {
     if (next === gender) return
     setGender(next)
-    let nextHair = hair
-    if (hair === 'default' || hair === 'buzz' || hair === 'bald') {
-      // untouched masculine styles flip to the signature feminine ponytail (and back)
-      nextHair = next === 'female' ? 'ponytail' : 'default'
-      setHair(nextHair)
-    }
-    uiActions().updateCosmetics({ gender: next, hair: nextHair })
-    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, gender: next, hair: nextHair } })
-    void persist({ gender: next, hair: nextHair })
+    const nextHair = itemFitsGender('hair', hair, next) ? hair : genderDefaultFor('hair', next)
+    const nextOutfit = itemFitsGender('outfit', outfit, next) ? outfit : genderDefaultFor('outfit', next)
+    const nextFootwear = itemFitsGender('footwear', footwear, next) ? footwear : genderDefaultFor('footwear', next)
+    if (nextHair !== hair) setHair(nextHair)
+    if (nextOutfit !== outfit) setOutfit(nextOutfit)
+    if (nextFootwear !== footwear) setFootwear(nextFootwear)
+    uiActions().updateCosmetics({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear })
+    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear } })
+    void persist({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear })
   }
 
   const chooseArchetype = (id: string) => {
@@ -268,16 +271,13 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
       return pool[Math.floor(Math.random() * pool.length)]?.id ?? catalog[0].id
     }
     const rg = gender === 'female' ? 'male' : 'female'
-    const female = rg === 'female'
     const rh = pickFree(HAT_CATALOG); setHat(rh)
-    const rhair = female
-      ? (['bun', 'ponytail', 'braid', 'long', 'curly', 'default'] as const)[Math.floor(Math.random() * 6)]
-      : (['default', 'buzz', 'curly', 'bald', 'ponytail'] as const)[Math.floor(Math.random() * 5)]
-    setHair(rhair)
+    // task 82: hair / outfit / footwear roll from the NEW gender's own book
+    const rhair = pickFree(itemsForKind('hair', rg)); setHair(rhair)
     const rf = pickFree(FACE_CATALOG); setFace(rf)
     const rb = pickFree(BUILD_CATALOG); setBuild(rb)
-    const ro = pickFree(OUTFIT_CATALOG); setOutfit(ro)
-    const rw = pickFree(FOOTWEAR_CATALOG); setFootwear(rw)
+    const ro = pickFree(itemsForKind('outfit', rg)); setOutfit(ro)
+    const rw = pickFree(itemsForKind('footwear', rg)); setFootwear(rw)
     const rgr = pickFree(GEAR_CATALOG); setGear(rgr)
     const rd = pickFree(HELD_CATALOG); setHeld(rd)
     const rpo = pickFree(POLICE_OUTFIT_CATALOG); setPoliceOutfit(rpo)
@@ -305,6 +305,12 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const sel = ARCHETYPES.find((a) => a.id === archetype) ?? ARCHETYPES[0]
   const visibleSlots = police ? [...SLOTS, ...POLICE_SLOTS] : SLOTS
   const activeTab = visibleSlots.find((s) => s.kind === tab) ?? visibleSlots[0]
+  // task 82: hair / outfit / footwear books are gender-specific — the grid shows
+  // only the current gender's styles (headgear stays shared by design).
+  const activeCatalog = useMemo(
+    () => itemsForKind(activeTab.kind, gender),
+    [activeTab.kind, gender],
+  )
   const slotValues: Record<CosmeticKind, string> = { hat, hair, face, build, outfit, footwear, gear, held, policeOutfit, policeHat }
   const equippedCount = visibleSlots.filter((s) => slotValues[s.kind] !== DEFAULTS[s.kind]).length + (glasses ? 1 : 0) + (skinTone ? 1 : 0)
 
@@ -573,11 +579,11 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                       <span className="ml-2 text-[10px] font-bold uppercase text-[#1c1a17]/45">{activeTab.hint}</span>
                     </div>
                     <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">
-                      {activeTab.catalog.filter(isUnlocked).length}/{activeTab.catalog.length} unlocked
+                      {activeCatalog.filter(isUnlocked).length}/{activeCatalog.length} unlocked
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
-                    {activeTab.catalog.map((item) => {
+                    {activeCatalog.map((item) => {
                       const unlocked = isUnlocked(item)
                       const value = slotValues[item.kind]
                       const active = value === item.id
