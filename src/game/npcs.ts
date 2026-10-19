@@ -5,10 +5,11 @@ import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferG
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { CharacterRig } from './character'
-import { createNpcStates, tickNpc, applyNoise, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
+import { createNpcStates, tickNpc, applyNoise, propagateChase, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
 import type { NpcNetState, NpcStateName, WorldDef, AABB } from './shared/types'
 import type { PhysicsWorld } from './physics'
 import { SpeechBubbleSystem, NPC_LINES } from './bubbles'
+import { AudioManager, type SfxName } from './audio'
 
 interface NpcVisual {
   brain: NpcBrainState
@@ -37,6 +38,12 @@ export class NpcSystem {
   private simAccum = 0
   private lastNetTime = 0
   private speechCooldown = 2.5
+  /** v52 — spatial bot-voice scheduler: one nearby bot voices every few seconds
+   *  (protesters chatter/chant/shout, officers bark orders + far whistles). */
+  private voiceCooldown = 1.5
+  /** v50 — reusable minimap rows: drawHudMinimap runs every frame and this used to
+   *  allocate a fresh object PER NPC PER FRAME (~40 objs @60Hz = constant GC churn). */
+  private minimapCache: { id: string; x: number; z: number; chasing: boolean; state: string }[] = []
 
   constructor(
     world: WorldDef,
@@ -61,6 +68,7 @@ export class NpcSystem {
       }
       this.visuals.push(v)
       this.brainById.set(b.id, b)
+      this.brainsCache.push(b) // v51 — pack-pursuit input (order-stable, rebuilt only here)
     }
     this.group.add(this.bubbles.group)
   }
@@ -76,15 +84,22 @@ export class NpcSystem {
       for (const v of this.visuals) {
         const r = tickNpc(v.brain, [player], colliders, step, now)
         events.push(...r.events)
-        v.prev = { ...v.target }
-        v.target = { x: v.brain.x, z: v.brain.z, ry: v.brain.ry }
+        // in-place shift (v50) — two object literals per NPC per tick added up
+        v.prev.x = v.target.x; v.prev.z = v.target.z; v.prev.ry = v.target.ry
+        v.target.x = v.brain.x; v.target.z = v.brain.z; v.target.ry = v.brain.ry
       }
+      // v51 — pack pursuit: an active chase is contagious to nearby officers
+      propagateChase(this.brainsCache, undefined, now)
       for (const ev of events) {
         if (ev.kind === 'capture') this.onLocalCapture?.(ev.npcId)
         else if (ev.kind === 'hit') this.onLocalHit?.(ev.amount ?? 12)
       }
     }
   }
+
+  /** v51 — zero-alloc brains list for propagateChase (mirrors this.visuals order;
+   *  rebuilt only when rigs are (re)created — never per tick). */
+  private brainsCache: NpcBrainState[] = []
 
   onLocalCapture: ((npcId: string) => void) | null = null
   onLocalHit: ((amount: number) => void) | null = null
@@ -120,7 +135,7 @@ export class NpcSystem {
     }
   }
 
-  update(dt: number, alpha: number, t: number, px?: number, pz?: number) {
+  update(dt: number, alpha: number, t: number, px?: number, pz?: number, listenerYaw = 0) {
     // ---- far LOD (OPT-IN via game.ts, keyed to the performance-visibility setting):
     // NPC rigs beyond 70m are sub-pixel silhouettes in fog — hide the body and skip
     // its pose update entirely (AI/minimaps/speech logic untouched: everything reads
@@ -176,12 +191,61 @@ export class NpcSystem {
           }, chasing ? 2.6 : 4.2)
         }
       }
+
+      // ---- v52 spatial bot VOICES (the audio layer over the speech bubbles):
+      // every few seconds one bot within earshot actually makes a sound through
+      // AudioManager.playAt — panned to its side, distance-attenuated, silent past
+      // range. An active chase shortens the cadence and forces officer barks, so
+      // the hunt is audible before it is visible.
+      this.voiceCooldown -= dt
+      if (this.voiceCooldown <= 0) {
+        // pick the nearest audible bot; a chasing officer always wins the slot
+        let best: NpcVisual | null = null
+        let bestScore = Infinity
+        for (const v of this.visuals) {
+          const dx = v.brain.x - px
+          const dz = v.brain.z - pz
+          const d2 = dx * dx + dz * dz
+          if (d2 > 34 * 34) continue
+          // chasing bots outrank everything at 3× their distance (heard first)
+          const score = v.brain.state === 'chase' || v.brain.state === 'capture' ? d2 / 3 : d2
+          if (score < bestScore) { bestScore = score; best = v }
+        }
+        if (best) {
+          const b = best.brain
+          const police = b.type === 'police' || b.type === 'security' || b.type === 'guard'
+          const hot = b.state === 'chase' || b.state === 'capture'
+          let voice: SfxName
+          if (hot && police) voice = Math.random() < 0.62 ? 'order' : (Math.random() < 0.5 ? 'whistleFar' : 'shout')
+          else if (hot) voice = 'shout'
+          else if (police) voice = Math.random() < 0.3 ? 'whistleFar' : 'chatter'
+          else voice = Math.random() < 0.34 ? 'chant' : (Math.random() < 0.6 ? 'chatter' : 'shout')
+          AudioManager.playAt(voice, b.x, b.z, px, pz, listenerYaw, 34, hot ? 1.15 : 0.95)
+          // chase nearby → urgent chatter; calm streets → sparse ambience
+          this.voiceCooldown = hot && bestScore < 400 ? 1.4 + Math.random() * 1.6 : 2.6 + Math.random() * 4.4
+        } else {
+          this.voiceCooldown = 2 + Math.random() * 2
+        }
+      }
     }
   }
 
-  /** Info for minimap: positions + chase states */
+  /** Info for minimap: positions + chase states. v50 — reuses a persistent row
+   *  buffer (zero per-frame allocation; callers consume synchronously). */
   minimapData() {
-    return this.visuals.map(v => ({ id: v.brain.id, x: v.brain.x, z: v.brain.z, chasing: v.brain.state === 'chase', state: v.brain.state }))
+    const arr = this.minimapCache
+    while (arr.length < this.visuals.length) arr.push({ id: '', x: 0, z: 0, chasing: false, state: 'patrol' })
+    arr.length = this.visuals.length
+    for (let i = 0; i < this.visuals.length; i++) {
+      const v = this.visuals[i]
+      const o = arr[i]
+      o.id = v.brain.id
+      o.x = v.brain.x
+      o.z = v.brain.z
+      o.chasing = v.brain.state === 'chase'
+      o.state = v.brain.state
+    }
+    return arr
   }
 
   /**
@@ -220,6 +284,8 @@ export interface VehicleVisual {
   wheels: VehicleWheel[]   // empty for the cow
   prevHeading: number      // drive state for the steer-angle approximation
   steer: number
+  closed: boolean          // v66 — first point repeats → cyclic loop (no ping-pong)
+  honkOff: number          // v66 — deterministic honk phase offset (id hash, seconds)
 }
 
 /** (2-d contract) Solid half-extents + roof height per kind — heading-agnostic AABBs for getSolidAABBs(). */
@@ -252,6 +318,9 @@ function flatMat(color: string, opts: Partial<THREE.MeshStandardMaterialParamete
 const tireMat = flatMat('#181614', { roughness: 0.92 })
 const rimMat = flatMat('#4a453d', { metalness: 0.35, roughness: 0.5 })
 const glassMat = flatMat('#141b21', { metalness: 0.3, roughness: 0.08, transparent: true, opacity: 0.7, flatShading: false })
+// v66 — car cabin glass: lighter + more transparent than the shared window glass so
+// the driver actually READS inside the greenhouse from gameplay distances.
+const cabinGlassMat = flatMat('#3d5260', { metalness: 0.25, roughness: 0.12, transparent: true, opacity: 0.42, flatShading: false })
 const trimMat = flatMat('#24201b', { roughness: 0.8 })
 const plateMat = flatMat('#f2ecd9', { roughness: 0.6 })
 const headlightMat = flatMat('#fff1c4', { emissive: '#ffcf6e', emissiveIntensity: 0.9, roughness: 0.4 })
@@ -262,6 +331,7 @@ const taillightMat = flatMat('#7a1611', { emissive: '#ff2f1f', emissiveIntensity
 tireMat.userData.envInt = 0.12
 rimMat.userData.envInt = 0.7
 glassMat.userData.envInt = 1.15
+cabinGlassMat.userData.envInt = 1.0
 trimMat.userData.envInt = 0.25
 plateMat.userData.envInt = 0.3
 headlightMat.userData.envInt = 0.5
@@ -414,6 +484,108 @@ function merged(parts: THREE.BufferGeometry[], mat: THREE.Material, castShadow =
 const CAR_PALETTES = ['#d9a441', '#b5543a', '#93a67e', '#e8e2d4', '#6b4a3a'] // taxi-gold, dusty red, sage, cream, walnut (poster palette)
 const chromeMat = flatMat('#b8b2a6', { metalness: 0.75, roughness: 0.22 })
 
+// v66 — NPC DRIVERS & RIDERS: one merged geometry per pose, built ONCE and shared
+// by every vehicle of that kind (geometry cache; only the kit material rotates
+// through a small kurta palette per instance → 2 draw calls per occupied vehicle).
+// Poses are authored around the seat origin facing +z (vehicle forward).
+const driverKitCache = new Map<string, THREE.BufferGeometry>()
+const driverSkinCache = new Map<string, THREE.BufferGeometry>()
+const KURTA = ['#e8e2d4', '#8a6b45', '#4e7d6b', '#b5543a'] // poster-palette kurta set
+function driverKitMat(variant: number) { return flatMat(KURTA[variant % KURTA.length], { roughness: 0.85 }) }
+const driverSkinMat = flatMat('#c98d5f', { roughness: 0.8 })
+
+function cachedFigure(kind: string, make: () => { kit: THREE.BufferGeometry; skin: THREE.BufferGeometry }) {
+  let kit = driverKitCache.get(kind)
+  if (!kit) {
+    const g = make()
+    driverKitCache.set(kind, g.kit)
+    driverSkinCache.set(kind, g.skin)
+    kit = g.kit
+  }
+  return { kit, skin: driverSkinCache.get(kind)! }
+}
+
+function mergeRaw(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const norm = parts.map(p => {
+    const q = p.index ? p : mergeVertices(p, 1e-4) ?? p
+    if (q.attributes.uv) q.deleteAttribute('uv')
+    if (q.attributes.uv1) q.deleteAttribute('uv1')
+    return q
+  })
+  return mergeGeometries(norm, false) ?? parts[0]
+}
+
+/** Seated driver (car): upright torso, arms reaching the wheel, cap. RHD seat origin. */
+function seatedDriverFigure() {
+  return cachedFigure('car', () => {
+    const torso = new RoundedBoxGeometry(0.34, 0.5, 0.24, 2, 0.06).translate(0, 0.25, 0)
+    const armL = tube(-0.15, 0.42, 0.06, -0.11, 0.36, 0.34, 0.045, 6)
+    const armR = tube(0.15, 0.42, 0.06, 0.11, 0.36, 0.34, 0.045, 6)
+    const cap = new THREE.CylinderGeometry(0.145, 0.155, 0.09, 8).translate(0, 0.575, 0.01)
+    const kit = mergeRaw([torso, armL, armR, cap])
+    const head = new THREE.SphereGeometry(0.125, 8, 6).translate(0, 0.49, 0.02)
+    return { kit, skin: mergeRaw([head]) }
+  })
+}
+
+/** Motorcycle rider: leaned-forward torso, arms to the grips, knees bent. */
+function bikeRiderFigure() {
+  return cachedFigure('bike', () => {
+    const torso = new RoundedBoxGeometry(0.3, 0.46, 0.22, 2, 0.06)
+    torso.rotateX(-0.32)
+    torso.translate(0, 0.3, 0.05)
+    const armL = tube(-0.14, 0.44, 0.16, -0.26, 0.32, 0.4, 0.04, 6)
+    const armR = tube(0.14, 0.44, 0.16, 0.26, 0.32, 0.4, 0.04, 6)
+    const thighL = box(0.1, 0.16, 0.3, -0.16, 0.08, 0.06)
+    const thighR = box(0.1, 0.16, 0.3, 0.16, 0.08, 0.06)
+    const shinL = box(0.08, 0.3, 0.1, -0.17, -0.16, 0.0)
+    const shinR = box(0.08, 0.3, 0.1, 0.17, -0.16, 0.0)
+    const cap = new THREE.SphereGeometry(0.135, 8, 6).translate(0, 0.585, 0.17)
+    const kit = mergeRaw([torso, armL, armR, thighL, thighR, shinL, shinR, cap])
+    const face = new THREE.SphereGeometry(0.105, 8, 6).translate(0, 0.56, 0.2)
+    return { kit, skin: mergeRaw([face]) }
+  })
+}
+
+/** Pillion passenger: upright torso behind the rider. */
+function pillionFigure() {
+  return cachedFigure('pillion', () => {
+    const torso = new RoundedBoxGeometry(0.3, 0.44, 0.2, 2, 0.06).translate(0, 0.26, 0)
+    const arms = tube(-0.13, 0.4, 0.08, -0.17, 0.34, 0.3, 0.038, 6)
+    const arms2 = tube(0.13, 0.4, 0.08, 0.17, 0.34, 0.3, 0.038, 6)
+    const legs = box(0.24, 0.34, 0.14, 0, -0.12, 0.02)
+    const cap = new THREE.SphereGeometry(0.13, 8, 6).translate(0, 0.55, 0)
+    const kit = mergeRaw([torso, arms, arms2, legs, cap])
+    const face = new THREE.SphereGeometry(0.1, 8, 6).translate(0, 0.53, 0.03)
+    return { kit, skin: mergeRaw([face]) }
+  })
+}
+
+/** Auto-rickshaw driver: center seat, hands up to the handlebar. */
+function autoDriverFigure() {
+  return cachedFigure('auto', () => {
+    const torso = new RoundedBoxGeometry(0.32, 0.46, 0.22, 2, 0.06).translate(0, 0.25, 0)
+    const armL = tube(-0.14, 0.4, 0.05, -0.12, 0.34, 0.3, 0.042, 6)
+    const armR = tube(0.14, 0.4, 0.05, 0.12, 0.34, 0.3, 0.042, 6)
+    const cap = new THREE.CylinderGeometry(0.14, 0.15, 0.08, 8).translate(0, 0.55, 0.01)
+    const kit = mergeRaw([torso, armL, armR, cap])
+    const head = new THREE.SphereGeometry(0.12, 8, 6).translate(0, 0.47, 0.02)
+    return { kit, skin: mergeRaw([head]) }
+  })
+}
+
+/** Mount a cached figure: kit mesh (variant-tinted kurta) + skin mesh. */
+function mountFigure(kind: string, variant: number): THREE.Group {
+  const fig = kind === 'bike' ? bikeRiderFigure() : kind === 'pillion' ? pillionFigure() : kind === 'auto' ? autoDriverFigure() : seatedDriverFigure()
+  const g = new THREE.Group()
+  const kit = new THREE.Mesh(fig.kit, driverKitMat(variant))
+  const skin = new THREE.Mesh(fig.skin, driverSkinMat)
+  kit.castShadow = false
+  skin.castShadow = false
+  g.add(kit, skin)
+  return g
+}
+
 /** buildCar v3 (v36) — real automotive construction via ExtrudeGeometry:
  *  the three-box side profile (bumper faces, curved nose, bonnet, cowl dip,
  *  rear deck, tail drop) is drawn as a Shape with WHEEL ARCHES cut into the
@@ -455,7 +627,7 @@ function buildCar(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
   g.quadraticCurveTo(-L * 0.28, belt + 0.37, -L * 0.40, belt - 0.03) // raked rear glass
   g.lineTo(L * 0.30, belt - 0.05)
   const cabinGeo = smoothExtrude(g, W - 0.18, 0.04)
-  const cabin = new THREE.Mesh(cabinGeo, glassMat)
+  const cabin = new THREE.Mesh(cabinGeo, cabinGlassMat) // v66 — lighter glass so the driver reads inside
   cabin.castShadow = false
   // painted roof panel on top of the glass greenhouse → roofline step
   const roof = new THREE.Mesh(new RoundedBoxGeometry(W - 0.30, 0.07, L * 0.21, 2, 0.03), paint)
@@ -494,6 +666,10 @@ function buildCar(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
   const group = new THREE.Group()
   group.add(body, cabin, roof, dark, chrome, headlights, taillights, merged(plates, plateMat, false), w.group)
   if (extras) group.add(extras)
+  // v66 — driver at the wheel (India RHD: right-hand seat), shared cached figure
+  const drv = mountFigure('car', variant)
+  drv.position.set(0.42, 0.62, L * 0.18)
+  group.add(drv)
   return { group, wheels: w.wheels }
 }
 
@@ -577,7 +753,7 @@ function buildBus(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
     box(0.34, 0.3, 0.03, 1.05, 0.32, -2.62), box(0.34, 0.3, 0.03, -1.05, 0.32, -2.62),
     box(0.34, 0.3, 0.03, 1.05, 0.32, -3.57), box(0.34, 0.3, 0.03, -1.05, 0.32, -3.57),
   ], trimMat, false)
-  const w = buildWheels(6, [[-1.05, 2.9], [1.05, 2.9], [-1.05, -2.0], [1.05, -2.0], [-1.05, -2.95], [1.05, -2.95]], 0.5, { width: 0.32, steer: true })
+  const w = buildWheels(6, [[-1.05, 2.9], [1.05, 2.9], [-1.05, -2.0], [1.05, -2.0], [-1.05, -2.95], [1.05, -2.95]], 0.5, { width: 0.32, steer: true, torus: true })
   const group = new THREE.Group()
   group.add(
     merged(creamParts, cream),
@@ -592,6 +768,14 @@ function buildBus(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
     merged([box(0.36, 0.16, 0.07, 0.85, 0.95, -L / 2 - 0.05), box(0.36, 0.16, 0.07, -0.85, 0.95, -L / 2 - 0.05)], taillightMat, false),
     w.group,
   )
+  // v66 — bus captain: skin head + cap above the dark driver silhouette (RHD, front right)
+  const driverHead = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), driverSkinMat)
+  driverHead.position.set(0.72, 1.9, 2.15)
+  driverHead.castShadow = false
+  const driverCap = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.07, 8), driverKitMat(variant))
+  driverCap.position.set(0.72, 2.0, 2.15)
+  driverCap.castShadow = false
+  group.add(driverHead, driverCap)
   return { group, wheels: w.wheels }
 }
 
@@ -603,7 +787,7 @@ function buildBus(variant: number): { group: THREE.Group; wheels: VehicleWheel[]
  *  meter, roof luggage rails, taillight. Unlike the other vehicles the wheel set
  *  is lifted so the three tires rest ON the ground (proper stance). Merged
  *  primitive discipline — the body parts stay a handful of draw calls. */
-function buildAuto(): { group: THREE.Group; wheels: VehicleWheel[] } {
+function buildAuto(variant = 0): { group: THREE.Group; wheels: VehicleWheel[] } {
   const green = flatMat('#2f7050', { roughness: 0.45, flatShading: false }) // CNG body green
   green.userData.envInt = 0.5
   const yellow = flatMat('#e8b93a', { roughness: 0.45, flatShading: false }) // CNG canopy yellow
@@ -676,6 +860,10 @@ function buildAuto(): { group: THREE.Group; wheels: VehicleWheel[] } {
   w.group.position.y = 0.3 // the rickshaw's own stance: tires rest on the ground
   const group = new THREE.Group()
   group.add(body, canopy, glass, dark, chromeBits, trimBits, headlamp, chromeRing, tail, plates, w.group)
+  // v66 — auto driver behind the fare meter (open sides make him clearly visible)
+  const drv = mountFigure('auto', variant)
+  drv.position.set(0, 1.0, 0.55)
+  group.add(drv)
   return { group, wheels: w.wheels }
 }
 
@@ -769,6 +957,15 @@ function buildBike(variant: number): { group: THREE.Group; wheels: VehicleWheel[
   const w = buildWheels(2, [[0, AZ], [0, -AZ]], 0.33, { width: 0.12, steer: true, rims: true, torus: true })
   const group = new THREE.Group()
   group.add(painted, dark, chrome, lamp, screen, plates, w.group)
+  // v66 — rider astride the seat, hands on the grips; every other bike carries a pillion
+  const rider = mountFigure('bike', variant)
+  rider.position.set(0, 0.97, -0.3)
+  group.add(rider)
+  if (variant % 2 === 0) {
+    const pill = mountFigure('pillion', variant + 1)
+    pill.position.set(0, 1.07, -0.78)
+    group.add(pill)
+  }
   return { group, wheels: w.wheels }
 }
 
@@ -815,6 +1012,10 @@ export class VehicleSystem {
   group = new THREE.Group()
   vehicles: VehicleVisual[] = []
   onPlayerHit: ((kind: string, x: number, z: number, dmg: number) => void) | null = null
+  /** v66 — spatial horn honks: fired by the deterministic per-vehicle scheduler in
+   *  update() when the vehicle is near the player, and by the game on vehicle-player
+   *  contact. The host maps kind → SfxName through AudioManager.playAt. */
+  onHonk: ((kind: string, x: number, z: number) => void) | null = null
   private hitCooldown = 0
 
   constructor(world: WorldDef, renderer?: THREE.WebGLRenderer) {
@@ -822,7 +1023,7 @@ export class VehicleSystem {
       const v = world.vehicles[i]
       const built = v.kind === 'bus' ? buildBus(i)
         : v.kind === 'cow' ? buildCow()
-        : v.kind === 'auto' ? buildAuto()
+        : v.kind === 'auto' ? buildAuto(i)
         : v.kind === 'bike' ? buildBike(i)
         : buildCar(i) // 'car' kind (and safe fallback for any future kind)
       built.group.name = `vehicle-${v.kind}-${v.id}`
@@ -830,7 +1031,13 @@ export class VehicleSystem {
       const path = v.path.map(([px, pz]) => ({ x: px, z: pz }))
       const cum: number[] = [0]
       for (let k = 1; k < path.length; k++) cum.push(cum[k - 1] + Math.hypot(path[k].x - path[k - 1].x, path[k].z - path[k - 1].z))
-      this.vehicles.push({ id: v.id, kind: v.kind, group: built.group, path, cum, speed: v.speed, wheels: built.wheels, prevHeading: NaN, steer: 0 })
+      // v66 — closed-loop detection: ring-road routes repeat their first waypoint so
+      // traffic circles the quadrant forever instead of ping-ponging.
+      const closed = path.length > 2 && Math.hypot(path[0].x - path[path.length - 1].x, path[0].z - path[path.length - 1].z) < 0.5
+      // deterministic honk phase from the route id (server/client agree without state)
+      let hash = 0
+      for (let k = 0; k < v.id.length; k++) hash = (hash * 31 + v.id.charCodeAt(k)) | 0
+      this.vehicles.push({ id: v.id, kind: v.kind, group: built.group, path, cum, speed: v.speed, wheels: built.wheels, prevHeading: NaN, steer: 0, closed, honkOff: Math.abs(hash) % 17 })
     }
     // v36 — env reflections on vehicle materials only (world look untouched)
     if (renderer) {
@@ -842,18 +1049,20 @@ export class VehicleSystem {
   /** Deterministic update from shared world time (seconds since match start).
    *  v37 — polyline traversal: constant speed along the waypoint chain, ping-pong
    *  at the ends. For a 2-point path this reduces EXACTLY to the old shuttle math
-   *  (same formula the game-server mirrors), so existing routes are unchanged. */
+   *  (same formula the game-server mirrors), so existing routes are unchanged.
+   *  v66 — closed loops (first waypoint repeats) traverse cyclically with no
+   *  reversal, and every occupied vehicle honks on a deterministic schedule when
+   *  the player is close. */
   update(worldTime: number, dt: number, playerPos: THREE.Vector3 | null, localAuth: boolean) {
     this.hitCooldown = Math.max(0, this.hitCooldown - dt)
     const step = Math.max(dt, 1e-4)
     for (const v of this.vehicles) {
       const total = v.cum[v.cum.length - 1]
       if (!(total > 0)) continue
-      const period = (total / v.speed) * 2
+      const period = v.closed ? total / v.speed : (total / v.speed) * 2
       const phase = ((worldTime % period) + period) % period
-      const half = period / 2
-      const dir = phase < half ? 1 : -1
-      const sDist = (phase < half ? phase : period - phase) * v.speed // metres along the chain
+      const dir = v.closed ? 1 : (phase < period / 2 ? 1 : -1)
+      const sDist = (v.closed ? phase : (phase < period / 2 ? phase : period - phase)) * v.speed // metres along the chain
       let i = 0
       while (i < v.path.length - 2 && sDist > v.cum[i + 1]) i++
       const segLen = v.cum[i + 1] - v.cum[i]
@@ -893,7 +1102,19 @@ export class VehicleSystem {
         const d = Math.hypot(playerPos.x - x, playerPos.z - z)
         if (d < hit.r) {
           this.hitCooldown = 1.2
+          this.onHonk?.(v.kind, x, z) // v66 — angry honk on contact
           this.onPlayerHit?.(v.kind, x, z, hit.dmg)
+        }
+      }
+      // v66 — proximity honks: deterministic worldTime scheduler (no per-vehicle
+      // state, identical on every client), gated to vehicles near the player so the
+      // city sounds alive without an honk wall. Cows moo via the animal system — skip.
+      if (v.kind !== 'cow' && playerPos && localAuth) {
+        const d2 = (playerPos.x - x) * (playerPos.x - x) + (playerPos.z - z) * (playerPos.z - z)
+        if (d2 < 34 * 34) {
+          const iv = v.kind === 'bike' ? 8.5 : v.kind === 'auto' ? 9.5 : v.kind === 'bus' ? 14 : 12
+          const t = (worldTime + v.honkOff) % iv
+          if (t < step) this.onHonk?.(v.kind, x, z)
         }
       }
     }

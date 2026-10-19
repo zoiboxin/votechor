@@ -43,8 +43,8 @@ const DEFAULTS: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  hiFiModel: true,
-  distanceCulling: false,
+  hiFiModel: false,
+  distanceCulling: true, // v50 — performance visibility ships ON (see game-store defaults)
   squadPanel: true,
   keybinds: { ...DEFAULT_KEYBINDS }, // canonical defaults imported from the store — a private stale copy here once lacked heal/shout and re-crashed the panel via "Reset to Committee Defaults"
 }
@@ -228,7 +228,7 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Model</div>
-                <div className="text-[9px] font-semibold text-[#1c1a17]/50">High-Fi = realistic textured avatar (wardrobe hidden on your own character). Classic Rig = your full customized look</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig = your full customized look (hat, hair, shoes…). High-Fi = generic GLB (wardrobe hidden)</div>
               </div>
               <Select
                 value={settings.hiFiModel ? 'hifi' : 'classic'}
@@ -256,10 +256,10 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Performance Visibility</div>
-                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Off = proven stable rendering (everything always drawn). On = big FPS win, auto-disables on fault</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">On (default) = big FPS win — hides far geometry, auto-disables on any fault. Off = everything always drawn (max compatibility)</div>
               </div>
               <Switch
-                checked={settings.distanceCulling ?? false}
+                checked={settings.distanceCulling ?? true}
                 onCheckedChange={(v) => {
                   update({ distanceCulling: v })
                   notify(v ? 'Performance visibility on — distance culling enabled' : 'Performance visibility off — everything always drawn (max compatibility)', 'info')

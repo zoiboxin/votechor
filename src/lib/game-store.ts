@@ -77,6 +77,9 @@ export interface HudState {
   cinematic: boolean
   spectating: string | null // teammate name when camera follows them while detained
   hunted: boolean // police/security actively chasing the local player
+  /** v51 — soft escape: the badge lingers (dimmed, "losing them…") for a few
+   *  seconds after the last chaser drops off, then clears itself. */
+  wantedFading: boolean
   mapX: number // player world x (0.5m grid) — used by the big-map minimap-window overlay
   mapZ: number // player world z
   /** live day/night + weather readout for the HUD environment chip */
@@ -390,6 +393,7 @@ const defaultHud: HudState = {
   cinematic: false,
   spectating: null,
   hunted: false,
+  wantedFading: false,
   mapX: 0, mapZ: 0,
   env: { time: '10:30', phase: 'Morning', weather: 'Clear Skies', icon: 'sun', wIcon: 'clear', flashAt: 0 },
   mapName: '', mapDifficulty: 1, mapXpMul: 1,
@@ -428,17 +432,21 @@ const defaultSettings: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  /** DEFAULT ON (v51) — the High-Fi slot now holds the textured realistic avatar
-   *  (user-supplied promptplay model, A-posed + shader arm-swing), which the user
-   *  explicitly asked for as THE player character. The wardrobe renders on the
-   *  procedural rig, so Classic Rig remains the opt-out for full customization;
-   *  police role always uses the procedural uniform (identity clarity). */
-  hiFiModel: true,
-  /** DEFAULT OFF = the exact rendering path of commit 5b08baf ("v25"), which the
-   *  affected user device confirmed working, while every build with these
-   *  visibility optimizations active rendered a blue world for them. Opt-in via
-   *  Options → Performance; the culler still fail-safes to all-visible. */
-  distanceCulling: false,
+  /** DEFAULT OFF (v33) — the procedural rig is the CUSTOMIZED body: every wardrobe
+   *  slot (hat / hair / face / build / outfit / footwear / gear / held) renders on it.
+   *  The High-Fi GLB is a fixed generic mesh (only palette-tinted), so when it was the
+   *  default the whole wardrobe silently vanished in-game ("customized but not
+   *  showing"). GLB stays opt-in via Options → Character Model. */
+  hiFiModel: false,
+  /** v50 DEFAULT ON — the measured cost of leaving it OFF is ~4,100 draw calls /
+   *  ~260k triangles every frame (2,975 static meshes, 61% of them beyond the fog
+   *  wall where they are invisible anyway). That is the "game feels heavy" report.
+   *  History: builds ≤ v30 defaulted it ON and ONE device rendered a blue world,
+   *  so it went opt-in — but that culler predates its fail-safe. Today the sweep
+   *  self-disables when a healthy near-field count is missing (WorldDistanceCuller
+   *  anomaly fail-safe), the draw-call collapse + empty-world watchdogs auto-reload,
+   *  and an explicit OFF choice from Options is still respected forever. */
+  distanceCulling: true,
   /** v42 — the right-edge squad pane is ON by default (it was effectively always
    *  there); disabling it hides the HUD pane AND makes Tab a no-op so players who
    *  want a pure view lose nothing. Persisted settings from older builds lack this

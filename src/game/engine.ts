@@ -63,6 +63,12 @@ export class Engine {
    * on the other frames. Gameplay/physics are never throttled by this.
    */
   shadowThrottle = false
+  /** v50 — false = skip the GL submit entirely. The main menu / loading screens are
+   * OPAQUE full-screen paper UIs, so rendering the whole city (4k+ draw calls,
+   * 260k triangles) behind them is pure GPU/battery burn that also kept the device
+   * hot between matches. The game layer flips this every frame; in-match modes
+   * (playing/paused/ended) always render, menu-like modes never do. */
+  renderEnabled = true
   private frameIdx = 0
   private running = false
   private canvas: HTMLCanvasElement
@@ -112,7 +118,13 @@ export class Engine {
     this.scene = new THREE.Scene()
     this.scene.fog = new THREE.Fog(0xe8d5b0, 60, 210) // sky system rewrites color/distance every frame
 
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1600) // v64: 1600 far — the 1300 m world's mountain rim (~770 m) must render
+    // v70 — far 420 → 1050: the disc is 930 m across and the Vanodyan Rim skyline
+    // (fog-immune, cull-exempt) must render from anywhere on it.
+    // v71 — far 1050 → 1400: the FAR RANGE backdrop must clear the far plane.
+    // v72 — far 1400 → 1600: the grown world (disc r 650, Far Range 690..770 from
+    // center −340) spans ~1490 m corner-to-corner — the far plane must clear it
+    // when the skyline is viewed from the opposite rim.
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1600)
 
     // Warm late-afternoon Indian sky
     this.hemi = new THREE.HemisphereLight(0xfff3dd, 0xc4a37a, 0.85)
@@ -299,10 +311,25 @@ export class Engine {
       const t2 = performance.now()
       // throttled shadow cadence: only mark the shadow map dirty every Nth frame
       this.frameIdx++
-      if (this.shadowThrottle && this.renderer.shadowMap.enabled) {
+      if (this.renderEnabled && this.shadowThrottle && this.renderer.shadowMap.enabled) {
         const every = this.shadowCadence()
         this.renderer.shadowMap.autoUpdate = false
         this.renderer.shadowMap.needsUpdate = every <= 1 || this.frameIdx % every === 0
+      }
+      // v50 — opaque-UI frames skip the whole GL submit (see renderEnabled)
+      if (!this.renderEnabled) {
+        this.accFrames++
+        this.accFrameMs += rawDt * 1000
+        this.frames++
+        this.fpsTime += rawDt
+        if (this.fpsTime >= 0.5) {
+          const fps = this.frames / this.fpsTime
+          this.onFps?.(fps)
+          this.finalizeStats(fps)
+          this.frames = 0
+          this.fpsTime = 0
+        }
+        return
       }
       try { this.renderer.render(this.scene, this.camera) } catch (err) {
         // GPU-side failures (shader compile on exotic drivers, context faults) used to

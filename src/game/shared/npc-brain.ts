@@ -30,6 +30,9 @@ export interface NpcPlayerView {
   id: string
   x: number
   z: number
+  /** v51 — target's feet height above ground: lets NPC strikes/captures reach UP
+   *  onto objects and platforms (mirrors room.ts's human-officer reach formula). */
+  y?: number
   detained: boolean
   dazed: boolean
   hidden?: boolean // inside a hide spot
@@ -56,11 +59,18 @@ export function createNpcStates(spawns: { id: string; type: NpcType; x: number; 
 }
 
 // Segment vs AABB (2D XZ + height check ignored: colliders below eye don't block) — slab method
-export function segmentBlocked(x1: number, z1: number, x2: number, z2: number, colliders: AABB[]): boolean {
+// v51 — `ignoreEndpointInside`: skip colliders whose XZ footprint contains the SEGMENT
+// ENDPOINT (the target player). A player standing ON a walkable platform sits inside
+// that platform's footprint, which used to make every LOS check fail — officers could
+// neither see, strike, nor capture anyone standing on the stage/containers/benches.
+// Solid walls can never contain a player (physics blocks the body), so this only ever
+// unwedges the "target is on top of it" case.
+export function segmentBlocked(x1: number, z1: number, x2: number, z2: number, colliders: AABB[], ignoreEndpointInside = false): boolean {
   const dx = x2 - x1, dz = z2 - z1
   for (const c of colliders) {
     if (c.walkable && c.minY > 1.4) continue // high platforms don't block vision at ground level
     if (c.maxY < 1.6) continue // low barriers don't block sight
+    if (ignoreEndpointInside && x2 >= c.minX && x2 <= c.maxX && z2 >= c.minZ && z2 <= c.maxZ) continue
     let tmin = 0, tmax = 1
     let hit = true
     for (let axis = 0; axis < 2; axis++) {
@@ -85,6 +95,15 @@ export function segmentBlocked(x1: number, z1: number, x2: number, z2: number, c
 
 const dist2 = (ax: number, az: number, bx: number, bz: number) => (ax - bx) ** 2 + (az - bz) ** 2
 
+/** v51 — elevation-aware reach (mirrors room.ts's human-officer formula): NPC
+ *  officers can strike/capture UP onto objects (carts, benches, containers, the
+ *  stage) — horizontal reach grows with the target's height above the officer
+ *  (brains are ground units), capped at +2.2 m exactly like the officer formula. */
+function reachXZ(base: number, targetY?: number): number {
+  const dyUp = Math.max(0, targetY ?? 0)
+  return base + Math.min(dyUp * 0.75, 2.2)
+}
+
 export interface NpcTickResult {
   npc: NpcBrainState
   events: NpcEvent[]
@@ -103,7 +122,10 @@ export function tickNpc(
 ): NpcTickResult {
   const events: NpcEvent[] = []
   let moved = false
-  const speed = (n.type === 'security' ? 5.8 : n.type === 'guard' ? 6.4 : 6.6) * n.speedMul
+  // v51 — chase speeds raised in lock-step with the faster player walk (6.0 m/s):
+  // security used to be SLOWER than a walking protester, so walkers could simply
+  // stroll away from a chase forever.
+  const speed = (n.type === 'security' ? 6.2 : n.type === 'guard' ? 6.8 : 7.0) * n.speedMul
 
   if (n.type === 'searchlight') {
     // Immobile rotating sensor handled by ry update on caller; detection adds alert on players
@@ -126,7 +148,7 @@ export function tickNpc(
       let diff = Math.abs(((ang - n.ry + Math.PI * 3) % (Math.PI * 2)) - Math.PI)
       if (diff > (DETECT.fovDeg * Math.PI) / 360) continue
     }
-    if (segmentBlocked(n.x, n.z, p.x, p.z, colliders)) continue
+    if (segmentBlocked(n.x, n.z, p.x, p.z, colliders, true)) continue // v51 — endpoint grace: standing ON a platform no longer hides the player
     if (p.hidden && d > 3) continue
     // Bots are scored as if ~2.2× farther away: police prefer real protesters,
     // but a lone bot right under their nose still gets chased (season worlds stay alive).
@@ -139,7 +161,7 @@ export function tickNpc(
       if (best) {
         n.alert += dt * DETECT.alertRise
         n.state = n.alert >= 1 ? 'chase' : 'suspicious'
-        if (n.alert >= 1) { n.targetId = best.id; n.state = 'chase' }
+        if (n.alert >= 1) { n.targetId = best.id; n.state = 'chase'; n.targetTimer = 0 } // v51 — fresh pursuit clock
       } else {
         n.alert = Math.max(0, n.alert - dt * DETECT.alertDecay)
       }
@@ -159,7 +181,7 @@ export function tickNpc(
     case 'suspicious': {
       if (best) {
         n.alert += dt * DETECT.alertRise
-        if (n.alert >= 1) { n.targetId = best.id; n.state = 'chase' }
+        if (n.alert >= 1) { n.targetId = best.id; n.state = 'chase'; n.targetTimer = 0 } // v51 — fresh pursuit clock
       } else {
         n.alert = Math.max(0, n.alert - dt * DETECT.alertDecay * 1.4)
         if (n.alert <= 0) n.state = 'patrol'
@@ -183,12 +205,18 @@ export function tickNpc(
           moved = true
         }
       } else n.state = 'patrol'
-      if (best) { n.alert += dt * DETECT.alertRise * 1.3; if (n.alert >= 1) { n.targetId = best.id; n.state = 'chase' } }
+      if (best) { n.alert += dt * DETECT.alertRise * 1.3; if (n.alert >= 1) { n.targetId = best.id; n.state = 'chase'; n.targetTimer = 0 } } // v51 — fresh pursuit clock
       break
     }
     case 'chase': {
       const target = players.find(p => p.id === n.targetId)
-      if (!target || target.detained) { n.state = 'return'; n.targetId = null; n.attackTelegraphUntil = 0; break }
+      if (!target || target.detained) {
+        // v49 — drop the chase WITHOUT carrying suspicion across a detention: the
+        // alert bar used to survive the whole detention (only the CAPTURING officer
+        // reset itself), so the moment the player respawned any nearby officer with
+        // alert ≥ 1 re-acquired them instantly. A released protester is a cold trail.
+        n.state = 'return'; n.targetId = null; n.alert = 0; n.captureProgress = 0; n.attackTelegraphUntil = 0; break
+      }
       n.targetTimer += dt
       const dx = target.x - n.x, dz = target.z - n.z
       const d = Math.hypot(dx, dz)
@@ -205,10 +233,10 @@ export function tickNpc(
           }
           break
         }
-        // STRIKE: re-validate — target still in range, not dazed/detained/hidden, LOS not blocked
+        // STRIKE: re-validate — target still in range (v51: elevation-aware), not dazed/detained/hidden, LOS not blocked
         n.attackTelegraphUntil = 0
-        const strikeOk = d <= POLICE_ATTACK.strikeRange && !target.dazed && !target.detained && !target.hidden &&
-          !segmentBlocked(n.x, n.z, target.x, target.z, colliders)
+        const strikeOk = d <= reachXZ(POLICE_ATTACK.strikeRange, target.y) && !target.dazed && !target.detained && !target.hidden &&
+          !segmentBlocked(n.x, n.z, target.x, target.z, colliders, true)
         if (strikeOk) {
           events.push({
             kind: 'hit', npcId: n.id, playerId: target.id,
@@ -222,7 +250,8 @@ export function tickNpc(
         break
       }
       // start a wind-up when in range (attack preferred over capture inside that range)
-      if (d <= POLICE_ATTACK.chaseAttackRange && !target.hidden && now >= n.nextAttackAt) {
+      // v51 — elevation-aware: an officer at the base of a platform can start the swing
+      if (d <= reachXZ(POLICE_ATTACK.chaseAttackRange, target.y) && !target.hidden && now >= n.nextAttackAt) {
         n.attackTelegraphUntil = now + POLICE_ATTACK.windupSec * 1000
         break
       }
@@ -231,7 +260,7 @@ export function tickNpc(
         n.x += (dx / d) * step; n.z += (dz / d) * step
         moved = true
       }
-      if (d < DETECT.captureRadius) {
+      if (d < reachXZ(DETECT.captureRadius, target.y)) { // v51 — can grab UP onto platforms
         // weakened targets (< weakenedHealth HP) get grabbed at the multiplied capture time
         const weakened = typeof target.health === 'number' && target.health < POLICE_ATTACK.weakenedHealth
         const captureTime = DETECT.captureTime * (weakened ? POLICE_ATTACK.weakenedCaptureMul : 1)
@@ -248,8 +277,14 @@ export function tickNpc(
       } else {
         n.captureProgress = Math.max(0, n.captureProgress - dt * 2)
       }
+      // v51 — soft escape: clearly-out-of-reach targets end the pursuit. Old rule
+      // demanded 21 s of chase AND 21 m of gap; now ~33 m (escapeMul × viewDist)
+      // after just escapeAfterSec of sprinting drops the chase, which is what
+      // makes the WANTED badge fade while a fresh officer nearby picks it up.
       if (n.targetTimer > DETECT.forgetAfter * 3 && d > DETECT.viewDist * 1.4) {
-        n.state = 'return'; n.targetId = null; n.targetTimer = 0
+        n.state = 'return'; n.targetId = null; n.targetTimer = 0; n.alert = 0; n.captureProgress = 0; n.attackTelegraphUntil = 0
+      } else if (d > DETECT.viewDist * DETECT.escapeMul && n.targetTimer > DETECT.escapeAfterSec) {
+        n.state = 'return'; n.targetId = null; n.targetTimer = 0; n.alert = 0; n.captureProgress = 0; n.attackTelegraphUntil = 0
       }
       break
     }
@@ -286,6 +321,47 @@ export function applyNoise(npcs: NpcBrainState[], x: number, z: number, duration
       n.investigate = { x: x + (Math.random() - 0.5) * 3, z: z + (Math.random() - 0.5) * 3 }
       n.investigateTimer = duration
       n.alert = Math.max(n.alert, 0.5)
+    }
+  }
+}
+
+/**
+ * v51 — pack pursuit: an active chase is contagious. Any officer within
+ * DETECT.packChaseRadius of an actively-chasing colleague picks up the same
+ * target (patrol / suspicious / investigate / return → chase, alert maxed).
+ * Call ONCE per simulation step, AFTER all brains have ticked. Officers still
+ * respect their own same-target cooldown (a constable who just cuffed this
+ * protester won't instantly re-join), and searchlights are never moved.
+ */
+export function propagateChase(npcs: NpcBrainState[], radius = DETECT.packChaseRadius, now = 0) {
+  // cheap pre-check — most steps have no active chase at all
+  let first = -1
+  for (let i = 0; i < npcs.length; i++) {
+    const n = npcs[i]
+    if (n.state === 'chase' && n.targetId) { first = i; break }
+  }
+  if (first === -1) return
+  const r2 = radius * radius
+  for (let j = 0; j < npcs.length; j++) {
+    const n = npcs[j]
+    if (n.type === 'searchlight') continue
+    if (n.state === 'chase') continue // already on it
+    for (let k = first; k < npcs.length; k++) {
+      const c = npcs[k]
+      if (c.state !== 'chase' || !c.targetId || c === n) continue
+      if (n.cooldownTarget === c.targetId && now < n.cooldownUntil) continue // own cuff cooldown
+      const dx = n.x - c.x, dz = n.z - c.z
+      if (dx * dx + dz * dz < r2) {
+        n.state = 'chase'
+        n.targetId = c.targetId
+        n.targetTimer = 0 // fresh pursuit clock (escape rule counts from the join)
+        n.alert = 1
+        n.captureProgress = 0
+        n.attackTelegraphUntil = 0
+        n.investigate = null
+        n.investigateTimer = 0
+        break
+      }
     }
   }
 }

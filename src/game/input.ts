@@ -30,6 +30,12 @@ export class InputManager {
   sensitivity = 1
   invertY = false
   onOneShot: ((a: OneShot) => void) | null = null
+  /** v48 — called for bare-canvas clicks while the pointer is unlocked and input is
+   *  live (the squad panel owns the free mouse at that moment). Return true when the
+   *  click was consumed (it dismissed the overlay and the store subscription re-arms
+   *  the lock within the same user gesture); false falls through to requestLock().
+   *  UI-panel clicks never reach the canvas element, so panel buttons are unaffected. */
+  onUnlockClick: (() => boolean) | null = null
   // touch joystick (set by React components)
   touchMove = { x: 0, y: 0 }
   touchActive = false
@@ -56,7 +62,12 @@ export class InputManager {
       this.state.lookDy += me.movementY * 0.0022 * this.sensitivity * (this.invertY ? -1 : 1)
     })
     add(el, 'click', () => {
-      if (this.enabled && !this.pointerLocked) this.requestLock()
+      if (!this.enabled || this.pointerLocked) return
+      // v48 — an overlay (squad panel) may own the free mouse: let the game decide
+      // whether this bare-canvas click means "back to the protest" (dismiss panel,
+      // re-lock via the subscription) or should just re-capture the pointer.
+      if (this.onUnlockClick && this.onUnlockClick()) return
+      this.requestLock()
     })
     add(window, 'blur', () => { this.keys.clear(); this.sync() })
   }

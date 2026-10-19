@@ -9,7 +9,8 @@
 //     (10m cells, colliders inflated 0.8m — same pattern as the server's bot nav
 //     graph from round 13) and an LRU cache keeps repeat solves free.
 import { MINIMAP_MIN_ZOOM, MINIMAP_MAX_ZOOM } from '@/lib/game-store'
-import { buildWorldDef, CROSS_ROADS } from './shared/world-def'
+import { buildWorldDef, CROSS_ROADS, VANODYAN_RIM, VANODYAN_HILLS } from './shared/world-def'
+import { WORLD_BOUNDS, WORLD_DISC } from './shared/constants'
 import type { AABB } from './shared/types'
 
 // ---------- public types ----------
@@ -47,10 +48,12 @@ export interface DrawMinimapOpts {
 
 // ---------- static world layer (prerendered in WORLD space) ----------
 const PPM = 3 // px per world meter in the static layer
-const WORLD_W = 240
-const WORLD_H = 582
-const SW = WORLD_W * PPM // 720
-const SH = WORLD_H * PPM // 1746
+// v66 — extents derive from the shared world bounds (greater city: 400m wide,
+// north jungle to z 42) instead of hardcoded 240/582.
+const WORLD_W = WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX
+const WORLD_H = WORLD_BOUNDS.maxZ - WORLD_BOUNDS.minZ
+const SW = WORLD_W * PPM
+const SH = WORLD_H * PPM
 
 const ZONE_TINTS = [
   'rgba(201,111,74,0.30)', // Protest Plaza
@@ -58,10 +61,11 @@ const ZONE_TINTS = [
   'rgba(127,154,140,0.30)', // Security Checkpoint
   'rgba(201,168,106,0.30)', // Grand Avenue
   'rgba(154,123,95,0.36)', // Government District
+  'rgba(58,84,54,0.42)', // v68 — Vanodyan Deep (wild south)
 ]
 
-const uX = (x: number) => (x + WORLD_W / 2) * PPM
-const vZ = (z: number) => (10 - z) * PPM
+const uX = (x: number) => (x - WORLD_BOUNDS.minX) * PPM
+const vZ = (z: number) => (WORLD_BOUNDS.maxZ - z) * PPM
 
 let staticCanvas: HTMLCanvasElement | null = null
 let staticBucket = -1
@@ -83,26 +87,65 @@ function buildStaticLayer(bucket: number, colliders: AABB[], zones: MinimapZone[
   c.fillRect(0, 0, SW, SH)
   // ground
   c.fillStyle = '#262119'
-  c.fillRect(uX(-120), 0, WORLD_W * PPM, SH)
+  c.fillRect(uX(WORLD_BOUNDS.minX), 0, WORLD_W * PPM, SH)
   // zone tints
   zones.forEach((z, i) => {
     c.fillStyle = ZONE_TINTS[i % ZONE_TINTS.length]
-    c.fillRect(uX(-120), vZ(z.zStart), WORLD_W * PPM, Math.max(1, vZ(z.zEnd) - vZ(z.zStart)))
+    c.fillRect(uX(WORLD_BOUNDS.minX), vZ(z.zStart), WORLD_W * PPM, Math.max(1, vZ(z.zEnd) - vZ(z.zStart)))
   })
   // roads: the central bazaar corridor + the wider Grand Avenue stretch + the
-  // four east-west cross streets that stitch the side mohallas together
+  // v66 ring roads + the east-west cross streets (full greater-city width)
   c.fillStyle = 'rgba(96,88,72,0.50)'
   c.fillRect(uX(-8), 0, uX(8) - uX(-8), SH)
   c.fillRect(uX(-16), vZ(-280), uX(16) - uX(-16), vZ(-420) - vZ(-280))
+  for (const rx of [-166, 166]) c.fillRect(uX(rx - 8), 0, uX(rx + 8) - uX(rx - 8), SH)
   for (const cr of CROSS_ROADS) {
-    c.fillRect(uX(-114), vZ(cr.z + cr.halfW), uX(114) - uX(-114), vZ(cr.z - cr.halfW) - vZ(cr.z + cr.halfW))
+    c.fillRect(uX(WORLD_BOUNDS.minX + 4), vZ(cr.z + cr.halfW), uX(WORLD_BOUNDS.maxX - 4) - uX(WORLD_BOUNDS.minX + 4), vZ(cr.z - cr.halfW) - vZ(cr.z + cr.halfW))
+  }
+  // v68 — Vanodyan Deep ink: the Bhayanak river, the dirt trail, the ridge peaks
+  c.fillStyle = 'rgba(44,107,116,0.85)'
+  c.fillRect(uX(-196), vZ(-696), uX(196) - uX(-196), vZ(-678) - vZ(-696))
+  c.strokeStyle = 'rgba(156,124,80,0.65)'
+  c.lineWidth = 2
+  c.beginPath()
+  c.moveTo(uX(0), vZ(-576)); c.lineTo(uX(10), vZ(-602)); c.lineTo(uX(30), vZ(-632)); c.lineTo(uX(52), vZ(-662)); c.lineTo(uX(66), vZ(-687)); c.lineTo(uX(66), vZ(-722)); c.lineTo(uX(58), vZ(-748))
+  c.stroke()
+  c.fillStyle = 'rgba(150,150,142,0.8)'
+  for (const [mx, mz, ms] of [[-170, -764, 26], [-126, -780, 30], [-80, -756, 22], [-36, -782, 28], [10, -764, 24], [58, -784, 30], [106, -758, 22], [152, -778, 26], [186, -762, 12]] as Array<[number, number, number]>) {
+    const r = ms * PPM * 0.9
+    c.beginPath()
+    c.moveTo(uX(mx), vZ(mz) - r)
+    c.lineTo(uX(mx) - r, vZ(mz) + r * 0.7)
+    c.lineTo(uX(mx) + r, vZ(mz) + r * 0.7)
+    c.closePath(); c.fill()
+  }
+  // v70 — the Vanodyan Rim: the same deterministic 360° peak ring the renderer
+  // draws, so the radar shows the mountain skyline at the edge of the world.
+  c.fillStyle = 'rgba(150,150,142,0.8)'
+  for (const [mx, mz, ms] of VANODYAN_RIM) {
+    const r = ms * PPM * 0.9
+    c.beginPath()
+    c.moveTo(uX(mx), vZ(mz) - r)
+    c.lineTo(uX(mx) - r, vZ(mz) + r * 0.7)
+    c.lineTo(uX(mx) + r, vZ(mz) + r * 0.7)
+    c.closePath(); c.fill()
+  }
+  // v60b — the green foothill ring between the jungle and the gray rim
+  c.fillStyle = 'rgba(74,105,60,0.8)'
+  for (const [mx, mz, ms] of VANODYAN_HILLS) {
+    const r = ms * PPM * 0.9
+    c.beginPath()
+    c.moveTo(uX(mx), vZ(mz) - r)
+    c.lineTo(uX(mx) - r, vZ(mz) + r * 0.7)
+    c.lineTo(uX(mx) + r, vZ(mz) + r * 0.7)
+    c.closePath(); c.fill()
   }
   // world side walls
   c.strokeStyle = 'rgba(245,239,220,0.28)'
   c.lineWidth = 2
   c.beginPath()
-  c.moveTo(uX(-120), 0); c.lineTo(uX(-120), SH)
-  c.moveTo(uX(120), 0); c.lineTo(uX(120), SH)
+  c.moveTo(uX(WORLD_BOUNDS.minX), 0); c.lineTo(uX(WORLD_BOUNDS.minX), SH)
+  c.moveTo(uX(WORLD_BOUNDS.maxX), 0); c.lineTo(uX(WORLD_BOUNDS.maxX), SH)
   c.stroke()
   // building footprints → soft ink blocks (bucket LOD by footprint area)
   const minArea = bucket === 0 ? 45 : bucket === 1 ? 12 : 3
@@ -130,13 +173,32 @@ function buildStaticLayer(bucket: number, colliders: AABB[], zones: MinimapZone[
   c.arc(uX(0), vZ(-520), 26 * PPM, 0, 7)
   c.stroke()
   c.setLineDash([])
+  // v69 — the ROUND world: everything outside the jungle disc goes transparent
+  // and the boundary ring is inked, so the radar reads as a circle of wild.
+  {
+    const cx = uX(WORLD_DISC.cx), cy = vZ(WORLD_DISC.cz)
+    const rPx = WORLD_DISC.r * PPM
+    c.save()
+    c.globalCompositeOperation = 'destination-in'
+    c.beginPath()
+    c.arc(cx, cy, rPx, 0, 7)
+    c.fillStyle = '#fff'
+    c.fill()
+    c.restore()
+    c.strokeStyle = 'rgba(96,118,78,0.9)'
+    c.lineWidth = 3
+    c.beginPath()
+    c.arc(cx, cy, rPx, 0, 7)
+    c.stroke()
+  }
   return cv
 }
 
 // ---------- A* nav grid (lazy, 10m cells, 0.8m collider inflation) ----------
+// v69 — bounds-driven extents (was hardcoded 240m/582m city)
 const CELL = 10
-const COLS = 24 // 240m / 10
-const ROWS = 59 // 582m / 10
+const COLS = Math.ceil(WORLD_W / CELL)
+const ROWS = Math.ceil(WORLD_H / CELL)
 const NAV_INFLATE = 0.8
 const LOS_INFLATE = 2.0 // extra clearance while smoothing so routes don't hug walls
 
@@ -151,15 +213,18 @@ function pointWalkable(x: number, z: number, colliders: AABB[], inflate: number)
 }
 
 function cellCenter(c: number, r: number): [number, number] {
-  return [-120 + c * CELL + CELL / 2, 10 - r * CELL - CELL / 2]
+  return [WORLD_BOUNDS.minX + c * CELL + CELL / 2, WORLD_BOUNDS.maxZ - r * CELL - CELL / 2]
 }
 
 function buildNavGrid(colliders: AABB[]): Uint8Array {
+  // v69 — only STRUCTURES block waypoint routes (footprint ≥ 5 m²): tree trunks
+  // and small props must never wall off the wild jungle from pathfinding.
+  const structures = colliders.filter(b => (b.maxX - b.minX) * (b.maxZ - b.minZ) >= 5)
   const g = new Uint8Array(COLS * ROWS)
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const [cx, cz] = cellCenter(c, r)
-      g[r * COLS + c] = pointWalkable(cx, cz, colliders, NAV_INFLATE) ? 1 : 0
+      g[r * COLS + c] = pointWalkable(cx, cz, structures, NAV_INFLATE) ? 1 : 0
     }
   }
   return g
@@ -167,8 +232,8 @@ function buildNavGrid(colliders: AABB[]): Uint8Array {
 
 function nearestWalkableCell(x: number, z: number): number {
   if (!navWalk) return -1
-  const c0 = Math.max(0, Math.min(COLS - 1, Math.floor((x + 120) / CELL)))
-  const r0 = Math.max(0, Math.min(ROWS - 1, Math.floor((10 - z) / CELL)))
+  const c0 = Math.max(0, Math.min(COLS - 1, Math.floor((x - WORLD_BOUNDS.minX) / CELL)))
+  const r0 = Math.max(0, Math.min(ROWS - 1, Math.floor((WORLD_BOUNDS.maxZ - z) / CELL)))
   if (navWalk[r0 * COLS + c0]) return r0 * COLS + c0
   for (let rad = 1; rad <= 3; rad++) {
     let best = -1
@@ -414,7 +479,15 @@ export function drawCircularMinimap(ctx: CanvasRenderingContext2D, o: DrawMinima
   const s = (R * 2) / zoom // px per world meter
 
   // smooth rotation: rotate mode targets heading-up; north-up targets 0
-  const targetRot = o.rotate ? (o.ry - Math.PI) : 0
+  // v52 — the radar math finally matches the game's facing convention. The player
+  // model uses targetRy = atan2(vel.x, vel.z), so its forward vector is
+  // (sin ry, cos ry) in world XZ. The radar's pre-rotation frame maps world Δx →
+  // +px and world Δz → −py, so on the map the facing reads (sin ry, −cos ry).
+  //   heading-up: rotate the WORLD by rot = −ry so the facing lands straight up
+  //   (the old ry − π only agreed at ry = ±π/2 — the map spun wrong elsewhere);
+  //   north-up: the arrow itself rotates by +ry (the old π − ry pointed BACKWARDS
+  //   except when facing east/west — the exact "arrow doesn't show my direction" report).
+  const targetRot = o.rotate ? -o.ry : 0
   let d = targetRot - curRot
   while (d > Math.PI) d -= Math.PI * 2
   while (d < -Math.PI) d += Math.PI * 2
@@ -640,7 +713,7 @@ export function drawCircularMinimap(ctx: CanvasRenderingContext2D, o: DrawMinima
     ctx.strokeStyle = 'rgba(255,255,255,0.45)'
     ctx.lineWidth = 1.6
     ctx.beginPath(); ctx.arc(cx, cy, pr, 0, 7); ctx.stroke()
-    const arrowRot = o.rotate ? 0 : (-o.ry + Math.PI)
+    const arrowRot = o.rotate ? 0 : o.ry // v52 — arrow = true facing (see rotation note above)
     ctx.save()
     ctx.translate(cx, cy)
     ctx.rotate(arrowRot)

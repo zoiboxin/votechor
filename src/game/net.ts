@@ -109,8 +109,13 @@ export class NetClient {
   connect(): Promise<boolean> {
     return new Promise((resolve) => {
       try {
-        // Never put the port in the URL path — Caddy gateway uses XTransformPort
-        const socket = io('/?XTransformPort=3002', {
+        // Game server URL. Default: relative gateway form (this sandbox's Caddy
+        // gateway routes ?XTransformPort=3002 → game server; never put the port
+        // in the path). Running locally WITHOUT the gateway? Set
+        // NEXT_PUBLIC_GAME_SERVER_URL=http://localhost:3002 in .env — the game
+        // server allows all CORS origins, so a direct connection just works.
+        const gameServerUrl = process.env.NEXT_PUBLIC_GAME_SERVER_URL || '/?XTransformPort=3002'
+        const socket = io(gameServerUrl, {
           transports: ['websocket', 'polling'],
           forceNew: true,
           reconnection: true,
@@ -228,14 +233,15 @@ export class NetClient {
   arrest(targetId: string) { this.socket?.emit('game:arrest', { targetId }) }
   /** Police role: lathi strike (F) — server validates and applies the damage. */
   strike(targetId: string) { this.socket?.emit('game:policeHit', { targetId }) }
-  /** v64 — zombie kill in the wild: the server validates the respawn point (whitelist) and adopts it. */
-  wildDeath(x: number, z: number) { this.socket?.emit('game:wildDeath', { x, z }) }
   emote(emote: string) { this.socket?.emit('game:emote', { emote }) }
   quickMsg(msgId: number) { this.socket?.emit('game:quickmsg', { msgId }) }
   /** v44 — free-text chat line (server sanitizes + rate-limits, then relays to the room). */
   chat(text: string) { this.socket?.emit('game:chat', { text }) }
   reviveTarget(targetId: string) { this.socket?.emit('game:revive', { targetId }) }
   healTarget(targetId: string) { this.socket?.emit('game:heal', { targetId }) }
+  /** v68 — killed by the deep-jungle undead: the server picks a random validated
+   *  respawn point (re-baselining its anti-warp tracker) and answers game:release. */
+  wildDeath() { this.socket?.emit('game:wildDeath', {}) }
   bossHit() { this.socket?.emit('game:bossHit', {}) }
   bossGrabBallot(x: number, z: number) { this.socket?.emit('game:bossBallot', { x, z }) }
   bossDeposit(x: number, z: number) { this.socket?.emit('game:bossDeposit', { x, z }) }

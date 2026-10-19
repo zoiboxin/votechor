@@ -344,9 +344,13 @@ export default function Hud() {
       {lowHealth && !hud.detained && (
         <div className="absolute inset-0 animate-[vc-blink_1.4s_ease-in-out_infinite] shadow-[inset_0_0_90px_rgba(140,31,40,0.6)]" />
       )}
-      {/* hunted vignette (police/security chasing) */}
+      {/* hunted vignette (police/security chasing) — v51: dimmer + slower pulse while the badge fades out */}
       {hud.hunted && !hud.detained && !lowHealth && (
-        <div className="absolute inset-0 animate-[vc-blink_0.85s_ease-in-out_infinite] shadow-[inset_0_0_74px_rgba(201,47,47,0.42)]" />
+        <div
+          className={hud.wantedFading
+            ? 'absolute inset-0 animate-[vc-blink_1.8s_ease-in-out_infinite] shadow-[inset_0_0_74px_rgba(201,47,47,0.22)]'
+            : 'absolute inset-0 animate-[vc-blink_0.85s_ease-in-out_infinite] shadow-[inset_0_0_74px_rgba(201,47,47,0.42)]'}
+        />
       )}
 
       {/* lightning flash (storm weather) */}
@@ -363,7 +367,7 @@ export default function Hud() {
         )}
       </AnimatePresence>
 
-      {/* WANTED — chase alarm stamp */}
+      {/* WANTED — chase alarm stamp (v51: fading = dimmed "losing them…" state) */}
       <AnimatePresence>
         {hud.hunted && !hud.detained && (
           <motion.div
@@ -374,11 +378,19 @@ export default function Hud() {
             transition={{ type: 'spring', stiffness: 340, damping: 17 }}
             className="absolute left-1/2 top-[30%] z-10 -translate-x-1/2"
           >
-            <div className="vc-stamp-texture flex animate-pulse items-center gap-2 rounded-lg border-[3px] border-[#8c1f28] bg-[#8c1f28]/92 px-4 py-1.5">
-              <Siren className="h-4 w-4 text-[#f2c14e]" strokeWidth={2.6} />
-              <span className="text-sm font-black uppercase tracking-[0.3em] text-[#f5efdc]">Wanted</span>
-              <span className="text-[10px] font-black uppercase tracking-widest text-[#f2c14e]">Run!</span>
-            </div>
+            {hud.wantedFading ? (
+              <div className="vc-stamp-texture flex animate-[vc-blink_1.8s_ease-in-out_infinite] items-center gap-2 rounded-lg border-[3px] border-[#8c1f28]/55 bg-[#8c1f28]/55 px-4 py-1.5">
+                <Siren className="h-4 w-4 text-[#f2c14e]/70" strokeWidth={2.6} />
+                <span className="text-sm font-black uppercase tracking-[0.3em] text-[#f5efdc]/75">Wanted</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-[#f2c14e]/80">Losing them…</span>
+              </div>
+            ) : (
+              <div className="vc-stamp-texture flex animate-pulse items-center gap-2 rounded-lg border-[3px] border-[#8c1f28] bg-[#8c1f28]/92 px-4 py-1.5">
+                <Siren className="h-4 w-4 text-[#f2c14e]" strokeWidth={2.6} />
+                <span className="text-sm font-black uppercase tracking-[0.3em] text-[#f5efdc]">Wanted</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-[#f2c14e]">Run!</span>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

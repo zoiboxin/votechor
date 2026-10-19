@@ -121,30 +121,22 @@ export default function GameRoot() {
       const rawSettings = localStorage.getItem('votechor_settings')
       if (rawSettings) {
         const parsed = JSON.parse(rawSettings) as Record<string, unknown>
-        // ONE-TIME v31 MIGRATION — builds ≤ v30 shipped distanceCulling ON and it got
-        // persisted. The affected device renders a blue world with those visibility
-        // optimizations active but renders fine on the pre-culler v25 path (user-
-        // verified via version history). Strip the saved preference exactly once so
-        // the new safe default (OFF) applies; after this runs, an explicit opt-in
-        // from Options is respected forever.
-        if (!localStorage.getItem('votechor_cull_migrated')) {
+        // v54 — the ONE-TIME v31 distanceCulling migration was REMOVED. Its job was to
+        // strip a v30-era persisted `true` because v31's default flipped to OFF; v50
+        // flipped the default back ON, so the strip is obsolete — and worse, it ran
+        // whenever its marker was missing (fresh storage partition = exactly a NEW
+        // TAB), deleting the `false` that the v54 rendering fail-safe persists when a
+        // device is in the blue-world class. The fail-safe's saved preference must
+        // survive every boot; an explicit value is always respected now.
+        // ONE-TIME v33 MIGRATION — builds ≤ v32 shipped hiFiModel ON: the generic
+        // GLB body replaced the procedural rig in-game, so the entire wardrobe
+        // (hat / hair / face / build / outfit / footwear / gear / held) silently
+        // vanished — "I customized my character but it doesn't show in the game".
+        // Strip the saved preference once so the customized Classic rig becomes
+        // the default; an explicit opt-in from Options is respected forever.
+        if (!localStorage.getItem('votechor_hifi_migrated')) {
           try {
-            localStorage.setItem('votechor_cull_migrated', '1')
-            delete parsed.distanceCulling
-            // rewrite the stored copy too — otherwise the next load (marker present)
-            // would re-apply the old saved `true` and undo the migration
-            localStorage.setItem('votechor_settings', JSON.stringify(parsed))
-          } catch { /* private browsing */ }
-        }
-        // ONE-TIME v51 MIGRATION (re-run of the v33 pass) — v33 turned hiFiModel OFF
-        // because the old generic GLB hid the customized wardrobe. v51 replaces the
-        // High-Fi slot with the textured realistic avatar the user supplied as THE
-        // player character, so the saved preference is stripped once more and everyone
-        // re-defaults to the new model. An explicit Options choice is still respected
-        // forever after (the marker only lets this run once).
-        if (!localStorage.getItem('votechor_hifi_migrated_v51')) {
-          try {
-            localStorage.setItem('votechor_hifi_migrated_v51', '1')
+            localStorage.setItem('votechor_hifi_migrated', '1')
             delete parsed.hiFiModel
             localStorage.setItem('votechor_settings', JSON.stringify(parsed))
           } catch { /* private browsing */ }
@@ -231,18 +223,6 @@ export default function GameRoot() {
       })()
     }
 
-    // ---- v53: warm the High-Fi avatar cache in the background ----
-    // The wardrobe preview falls back to the procedural rig while the 21.5 MB
-    // GLB downloads, which read as "old character first, then it changes".
-    // Preloading the saved profile's gender here means the preview's
-    // sharedGLBAssets.load() resolves instantly when the customization opens.
-    const preloadTimer = setTimeout(() => {
-      void import('@/game/glb').then(({ sharedGLBAssets, hiFiUrlFor }) => {
-        const g = useGameStore.getState().profile?.cosmetics?.gender === 'female' ? 'female' : 'male'
-        void sharedGLBAssets.load(hiFiUrlFor(g))
-      }).catch(() => { /* cosmetic preload is best-effort */ })
-    }, 1500)
-
     // ---- dynamic engine boot (keeps three.js out of the UI bundle) ----
     if (!engineBooted) {
       engineBooted = true
@@ -263,8 +243,6 @@ export default function GameRoot() {
         )
       })
     }
-
-    return () => clearTimeout(preloadTimer)
   }, [])
 
   const inMatch = uiMode === 'playing' || uiMode === 'paused'

@@ -232,8 +232,24 @@ export class ItemSystem {
     return true
   }
 
-  /** Item info for minimap (tokens only) */
+  /** Item info for minimap (tokens only). v50 — reuses a persistent row buffer:
+   *  drawHudMinimap consumes this every frame, so per-frame array+object literals
+   *  were constant GC churn. Callers consume synchronously — safe to reuse. */
+  private tokenCache: { id: string; x: number; z: number; taken: boolean }[] = []
   tokenData() {
-    return this.items.filter(i => i.def.type === 'token').map(i => ({ id: i.def.id, x: i.def.x, z: i.def.z, taken: i.taken }))
+    const arr = this.tokenCache
+    let n = 0
+    for (const i of this.items) {
+      if (i.def.type !== 'token') continue
+      let o = arr[n]
+      if (!o) { o = { id: '', x: 0, z: 0, taken: false }; arr[n] = o }
+      o.id = i.def.id
+      o.x = i.def.x
+      o.z = i.def.z
+      o.taken = i.taken
+      n++
+    }
+    arr.length = n
+    return arr
   }
 }

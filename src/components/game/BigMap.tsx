@@ -12,14 +12,14 @@ const WB = WORLD_BOUNDS // { minX: -120, maxX: 120, minZ: -572, maxZ: 10 }
 const WSPAN = WB.maxX - WB.minX // 240
 const HSPAN = WB.maxZ - WB.minZ // 582
 
-// Hardcoded from world-def: world z range 10 → -572 mapped onto 0..100% of the strip height.
-// toY(z) = ((10 - z) / 582) * 100
+// v66 — recomputed for the greater-city strip (z 42 → -572 over 614m):
+// toY(z) = ((42 - z) / 614) * 100
 const ZONES = [
-  { name: 'Protest Plaza', top: 1.03, height: 14.43, tone: 'bg-[#c96f4a]/25' },
-  { name: 'Chowk Market', top: 15.46, height: 20.62, tone: 'bg-[#b85c3e]/25' },
-  { name: 'Security Checkpoint', top: 36.08, height: 13.75, tone: 'bg-[#7f9a8c]/25' },
-  { name: 'Grand Avenue', top: 49.83, height: 24.06, tone: 'bg-[#c9a86a]/25' },
-  { name: 'Government District', top: 73.88, height: 26.12, tone: 'bg-[#9a7b5f]/30' },
+  { name: 'Protest Plaza', top: 6.19, height: 13.68, tone: 'bg-[#c96f4a]/25' },
+  { name: 'Chowk Market', top: 19.87, height: 19.54, tone: 'bg-[#b85c3e]/25' },
+  { name: 'Security Checkpoint', top: 39.41, height: 13.03, tone: 'bg-[#7f9a8c]/25' },
+  { name: 'Grand Avenue', top: 52.44, height: 22.8, tone: 'bg-[#c9a86a]/25' },
+  { name: 'Government District', top: 75.24, height: 24.76, tone: 'bg-[#9a7b5f]/30' },
 ]
 
 const CHECKPOINTS = [
@@ -29,7 +29,7 @@ const CHECKPOINTS = [
   { name: 'Avenue Junction', z: -418 },
 ]
 
-// Round-19 city neighborhoods + key spots (matches world-def landmarks)
+// Round-19 city neighborhoods + v66 greater-city landmarks (matches world-def)
 const LANDMARKS = [
   { name: 'Fountain', x: 0, z: -34 },
   { name: 'Training Ring', x: 16, z: -64 },
@@ -40,6 +40,15 @@ const LANDMARKS = [
   { name: 'City Depot', x: 80, z: -330 },
   { name: 'Azad Colony Park', x: 78, z: -486 },
   { name: 'Flyover', x: 12, z: -374 },
+  { name: 'Grand Mall', x: 148, z: -122 },
+  { name: 'Committee Square', x: 146, z: -178 },
+  { name: 'Vrindavan Colony', x: -148, z: -140 },
+  { name: 'Vrindavan Garden', x: -148, z: -196 },
+  { name: 'Jan Kalyan Colony', x: 148, z: -360 },
+  { name: 'Aam Bagicha', x: 148, z: -500 },
+  { name: 'Vanodyan Jungle', x: -60, z: 28 },
+  { name: 'West Jungle', x: -186, z: -300 },
+  { name: 'East Jungle', x: 186, z: -300 },
 ]
 
 const ZOOM_PRESETS = [
@@ -59,7 +68,9 @@ function zoomLabel(z: number) {
   return 'Close-up'
 }
 
-const BUF_W = 240
+// v66 — buffer spans the greater-city width (malls + jungle ring need the canvas
+// to cover x ±200 now; the crop math derives from WSPAN either way).
+const BUF_W = 400
 const BUF_H = 420
 
 /**

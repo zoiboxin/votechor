@@ -83,7 +83,7 @@ export class SuspectSystem {
     const female = this.ids % 2 === 1
     const hair = female
       ? (['bun', 'ponytail', 'braid', 'long'] as const)[this.ids % 4]
-      : (['default', 'buzz', 'curly', 'mullet', 'spiky', 'default'] as const)[this.ids % 6]
+      : (['default', 'buzz', 'curly', 'default'] as const)[this.ids % 4]
     const rig = new CharacterRig({ archetype: arch.id, name: '', colors, gender: female ? 'female' : 'male', hair })
     rig.setNameVisible(false)
     const id = `suspect_${this.ids++}`

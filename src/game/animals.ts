@@ -345,6 +345,13 @@ const SPOTS: Array<{ kind: AnimalKind; x: number; z: number; r: number }> = [
   { kind: 'cat', x: 7, z: -512, r: 5 },   // Parliament Plaza approach
   { kind: 'cow', x: 8, z: -400, r: 4.5 }, // grand avenue east margin
   { kind: 'cow', x: -6, z: -505, r: 4 },  // Parliament Plaza north edge
+  // v66 — greater-city wildlife: the jungle ring and the north band are alive too
+  { kind: 'cow', x: -184, z: -160, r: 9 }, // west jungle clearing
+  { kind: 'cow', x: 184, z: -300, r: 9 },  // east jungle clearing
+  { kind: 'cow', x: -30, z: 26, r: 8 },    // north jungle west of the spine road
+  { kind: 'dog', x: -180, z: -420, r: 7 }, // west jungle trail
+  { kind: 'dog', x: 26, z: 26, r: 6 },     // north jungle east of the spine road
+  { kind: 'cat', x: 148, z: -190, r: 6 },  // Committee Square back lane
 ]
 
 const BIRD_FLOCKS = [

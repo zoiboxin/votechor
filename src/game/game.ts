@@ -14,12 +14,15 @@ import { CrowdLod, type CrowdEntry } from './crowd'
 import { NpcSystem, VehicleSystem } from './npcs'
 import { ItemSystem } from './items'
 import { AnimalSystem, type AnimalHandle } from './animals'
+import { ZombieSystem } from './zombies'
+import { JungleAmbience, wildnessAt } from './jungle-ambience'
 import { BossClient } from './boss'
 import { NetClient, type JoinAck } from './net'
 import { AudioManager } from './audio'
 import { FxSystem } from './fx'
 import { SpeechBubbleSystem } from './bubbles'
-import { buildWorldDef } from './shared/world-def'
+import { buildWorldDef, COUNTRYSIDE_TRACKS } from './shared/world-def'
+import { initMountainField, mountainHeightAt } from './mountain-field'
 import { mapById, mapForLevel } from './shared/maps'
 import { createNpcStates, tickNpc, type NpcBrainState, type NpcPlayerView } from './shared/npc-brain'
 import { createBossBrain, tickBoss, grabBallot, depositBallot, registerBossHit, type BossBrain } from './shared/boss-brain'
@@ -27,26 +30,28 @@ import {
   MOVE, TOKENS_NEEDED, DETENTION_SECONDS, MATCH_TIME_LIMIT, ITEM_CONFIG, INVENTORY_MAX,
   archetypeById, XP_TABLE, levelFromXp, CAPTURE_MESSAGES, RANDOM_NOTIFICATIONS, BOSS_NAME,
   BOSS_PHASE_NAMES, GIFT_RADIUS, GIFT_TYPES, SHOUT_COOLDOWN_SEC, SHOUT_LINES, PLAYER_ROLE, POLICE_STRIKE,
-  FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS,
+  FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS, GRAVEYARD, WORLD_DISC,
 } from './shared/constants'
 import type { AABB, AnimName, BossNetState, ItemType } from './shared/types'
 import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
-import { sharedGLBAssets, hiFiUrlFor, type GLBInstance } from './glb'
-import { GLBAnimDriver, GlbLocoFallback } from './anim'
-import { applyAvatarLook, resolveAvatarLook, type AvatarLook } from './avatar-look'
-import { ZombieSystem } from './zombies'
-import { initMountainField, mountainHeightAt } from './mountain-field'
-import { WORLD_DISC } from './shared/constants'
+import { GLBAssetManager, type GLBInstance } from './glb'
+import { GLBAnimDriver } from './anim'
 import type { LocoState } from './anim'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
+
+/** v51 — soft-escape window: after the LAST chaser drops off, the WANTED badge
+ *  lingers dimmed ("losing them…") for this long before clearing itself. Long
+ *  enough to read as a slow fade, short enough that a fresh officer picking up
+ *  the chase snaps the badge straight back to full alert. */
+const WANTED_FADE_MS = 5000
 
 /** A remote protester (human or bot): data always present, rig/GLB attached by budget. */
 interface RemoteEntry {
   rig: import('./character').CharacterRig | null
   /** High-Fi GLB model instance (replaces the procedural body; rig keeps the name tag). */
-  glb: { inst: GLBInstance; driver: GLBAnimDriver; loading: boolean; loco?: GlbLocoFallback } | null
+  glb: { inst: GLBInstance; driver: GLBAnimDriver; loading: boolean } | null
   target: { x: number; y: number; z: number; ry: number }
   anim: AnimName
   name: string
@@ -117,11 +122,6 @@ interface MatchStats {
 export class Game {
   private engine!: Engine
   private physics = new PhysicsWorld()
-  // v64 wild world — zombies + mountain heightfield state
-  private zombies: ZombieSystem | null = null
-  private wildWarnT = 0
-  private wasInWild = false
-  private lastZombieHitAt = 0
   private worldRenderer!: WorldRenderer
   /** Static-geometry distance culling — the measured dominant draw-call cost beyond the fog wall. */
   private culler!: WorldDistanceCuller
@@ -132,10 +132,21 @@ export class Game {
   private vehicles!: VehicleSystem
   private items!: ItemSystem
   private animals!: AnimalSystem
+  private zombies!: ZombieSystem
+  private ambience!: JungleAmbience
+  private wildToastShown = false
+  private zombieDeathPending = false
+  // v69 — city→wild warning state (cooldown timer + last-seen wildness level)
+  private wildWarnT = 4
+  private lastWildness = 0
   private bossClient = new BossClient()
   private fx = new FxSystem()
   private playerBubbles = new SpeechBubbleSystem()
   private lastHunted = false
+  /** v51 — soft-escape window: while > 0 the WANTED badge lingers dimmed after
+   *  the last chaser dropped off; expires to a clean hunted:false. */
+  private wantedFadeUntil = 0
+  private lastFading = false
   private photoWheelHandler: ((e: WheelEvent) => void) | null = null
   private net = new NetClient()
   private world = buildWorldDef()
@@ -169,6 +180,10 @@ export class Game {
   private inventory: { uid: string; type: ItemType }[] = []
   private stats: MatchStats = { tokens: 0, checkpoints: 0, rescues: 0, revives: 0, itemsCollected: 0, detentions: 0, bossHits: 0, distractions: 0, gifts: 0, confiscated: 0, confiscatedItems: 0, arrests: 0 }
   private detainUntil = 0
+  /** v49 — until this timestamp the just-released local player is `hidden` to NPC
+   *  brains (invisible beyond 3 m) and the WANTED banner stays cleared, so a fresh
+   *  respawn cannot be instantly re-chased or re-flagged. */
+  private releaseGraceUntil = 0
   private carryingBallot = false
   private carryingBallotId: string | null = null
   private remotePlayers = new Map<string, RemoteEntry>()
@@ -193,9 +208,8 @@ export class Game {
   private lastArrestAttemptAt = 0 // police-role arrest spam gate (client side)
   private lastPlayerStrikeAt = 0 // police-role baton strike (F) spam gate — distinct from the NPC telegraph above
   // ---- High-Fi GLB player model (Step 2/3/4 integration — auto-fallback to procedural) ----
-  // sharedGLBAssets: one process-wide cache shared with the wardrobe preview
-  private glbMgr = sharedGLBAssets
-  private hiFiLook: AvatarLook | null = null
+  private glbMgr = new GLBAssetManager()
+  private hiFiPalette: { shirt: string; pants: string; skin: string; accent: string } | null = null
   private hiFiGender: 'male' | 'female' = 'male'
   private role: 'protector' | 'police' = 'protector' // chosen side (profile.role)
   private suspects: SuspectSystem | null = null // offline police-role arrest targets
@@ -284,24 +298,9 @@ export class Game {
       this.store.notify('Graphics restored', 'info')
     }
     this.physics.setColliders(this.world.colliders)
-    // v64 wild world — the mountain heightfield IS the collision surface, and the
-    // jungle ring is hunted. Zombies ride the same terrain the player walks.
+    // v77 wild world — the mountain heightfield IS the collision surface
     initMountainField(this.world.decorations)
     this.physics.setTerrain(mountainHeightAt)
-    this.zombies = new ZombieSystem({
-      onStrike: (dmg) => {
-        if (!this.player || !this.running) return
-        this.lastZombieHitAt = Date.now()
-        this.applyDamage(dmg, 'zombie')
-        if (this.player.health <= 0) this.wildDeath()
-      },
-      sfx: (name, sx, sz) => {
-        if (!this.player) return
-        AudioManager.playAt(name, sx, sz, this.player.pos.x, this.player.pos.z, this.camRig.yaw, 58)
-      },
-      listener: () => ({ x: this.player?.pos.x ?? 0, z: this.player?.pos.z ?? -8, yaw: this.camRig?.yaw ?? 0 }),
-    })
-    this.engine.scene.add(this.zombies.group)
     // QA/debug handle — lets test scripts probe the live atmosphere state (window.__sky)
     if (typeof window !== 'undefined') {
       (window as unknown as { __sky?: SkySystem }).__sky = this.engine.sky
@@ -313,30 +312,30 @@ export class Game {
       ;(window as unknown as { __game?: Game }).__game = this
     }
     this.engine.scene.add(this.worldRenderer.group)
-    this.culler = new WorldDistanceCuller(this.worldRenderer.group, 195) // fog far is 210 — cull just inside it
-    // honor the user's performance-visibility preference (Options → Performance).
-    // Opt-in: default OFF renders the exact proven v25 path (everything always drawn).
-    this.culler.enabled = useGameStore.getState().settings.distanceCulling === true
-    // fail-safe host: if the culler ever mass-hides on this device it has already
-    // restored the world and disabled itself — make it visible + reportable
-    this.culler.onAnomaly = (visibleNear) => {
-      console.warn(`[VoteChor] Distance-culler fail-safe — only ${visibleNear} meshes visible near the player; culling disabled, world fully restored`, {
-        mode: this.mode, offline: this.offline, t: new Date().toISOString(),
-      })
-      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
-      ;(w.__vcDiag ??= []).push({ kind: 'cullerFailSafe', visibleNear, t: Date.now(), at: { x: this.player?.pos.x ?? 0, z: this.player?.pos.z ?? 0 } })
-      this.store.notify('Graphics safety: distance culling disabled — world fully restored', 'warning')
-    }
+    // v54 — the culler is armed through ONE shared path (boot + district re-arm) so
+    // the user's Performance Visibility preference AND the anomaly fail-safe survive
+    // every re-arm. See armCuller().
+    this.armCuller(this.worldRenderer.group, 195) // fog far is 210 — cull just inside it
     this.engine.scene.add(this.bossClient.group)
     this.engine.scene.add(this.fx.group)
     this.engine.scene.add(this.playerBubbles.group)
 
     this.input = new InputManager(canvas)
     this.input.onOneShot = (a) => this.handleOneShot(a)
+    // v48 — a bare-canvas click while the squad panel owns the free mouse means
+    // "back to the protest": dismiss the panel; the store subscription re-captures
+    // the pointer within the same user gesture. Panel clicks never bubble through
+    // the canvas, so the Gift/Invite/Rally buttons are unaffected.
+    this.input.onUnlockClick = () => {
+      const st = useGameStore.getState()
+      if (!st.squadOpen) return false
+      st.toggleSquad(false)
+      return true
+    }
     this.camRig = new ThirdPersonCamera(this.engine.camera, this.physics)
 
     this.npcs = new NpcSystem(this.world, this.physics, 'high')
-    this.npcs.farLod = useGameStore.getState().settings.distanceCulling === true // opt-in (v25 default: off)
+    this.npcs.farLod = useGameStore.getState().settings.distanceCulling === true // v50 default ON; the culler fail-safe is the escape hatch
     this.engine.scene.add(this.npcs.group)
     // offline solo: police captures + melee hits come from the local sim
     this.npcs.onLocalCapture = () => {
@@ -350,6 +349,13 @@ export class Game {
     this.vehicles = new VehicleSystem(this.world, this.engine.renderer)
     this.engine.scene.add(this.vehicles.group)
     this.vehicles.onPlayerHit = (kind, x, z, dmg) => this.handleVehicleHit(kind, x, z, dmg)
+    // v66 — traffic honks through the spatial playAt pipeline (bike high, bus deep);
+    // the scheduler in VehicleSystem.update only fires for vehicles near the player
+    this.vehicles.onHonk = (kind, x, z) => {
+      if (!this.player) return
+      const name = kind === 'bike' ? 'hornHi' : kind === 'bus' ? 'hornLo' : 'horn'
+      AudioManager.playAt(name, x, z, this.player.pos.x, this.player.pos.z, this.camRig.yaw, 46)
+    }
 
     // street animals + sky birds — independent client bots with a feed-to-follow
     // pet mechanic (audio + hearts are self-driven; notifications come via hooks)
@@ -366,6 +372,24 @@ export class Game {
       onPetOver: (label) => this.store.notify(`${label} wanders off — feed again to be friends`, 'info'),
     })
     this.engine.scene.add(this.animals.group)
+
+    // v68 — the Vanodyan Dead + their forest's voice (client-local bots + bed)
+    this.zombies = new ZombieSystem(this.fx, {
+      onStrike: (amount) => this.applyDamage(amount, 'zombie'),
+      onSpot: () => {
+        // a full-volume sting the instant one of them notices you — no attenuation
+        AudioManager.play('scareSting')
+        this.addShake(0.35)
+        if (!this.wildToastShown) {
+          this.wildToastShown = true
+          this.store.notify('Something dead is hunting you — RUN!', 'warning')
+        } else {
+          this.store.notify('The undead have your scent…', 'warning')
+        }
+      },
+    })
+    this.engine.scene.add(this.zombies.group)
+    this.ambience = new JungleAmbience()
 
     this.items = new ItemSystem(this.world.items, this.physics)
     this.engine.scene.add(this.items.group)
@@ -543,9 +567,13 @@ export class Game {
         this.engine.shadowThrottle = on // off = shadows refresh every frame (v25 cadence)
         if (this.npcs) this.npcs.farLod = on // off = every NPC rig always drawn (v25)
       }
-      // ---- map toggled from ANY source (M key, HUD minimap click, big-map X / backdrop / Escape) ----
-      if (s.mapOpen !== prev.mapOpen || s.chatOpen !== prev.chatOpen) {
-        const overlay = s.mapOpen || s.chatOpen
+      // ---- overlay orchestration: big map, T comms AND the squad panel ----
+      // v48 — Tab used to open the squad panel UNDER a still-locked pointer: the
+      // player could read it but not click Create/Join/Invite/Gift/Rally. squadOpen
+      // now shares the map's contract: open = suppress movement + free the mouse
+      // (no pause side-effect), close = re-arm input + re-capture the pointer.
+      if (s.mapOpen !== prev.mapOpen || s.chatOpen !== prev.chatOpen || s.squadOpen !== prev.squadOpen) {
+        const overlay = s.mapOpen || s.chatOpen || s.squadOpen
         this.input.suppressed = overlay
         this.input.pauseOnUnlock = !overlay
         if (overlay) {
@@ -554,13 +582,17 @@ export class Game {
         } else if (s.uiMode === 'playing') {
           this.input.clearKeys()
           this.input.setEnabled(true) // re-arm keyboard + pointer lock (fixes frozen controls)
+          this.relockPointerWithRetry() // a fast Tab-Tab can hit Chrome's unlock cooldown
         }
       }
       // ---- returning to 'playing' from the pause menu must ALWAYS restore input ----
       // (the Resume button only flips uiMode; without this the keyboard stays dead)
       if (s.uiMode !== prev.uiMode && s.uiMode === 'playing' && prev.uiMode === 'paused') {
-        this.input.suppressed = s.mapOpen || s.chatOpen
-        if (!(s.mapOpen || s.chatOpen)) { this.input.clearKeys(); this.input.setEnabled(true) }
+        const overlay = s.mapOpen || s.chatOpen || s.squadOpen
+        this.input.suppressed = overlay
+        this.input.pauseOnUnlock = !overlay
+        if (!overlay) { this.input.clearKeys(); this.input.setEnabled(true) }
+        else this.input.releasePointer() // an overlay survived the pause — keep its mouse free
       }
     })
 
@@ -643,14 +675,14 @@ export class Game {
     this.playerBubbles.occlusionCheck = this.npcs.bubbles.occlusionCheck
     this.engine.start()
     AudioManager.resume()
-    // v48: menus are silent — no crowd bed, no menu theme on the landing page.
-    // startMatch() starts both; leaveMatch()/finalizeMatch() stop them.
+    AudioManager.startCrowd()
+    AudioManager.setTheme('menu')
     useGameStore.getState().setUIMode('menu')
     // debug handle for QA tooling
     ;(window as unknown as { __vc: unknown }).__vc = this
     // QA affordance: direct store access for tooling (same contract as __vc)
     ;(window as unknown as { __vcStore: unknown }).__vcStore = useGameStore
-    // QA affordance: audio state for silent-menu verification (theme/crowdSource)
+    // v50 — audio probe for QA (verify the menu keeps NO residual game ambience)
     ;(window as unknown as { __vcAudio: unknown }).__vcAudio = AudioManager
   }
 
@@ -702,14 +734,16 @@ export class Game {
       this.worldId = mapId
       this.world = buildWorldDef(mapId)
       this.physics.setColliders(this.world.colliders)
-      // v64: re-derive the heightfield for the rebuilt world
+      // v77: re-derive the heightfield for the rebuilt world
       initMountainField(this.world.decorations)
       this.physics.setTerrain(mountainHeightAt)
       this.worldRenderer.dispose()
       this.worldRenderer = new WorldRenderer(this.world, 'high')
       this.engine.scene.add(this.worldRenderer.group)
       ;(window as unknown as { __wr?: WorldRenderer }).__wr = this.worldRenderer
-      this.culler = new WorldDistanceCuller(this.worldRenderer.group, 195) // fog far is 210 — cull just inside it
+      // v54 — shared arm path: honors the saved Performance Visibility preference and
+      // keeps the persisting anomaly fail-safe (the old raw re-arm reset both).
+      this.armCuller(this.worldRenderer.group, 195) // fog far is 210 — cull just inside it
     }
     const district = mapById(this.worldId)
 
@@ -718,16 +752,31 @@ export class Game {
     // gets ~12+ real minutes of daylight before nightfall. + reset weather roll.
     // v43 — the district pins its own sky window, but ONLY while the player's
     // settings are on the cycle/auto defaults: an explicit user choice always wins.
+    // v52 — startFresh() replaces the old setWeatherMode('auto') dance: that call
+    // early-returned when already 'auto' and silently kept the PREVIOUS session's
+    // targetWeather, so matches spawned inside a leftover storm and held it for
+    // 150–330 s (the "rain sound always playing" bug). Now every match snaps to a
+    // declared start weather: explicit user choice → district pin → fresh clear.
     this.engine.sky.timeOfDay = 8 + Math.random() * 1.75
-    this.engine.sky.setWeatherMode('auto')
     this.engine.sky.setTimeMode(useGameStore.getState().settings.timeMode ?? 'cycle')
     const liveSettings = useGameStore.getState().settings
     if (liveSettings.timeMode === 'cycle' && district.timeOfDay) {
       this.engine.sky.timeOfDay = district.timeOfDay[0] + Math.random() * (district.timeOfDay[1] - district.timeOfDay[0])
     }
-    if (liveSettings.weatherMode === 'auto' && district.weather) {
-      this.engine.sky.setWeatherMode(district.weather)
+    // v53 — weatherOverride now holds ONLY the district identity (monsoon map stays
+    // monsoon while the player is on Auto). The user's explicit weather kind is no
+    // longer copied into the pin — it is read live from settings every frame by the
+    // render loop, so dashboard changes apply mid-match and switching back to Auto
+    // hands control to the district pin / living machine instead of freezing the
+    // last picked kind forever.
+    if (liveSettings.weatherMode && liveSettings.weatherMode !== 'auto') {
+      this.engine.sky.startFresh(liveSettings.weatherMode, liveSettings.weatherMode)
+    } else if (district.weather) {
+      this.engine.sky.startFresh(district.weather, district.weather)
+    } else {
+      this.engine.sky.startFresh('auto', 'clear')
     }
+    this.weatherOverride = district.weather ?? null
     useGameStore.getState().patchHud({ env: { ...useGameStore.getState().hud.env, flashAt: 0 }, mapName: district.name, mapDifficulty: district.difficulty, mapXpMul: district.xpMul })
 
     const profile = store.profile
@@ -770,11 +819,18 @@ export class Game {
     }
     const cosmetics = profile?.cosmetics
     const gender = cosmetics?.gender === 'female' ? 'female' as const : 'male' as const
-    // High-Fi GLB look — ONE pipeline shared with the wardrobe preview and the
-    // remotes: archetype + outfit + skin tone + police uniform resolve into a
-    // full AvatarLook (normalized tint + bone attachments live in avatar-look.ts)
-    this.hiFiLook = resolveAvatarLook(cosmetics as Record<string, string | boolean | undefined> | undefined, this.archetype, this.role)
-    this.hiFiGender = gender
+    // High-Fi GLB palette — mirrors PlayerController's color resolution exactly
+    {
+      const arch = archetypeById(this.archetype)
+      const pal = { shirt: arch.colors.shirt, pants: arch.colors.pants, skin: arch.colors.skin, accent: arch.colors.accent }
+      if (cosmetics?.skinTone && typeof cosmetics.skinTone === 'string') pal.skin = cosmetics.skinTone
+      if (this.role === 'police') {
+        const u = policeUniformColors(typeof cosmetics?.policeOutfit === 'string' ? cosmetics.policeOutfit : undefined)
+        pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
+      }
+      this.hiFiPalette = pal
+      this.hiFiGender = gender
+    }
     this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
       hat: cosmetics?.hat as string | undefined,
       glasses: cosmetics?.glasses as boolean | undefined,
@@ -805,7 +861,6 @@ export class Game {
       this.fx.burst(p.pos.x, p.pos.y + 0.25, p.pos.z, '#f2c14e', 14, 3.6, 0.5)
       this.fx.burst(p.pos.x, p.pos.y + 0.15, p.pos.z, '#ffffff', 8, 2.4, 0.4)
       p.rig.flip() // quick procedural front-flip flourish
-      p.glb?.loco.triggerFlip() // the GLB body mirrors it (held 360° spin, v52)
     }
     this.player.onVault = () => AudioManager.play('vault')
     this.player.onSlide = () => {
@@ -893,7 +948,6 @@ export class Game {
     store.patchHud({ role: this.role, arrests: 0 })
 
     AudioManager.setTheme('ambient')
-    AudioManager.startCrowd() // idempotent — rebuilds the bed after a silent-menu stopCrowd()
     AudioManager.setCrowdLevel(0.7)
     store.setUIMode('playing')
     this.input.setEnabled(true)
@@ -969,6 +1023,8 @@ export class Game {
     this.crowd = null
     this.perfRigs = 0
     this.lastHunted = false
+    this.wantedFadeUntil = 0 // v51 — match teardown clears any in-flight badge fade
+    this.lastFading = false
     this.squad = { code: null, memberIds: new Set() }
     this.lastSquadCode = null
     this.squadAutoRejoin = false
@@ -976,9 +1032,10 @@ export class Game {
     this.clearPendingInvite()
     useGameStore.getState().patchHud({ hunted: false, rallyReadyAt: 0 })
     useGameStore.getState().setSquad(null)
-    AudioManager.setTheme('none') // v48: landing page is silent — background sound only while a match runs
-    AudioManager.stopCrowd()
-    AudioManager.stopRain() // v49: kill any lingering weather bed
+    AudioManager.setTheme('menu')
+    AudioManager.setCrowdLevel(0.25)
+    AudioManager.setRain(0) // v50 — a mid-storm quit used to keep the rain bed looping on the menu
+    this.weatherOverride = null // v52 — the menu obeys the settings panel again
     const st = useGameStore.getState()
     st.setUIMode('menu')
     st.setMenuScreen('main')
@@ -1150,33 +1207,34 @@ export class Game {
    */
   private async attachRemoteGlb(id: string, r: RemoteEntry) {
     if (r.glb || !r.rig) return
-    // police stay on the procedural rig: their uniform/hat/lathi identity reads clearly
-    // there, while the textured avatar GLB has no uniform to tint (tintGlb matches no
-    // mesh names on it) — an untinted protestor-looking cop would confuse chases.
-    if (r.role === 'police') return
     r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
     const gender = r.cosmetics?.gender === 'female' ? 'female' : 'male'
-    const url = hiFiUrlFor(gender)
+    const url = gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
     const asset = await this.glbMgr.load(url)
     if (!asset) { r.glb = null; return }
     // entry may have been pruned / rig budget-evicted / setting flipped mid-load
     if (this.remotePlayers.get(id) !== r || !r.rig || !this.store.settings.hiFiModel) { r.glb = null; return }
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) { r.glb = null; return }
-    // full look: normalized tint + bone attachments (hair/hat/footwear/gear/
-    // held follow the skeleton — zero extra network traffic, all derived from
-    // the cosmetics fields that already sync). Police remotes never get here
-    // (guard above), so the role is always the people's side.
-    applyAvatarLook(inst.group, resolveAvatarLook(r.cosmetics, r.archetype, 'protector'))
+    // same palette logic as the procedural rig above (archetype colors + skinTone + police uniform)
+    const c = r.cosmetics
+    const arch = archetypeById(r.archetype)
+    const pal = {
+      shirt: arch.colors.shirt, pants: arch.colors.pants, accent: arch.colors.accent,
+      skin: typeof c?.skinTone === 'string' ? c.skinTone : arch.colors.skin,
+    }
+    if (r.role === 'police') {
+      const u = policeUniformColors(typeof c?.policeOutfit === 'string' ? c.policeOutfit : undefined)
+      pal.shirt = u.shirt; pal.pants = u.pants; pal.accent = u.accent
+    }
+    this.tintGlb(inst, pal)
     inst.group.visible = true
     inst.group.position.set(r.target.x, r.target.y, r.target.z)
     inst.group.rotation.y = r.target.ry
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
-    const loco = new GlbLocoFallback()
-    loco.patch(inst.group) // arm-swing layer for clip-less models (harmless when clips exist)
     r.rig.setBodyVisible(false) // name tag + alert sprites stay
-    r.glb = { inst, driver, loading: false, loco }
+    r.glb = { inst, driver, loading: false }
     // catch the GLB up to wherever interpolation is right now
     inst.group.position.copy(r.rig.group.position)
     inst.group.rotation.y = r.rig.group.rotation.y
@@ -1200,20 +1258,39 @@ export class Game {
    */
   private async tryAttachHiFi() {
     const p = this.player
-    if (!p || p.glb || !this.hiFiLook) return
-    // police play on the procedural rig (uniform/hat identity — see attachRemoteGlb)
-    if (this.role === 'police') return
-    const url = hiFiUrlFor(this.hiFiGender)
+    if (!p || p.glb || !this.hiFiPalette) return
+    const url = this.hiFiGender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male.glb'
     const asset = await this.glbMgr.load(url)
     if (!asset) return // loader already logged the reason; procedural stays
     if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) return
-    applyAvatarLook(inst.group, this.hiFiLook)
+    this.tintGlb(inst, this.hiFiPalette)
     inst.group.visible = true
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
     p.attachGlb(inst, driver)
+  }
+
+  /** Tint the GLB instance to the player's archetype/police palette (clones materials per-instance). */
+  private tintGlb(inst: GLBInstance, pal: { shirt: string; pants: string; skin: string; accent: string }) {
+    const map: Record<string, string> = {
+      TorsoMesh: pal.shirt, ArmLMesh: pal.shirt, ArmRMesh: pal.shirt,
+      LegLMesh: pal.pants, LegRMesh: pal.pants,
+      HeadMesh: pal.skin, ArmLHand: pal.skin, ArmRHand: pal.skin,
+      Sash: pal.accent,
+    }
+    inst.group.traverse((o) => {
+      const m = o as THREE.Mesh
+      if (!m.isMesh) return
+      const color = map[m.name]
+      if (!color) return
+      const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial | undefined
+      if (!mat) return
+      const clone = mat.clone()
+      clone.color = new THREE.Color(color)
+      m.material = clone
+    })
   }
 
   /** Live settings toggle — swap between the GLB and procedural rigs mid-match. */
@@ -1301,6 +1378,14 @@ export class Game {
       this.player.detain()
       this.stats.detentions++
       this.detainUntil = until
+      // v49 — the WANTED banner must never survive the arrest: the Hud masks it
+      // while detained, but the stale hud.hunted used to re-appear the instant the
+      // player respawned (the render loop skips patching while isDetained).
+      // v51 — and any in-flight soft-escape fade dies with the arrest too.
+      this.lastHunted = false
+      this.wantedFadeUntil = 0
+      this.lastFading = false
+      useGameStore.getState().patchHud({ hunted: false, wantedFading: false })
       this.store.notify(message || randomOf(CAPTURE_MESSAGES), 'capture')
       AudioManager.play('capture')
       this.addShake(0.7)
@@ -1374,12 +1459,30 @@ export class Game {
     }
   }
 
+  /** v49 — shared local release contract: teleport out of detention, clear the
+   *  WANTED banner + chase bookkeeping, and open a 6 s police-invisible grace so
+   *  officers loitering near the release point cannot instantly re-catch. */
+  private releaseLocal(x: number, z: number) {
+    this.player!.release(x, z)
+    this.lastHunted = false
+    this.wantedFadeUntil = 0 // v51 — a release supersedes any in-flight badge fade
+    this.lastFading = false
+    this.releaseGraceUntil = Date.now() + 6000
+    useGameStore.getState().patchHud({ hunted: false, wantedFading: false })
+    this.store.notify('Released! The paperwork was, tragically, in order.', 'info')
+    AudioManager.play('release')
+  }
+
   private onRelease(playerId: string, x: number, z: number) {
     if (!this.player) return
     if (playerId === this.net.playerId || this.offline) {
-      this.player.release(x, z)
-      this.store.notify('Released! The paperwork was, tragically, in order.', 'info')
-      AudioManager.play('release')
+      this.releaseLocal(x, z)
+      if (this.zombieDeathPending) {
+        // v68 — this release is the wild-death respawn: wake up battered, not doomed
+        this.zombieDeathPending = false
+        this.player.health = Math.max(this.player.health, Math.round(this.player.maxHealth * 0.6))
+        this.syncHud()
+      }
     } else {
       const r = this.remotePlayers.get(playerId)
       if (r) r.detained = false
@@ -1677,6 +1780,24 @@ export class Game {
   }
 
   // ================= input & actions =================
+  // v48 — pointer-lock re-capture helper
+  private relockTimer: ReturnType<typeof setTimeout> | null = null
+  /** Chrome enforces a ~1.25 s cooldown after a pointer unlock, so a fast Tab-Tab
+   *  (open squad panel → close it) can get the re-lock request silently rejected.
+   *  One deferred retry past the cooldown self-heals the peek case without needing
+   *  a canvas click. No-op when any overlay is open, the game is not playing, or
+   *  the pointer was re-captured in the meantime. */
+  private relockPointerWithRetry() {
+    if (this.relockTimer !== null) { clearTimeout(this.relockTimer); this.relockTimer = null }
+    if (document.pointerLockElement) return
+    this.relockTimer = setTimeout(() => {
+      this.relockTimer = null
+      const s = useGameStore.getState()
+      if (s.uiMode !== 'playing' || s.mapOpen || s.chatOpen || s.squadOpen) return
+      if (!document.pointerLockElement) this.input.requestLock()
+    }, 1400)
+  }
+
   private handleOneShot(a: string) {
     const store = useGameStore.getState()
     switch (a) {
@@ -1685,6 +1806,8 @@ export class Game {
         if (store.mapOpen) { store.toggleMap(false); break }
         // v44 — same contract for the T comms panel: Escape closes chat, not the game
         if (store.chatOpen) { store.toggleChat(false); break }
+        // v48 — same contract for the squad panel: Escape closes it first, never the game
+        if (store.squadOpen) { store.toggleSquad(false); break }
         // v35 debounce — some browsers deliver BOTH the Escape keydown and the
         // pointer-lock change for one physical press; without this latch the toggle
         // would open+close the modal in the same frame and it would never show.
@@ -1702,6 +1825,9 @@ export class Game {
           // enabled=false, and FUTURE user-initiated unlocks must still pause.
           this.input.releasePointer()
           this.input.pauseOnUnlock = true
+          // v48 — one menu at a time: the pause menu takes over, so drop the squad
+          // panel (closed AFTER the uiMode flip so its close path can't re-lock).
+          if (store.squadOpen) store.toggleSquad(false)
         } else if (store.uiMode === 'paused') {
           store.setUIMode('playing')
           this.input.setEnabled(true)
@@ -2102,8 +2228,17 @@ export class Game {
   private applyDamage(amount: number, kind: string) {
     if (!this.player) return
     if (amount > 0) {
-      this.player.damage(amount, kind)
-      if (kind === 'police') {
+      const dazed = this.player.damage(amount, kind)
+      if (kind === 'zombie') {
+        // v68 — the undead: swipes drain health fast; at zero the wild claims you
+        AudioManager.play('hit')
+        this.addShake(Math.min(0.8, amount / 30))
+        this.fx.burst(this.player.pos.x, this.player.pos.y + 0.9, this.player.pos.z, '#7d9459', 9, 2.4, 0.35)
+        if (dazed) {
+          this.wildDeath()
+          return
+        }
+      } else if (kind === 'police') {
         // police baton (Phase 5 feel) — comic thwack + red vignette + stagger + knockback
         this.lastPoliceDamageAt = Date.now()
         this.applyPoliceHitFeel(amount)
@@ -2115,59 +2250,35 @@ export class Game {
     this.syncHud()
   }
 
-  /**
-   * v64 — a zombie killed the protester in the wild. Respawn at the nearest
-   * safe release point (the checkpoint detentions, all inside the city) with
-   * 60 health. Multiplayer: the server validates the point against its
-   * whitelist and adopts it (game:wildDeath), so anti-warp accepts the hop.
-   */
+  /** v68 — wild respawn points (offline mirror of the server's validated list):
+   *  city release posts + the ring roads, the grove and the deep-jungle clearings. */
+  private static WILD_RESPAWN_POINTS: Array<{ x: number; z: number }> = [
+    { x: 6, z: -74 }, { x: 0, z: -140 }, { x: 12, z: -190 }, { x: 10, z: -268 }, { x: 14, z: -408 },
+    { x: 166, z: -360 }, { x: 140, z: -500 },
+    { x: 66, z: -706 }, { x: -60, z: -620 }, { x: -84, z: -670 },
+  ]
+
+  /** v68 — killed in the wild: the jungle resets you somewhere else entirely.
+   *  Online the server picks the point (and re-baselines its anti-warp tracker);
+   *  offline we pick locally, always far from every zombie. */
   private wildDeath() {
     const p = this.player!
-    const pool = [
-      { x: 0, z: -8 }, { x: 10, z: -70 }, { x: 12, z: -190 }, { x: 10, z: -268 }, { x: 14, z: -408 },
-    ]
-    let best = pool[0]
-    let bestD = Infinity
-    for (const pt of pool) {
-      const d = Math.hypot(pt.x - p.pos.x, pt.z - p.pos.z)
-      if (d < bestD) { bestD = d; best = pt }
-    }
-    p.pos.set(best.x, 0, best.z)
-    p.vel.set(0, 0, 0)
-    p.health = 60
-    if (p.state === 'dazed') p.state = 'normal'
-    this.lastZombieHitAt = 0
+    this.fx.burst(p.pos.x, p.pos.y + 0.8, p.pos.z, '#8a1f1f', 26, 3.6, 0.6)
+    AudioManager.play('scareSting')
+    this.store.notify('The wild claimed you… you wake up somewhere else.', 'warning')
+    this.zombies.resetAggro()
     this.syncHud()
-    this.store.notify('The Vanodyan wild claimed you — you wake up back in the city…', 'warning')
-    AudioManager.play('release')
-    if (!this.offline) this.net.wildDeath(best.x, best.z)
-  }
-
-  /** v64 — one-shot danger warning when the protester first leaves the city per crossing. */
-  private updateWildWarnings(dt: number) {
-    if (!this.player) return
-    const inCity = Math.abs(this.player.pos.x) < 120 && this.player.pos.z < 10 && this.player.pos.z > -572
-    if (inCity) {
-      this.wasInWild = false
-      return
+    if (this.offline) {
+      const cands = Game.WILD_RESPAWN_POINTS.filter(pt => this.zombies.minDist(pt.x, pt.z) > 45)
+      const pool = cands.length ? cands : Game.WILD_RESPAWN_POINTS
+      const pt = pool[Math.floor(Math.random() * pool.length)]
+      this.releaseLocal(pt.x, pt.z)
+      p.health = Math.max(p.health, Math.round(p.maxHealth * 0.6)) // wake up battered, not doomed
+      this.syncHud()
+    } else {
+      this.zombieDeathPending = true
+      this.net.wildDeath() // server replies with the shared game:release contract
     }
-    this.wildWarnT -= dt
-    if (!this.wasInWild) {
-      this.wasInWild = true
-      if (this.wildWarnT <= 0) {
-        this.wildWarnT = 60
-        this.store.notify('⚠ DANGER: leaving the city — the Vanodyan wild is hunted. Zombies here. No police protection.', 'warning')
-        AudioManager.play('sting')
-      }
-    }
-  }
-
-  /** v64 — outside the city rect the radial wild overrides the z-band zones. */
-  private zoneOverride(x: number, z: number): { name: string; hint: string; zStart: number; zEnd: number } | null {
-    if (Math.abs(x) < 120 && z < 10 && z > -572) return null
-    const d = Math.hypot(x - WORLD_DISC.cx, z - WORLD_DISC.cz)
-    if (d > 460) return { name: 'Vanodyan Rim', hint: 'The mountain rim guards the edge of the world.', zStart: 0, zEnd: 0 }
-    return { name: 'Vanodyan Jungle', hint: 'The wild rings the city. Zombies hunt out here — watch your back.', zStart: 0, zEnd: 0 }
   }
 
   /** Camera shake — gated by the accessibility setting (Settings.reducedShake). */
@@ -2327,7 +2438,7 @@ export class Game {
       if (remain <= 0) {
         const cp = this.activatedCheckpoints.size > 0 ? this.world.checkpoints[Math.min(this.activatedCheckpoints.size, this.world.checkpoints.length) - 1] : this.world.checkpoints[0]
         const dp = cp.detention
-        if (this.offline) this.player.release(dp.x, dp.z)
+        if (this.offline) this.releaseLocal(dp.x, dp.z) // v49 — shared contract: clears the WANTED banner + opens the grace window
         // server path: server sends game:release
       }
     }
@@ -2349,9 +2460,10 @@ export class Game {
     // offline NPC sim + capture (8s spawn grace so players can orient)
     if (this.offline) {
       const pv: NpcPlayerView = {
-        id: 'me', x: this.player.pos.x, z: this.player.pos.z,
+        id: 'me', x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z,
         detained: this.player.isDetained, dazed: this.player.isDazed,
-        hidden: this.matchTime < 8 && Math.hypot(this.player.pos.x - this.world.spawn.x, this.player.pos.z - this.world.spawn.z) < 16,
+        hidden: (this.matchTime < 8 && Math.hypot(this.player.pos.x - this.world.spawn.x, this.player.pos.z - this.world.spawn.z) < 16)
+          || Date.now() < this.releaseGraceUntil, // v49 — post-detention grace: brains cannot re-acquire the fresh respawn
         police: this.role === 'police', // fellow officers never chase the officer-player
       }
       this.npcs.simulateLocal(dt, pv, this.world.colliders, Date.now())
@@ -2371,6 +2483,32 @@ export class Game {
 
     // street animals + birds — independent bots, frozen with the rest of the sim when paused
     this.animals.update(dt, this.worldTime, this.player.pos, Math.hypot(this.player.vel.x, this.player.vel.z), this.camRig.yaw)
+
+    // v68 — Vanodyan Deep: cicada/bird/growl ambience tracks wildness, the dead hunt
+    this.ambience.update(dt, this.worldTime, this.player.pos.x, this.player.pos.z, this.camRig.yaw)
+    this.zombies.update(dt, this.worldTime, this.player.pos, this.camRig.yaw)
+
+    // v69 — city → wild warnings: the jungle is DANGEROUS and the player should
+    // feel the threshold cross. Toasts at the city edge, at deep wild, and in
+    // the graveyard (the dead do not rest). Cooldowns keep it from nagging.
+    this.wildWarnT -= dt
+    if (this.wildWarnT <= 0) {
+      const w = wildnessAt(this.player.pos.x, this.player.pos.z)
+      const graveD = Math.hypot(this.player.pos.x - GRAVEYARD.x, this.player.pos.z - GRAVEYARD.z)
+      const wasCity = this.lastWildness < 0.05
+      const wasMid = this.lastWildness >= 0.05 && this.lastWildness < 0.6
+      if (wasCity && w >= 0.05) {
+        this.store.notify('⚠ You are leaving the city — the Vanodyan Jungle is WILD. Zombies and beasts hunt here. Keep moving.', 'warning')
+        this.wildWarnT = 60
+      } else if ((wasMid || wasCity) && w >= 0.6) {
+        this.store.notify('The deep wild — something big is breathing nearby…', 'warning')
+        this.wildWarnT = 90
+      } else if (graveD < GRAVEYARD.r + 14) {
+        this.store.notify('You feel watched… the dead do not rest in the Kabristan.', 'warning')
+        this.wildWarnT = 90
+      }
+      this.lastWildness = w
+    }
 
     // solid vehicles: feed their current AABBs to physics at ~10Hz so players
     // cannot walk through buses/autos (defensive optional chain — if the vehicle
@@ -2651,18 +2789,33 @@ export class Game {
 
   // ================= render loop =================
   private renderUpdate(dt: number) {
-    if (!this.player) return
+    if (!this.player) {
+      // v50 — pre-first-match (boot/menu with no player yet): the world group would
+      // otherwise submit the whole city behind the opaque menu every frame
+      this.engine.renderEnabled = false
+      return
+    }
     const store = useGameStore.getState()
-    // corner minimap (zoomed player-following window) — every frame for smooth re-centering
-    this.drawHudMinimap()
+    // ---- v50: opaque full-screen UI owns the viewport → render NOTHING ----
+    // The menu / loading screens are opaque paper panels, so keeping the whole city
+    // (4k+ draw calls, 260k triangles) submitting behind them was pure GPU/battery
+    // burn — and the same per-frame block kept OVERRIDING the menu's audio state
+    // (crowd ambience ≥0.3 floor + rain), which is exactly the "quit to menu but the
+    // game sound keeps playing" report. Menu-like modes now skip the sim AND the
+    // GL submit entirely; in-match modes (playing/paused/ended) render as before.
+    const ui = store.uiMode
+    if (ui === 'menu' || ui === 'loading' || ui === 'boot') {
+      this.engine.renderEnabled = false
+      return
+    }
+    this.engine.renderEnabled = true
+    // corner minimap (zoomed player-following window) — 30Hz: the radar's dots crawl,
+    // half the canvas cost is invisible, and the frame budget matters on weak GPUs
+    this.hudMinimapAcc += dt
+    if (this.hudMinimapAcc >= 1 / 30) { this.hudMinimapAcc = 0; this.drawHudMinimap() }
     // fx update (floating popups) + player speech bubbles (emotes, quick messages)
     this.fx.update(dt)
     this.playerBubbles.update(dt)
-    // v64 wild world — the hunt ticks only while a match runs
-    if (this.zombies && this.running) {
-      this.zombies.update(dt, { x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z })
-      this.updateWildWarnings(dt)
-    }
 
     // boss intro cinematic — orbit the boss once on activation
     this.updateBossCinematic(dt)
@@ -2673,7 +2826,7 @@ export class Game {
       // teleports (detention release, rally, reconnect respawn) snap instead of glide
       const jump = Math.hypot(r.target.x - pos.x, r.target.z - pos.z)
       if (jump > 25) pos.set(r.target.x, r.target.y, r.target.z)
-      else pos.lerp(new THREE.Vector3(r.target.x, r.target.y, r.target.z), Math.min(1, dt * 10))
+      else pos.lerp(_lerpTarget.set(r.target.x, r.target.y, r.target.z), Math.min(1, dt * 10))
       let d = r.target.ry - r.rig.group.rotation.y
       while (d > Math.PI) d -= Math.PI * 2
       while (d < -Math.PI) d += Math.PI * 2
@@ -2695,19 +2848,14 @@ export class Game {
       // plays the SAME networked anim state (no bone streaming — state names only)
       if (r.glb?.driver) {
         const loco: LocoState = r.detained ? 'detained' : r.anim === 'dazed' ? 'hit' : (r.anim as LocoState)
-        // remote airborne state rides on the networked anim name (jump/fall) so the
-        // vertex-shader air pose (legs tuck + arms out) plays for remotes too
-        const airborne = r.anim === 'jump' || r.anim === 'fall'
         r.glb.driver.play(loco, {
-          grounded: !airborne, vy: 0, hSpeed,
+          grounded: true, vy: 0, hSpeed,
           sliding: false, dazed: r.anim === 'dazed', detained: r.detained,
           landTimer: 0, recoverTimer: 0, jumpsUsed: 0,
         })
         r.glb.driver.update(animDt)
         r.glb.inst.group.position.copy(pos)
         r.glb.inst.group.rotation.y = r.rig.group.rotation.y
-        // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer
-        if (r.glb.driver.playableClips === 0 && r.glb.loco) r.glb.loco.apply(r.glb.inst.group, animDt, hSpeed, !airborne, { baseY: pos.y })
       }
     }
 
@@ -2723,7 +2871,7 @@ export class Game {
     const playing = store.uiMode === 'playing'
     if (playing) {
       this.player.render(dt)
-      this.npcs.update(dt, 1, this.worldTime, this.player.pos.x, this.player.pos.z)
+      this.npcs.update(dt, 1, this.worldTime, this.player.pos.x, this.player.pos.z, this.camRig.yaw)
       this.updatePoliceTelegraphs()
       this.items.update(dt, this.worldTime, this.worldTime)
     } else {
@@ -2761,7 +2909,7 @@ export class Game {
         const d = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
         if (d < bestDist) {
           bestDist = d
-          focus = new THREE.Vector3(r.target.x, r.target.y, r.target.z)
+          focus = _focusTmp.set(r.target.x, r.target.y, r.target.z)
           this.spectateName = r.name
         }
       }
@@ -2776,19 +2924,28 @@ export class Game {
     this.engine.trackSun(focus)
 
     // ---- atmosphere: day/night cycle + weather (drives fog, lights, exposure, rain) ----
-    const gst = useGameStore.getState()
-    const settings = gst.settings
+    // v50 — the visual part runs in every rendered mode; the AUDIO part (rain bed,
+    // zone stingers, adaptive music, crowd level) is match-only: renderUpdate used to
+    // keep pushing these every frame even on the menu/end screens, overriding the
+    // menu bed set by leaveMatch/finalizeMatch (the residual-sound bug).
+    const settings = useGameStore.getState().settings
     const sky = this.engine.sky
     sky.setTimeMode(settings.timeMode ?? 'cycle')
-    sky.setWeatherMode(settings.weatherMode ?? 'auto')
+    // v53 — the user's EXPLICIT weather choice now wins every frame, live: the old
+    // `weatherOverride ?? settings.weatherMode` order let the district pin (monsoon
+    // map → 'rain') shadow the dashboard's Environment › Weather selection for the
+    // whole match — the badge stayed "Monsoon Rain" no matter what the player picked.
+    // New rule: explicit kind > district identity (only while the player is on Auto)
+    // > the living weather machine.
+    const userWeather = settings.weatherMode ?? 'auto'
+    sky.setWeatherMode(userWeather !== 'auto' ? userWeather : (this.weatherOverride ?? 'auto'))
     sky.update(dt, focus)
     this.engine.renderer.toneMappingExposure = sky.exposure
     this.worldRenderer.setNight(sky.nightFactor, focus)
-    // v49: rain AUDIO only while a match session is on screen — renderUpdate keeps running
-    // behind menus, and an ungated setRain() used to park a looping rain bed after quit.
-    AudioManager.setRain(this.running && (gst.uiMode === 'playing' || gst.uiMode === 'paused') ? sky.rainLevel : 0)
-    this.envTick += dt
-    if (this.envTick >= 1) {
+    if (this.running) {
+      AudioManager.setRain(sky.rainLevel)
+      this.envTick += dt
+      if (this.envTick >= 1) {
       this.envTick = 0
       const info = sky.envInfo()
       const st = useGameStore.getState()
@@ -2830,7 +2987,14 @@ export class Game {
             const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
             ;(w.__vcDiag ??= []).push({ kind: 'drawCallCollapse', t: Date.now(), dc: es.drawCalls, at: { x: focus.x, z: focus.z } })
           }
-          if (this.lowDcStreak >= 3) this.guardedReload('draw-call collapse')
+          // v54 — draw-call collapse IS the blue-world signature. A plain reload
+          // boots straight back into the same collapsed state (cause untouched) and
+          // the affected device looped forever. Persist the proven safe path
+          // (no culling) BEFORE the reload so the fresh page actually recovers.
+          if (this.lowDcStreak >= 3) {
+            this.persistCullingOff('draw-call collapse')
+            this.guardedReload('draw-call collapse')
+          }
         } else {
           this.lowDcStreak = 0
         }
@@ -2859,10 +3023,56 @@ export class Game {
         } else {
           this.emptyWorldStreak = 0
         }
+        // ---- v55 world-draw-failure watchdog (1Hz): the three detectors above are
+        // all blind to the EXACT "everything blue" signature the affected device
+        // reports: the world group is POPULATED (emptyWorld quiet), the culler's own
+        // bookkeeping says 15+ meshes should be visible near the player (its internal
+        // fail-safe quiet), and the total draw-call count can sit far above the <8
+        // collapse floor because the SKY keeps submitting (dome + clouds + sun sprite
+        // + rain particles) — yet the GPU draws no world geometry at all, leaving
+        // only the sky: the blue screen. Triangles are the honest signal: a healthy
+        // frame submits 180K+ (measured 200K+ on this build), a sky-only frame stays
+        // under ~20K even with weather FX and impostor crowd alive. 60K = 3× margin
+        // above pure sky, 3× below the healthy floor. Four consecutive 1Hz samples
+        // = the world is populated and supposed-to-draw but isn't → showAll + render
+        // re-enable in place first (stale hidden flags / a stuck renderEnabled are
+        // fixable without a reload), then the PERSISTED no-culling reload — the
+        // rendering path the affected device historically verified good. The diag
+        // entry carries the full render-state forensics so a still-blue device can
+        // finally be diagnosed from __vcDiag instead of guessed at.
+        const visibleNear = this.culler.visibleNear
+        if (worldChildren >= 100 && visibleNear >= 15 && es.triangles < 60_000) {
+          this.worldDrawStreak++
+          if (this.worldDrawStreak === 1) {
+            console.warn(`[VoteChor] world-draw failure — ${es.triangles} tris / ${es.drawCalls} dc submitted with ${visibleNear} meshes visible near the player; attempting recovery`, {
+              mode: this.mode, offline: this.offline, worldId: this.worldId, t: new Date().toISOString(),
+            })
+            st.notify('Graphics recovery: world not drawing — restoring…', 'warning')
+            const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+            ;(w.__vcDiag ??= []).push({
+              kind: 'worldDrawFailure', t: Date.now(), tris: es.triangles, dc: es.drawCalls,
+              visibleNear, entries: this.culler.count, children: worldChildren,
+              cullEnabled: this.culler.enabled, renderEnabled: this.engine.renderEnabled,
+              contextLost: this.engine.contextLost, lastError: this.engine.lastError,
+              dpr: window.devicePixelRatio, vw: window.innerWidth, vh: window.innerHeight,
+              at: { x: focus.x, z: focus.z },
+            })
+            this.culler.showAll()
+            this.engine.renderEnabled = true
+          }
+          if (this.worldDrawStreak >= 4) {
+            this.persistCullingOff('world-draw failure')
+            this.guardedReload('world-draw failure')
+          }
+        } else {
+          this.worldDrawStreak = 0
+        }
       } else {
         this.lowDcStreak = 0
         this.errStreak = 0
         this.emptyWorldStreak = 0
+        this.worldDrawStreak = 0
+      }
       }
     }
 
@@ -2881,38 +3091,66 @@ export class Game {
       console.warn('[VoteChor] world group was hidden mid-match — restored')
     }
 
-    // zone ambience + music switching — v64: the radial wild overrides the z-bands
-    const wildZone = this.zoneOverride(focus.x, focus.z)
-    const zone = wildZone ?? this.world.zones.find(z => focus.z <= z.zStart && focus.z > z.zEnd)
-    if (zone) {
-      const zkey = wildZone ? `w:${wildZone.name}` : `i${this.world.zones.indexOf(zone)}`
-      if (this.lastZoneKey !== zkey) {
-        this.lastZoneKey = zkey
-        store.patchHud({ zoneName: zone.name, zoneHint: zone.hint })
-        this.lastTokenPos = { x: focus.x, z: focus.z }
-        if (!wildZone && this.world.zones.indexOf(zone) === 2) AudioManager.play('whistleFar')
+    // v50 — zone ambience + adaptive music + crowd bed are MATCH audio: they must
+    // never push on the menu/end screens. This block used to run every frame in every
+    // mode, which (1) kept a ≥0.3 crowd floor roaring on the landing page after quit,
+    // (2) let an active boss/chase flip the menu theme straight back to boss/chase,
+    // and (3) kept the rain bed playing in the menu. All of it is now match-only.
+    if (this.running) {
+      const zone = this.world.zones.find(z => focus.z <= z.zStart && focus.z > z.zEnd)
+      if (zone) {
+        const idx = this.world.zones.indexOf(zone)
+        if (this.lastZoneIdx !== idx) {
+          this.lastZoneIdx = idx
+          store.patchHud({ zoneName: zone.name, zoneHint: zone.hint })
+          this.lastTokenPos = { x: focus.x, z: focus.z }
+          if (idx === 2) AudioManager.play('whistleFar')
+        }
       }
+      // adaptive music: chase when chased — also drives the WANTED alert.
+      // Round 25 fix: only chase states that target THIS player count. A Season officer
+      // chasing a bot across town must not flash WANTED on unrelated screens, and a
+      // police-role player is never the quarry at all (officer immunity).
+      // v51 — soft escape: when the LAST chaser gives up (npc-brain escape drop),
+      // the badge doesn't pop off — it lingers dimmed ("losing them…") for
+      // WANTED_FADE_MS and then clears itself. Any fresh chaser snaps it back to
+      // full alert instantly. Detention/release paths reset the window.
+      const meId = this.offline ? 'me' : this.net.playerId
+      const chased = this.role !== 'police' && this.npcs.nearestChaserDistance(focus.x, focus.z, meId) < 18
+      const nowMs = Date.now()
+      if (chased) {
+        this.wantedFadeUntil = 0
+      } else if (this.lastHunted && this.wantedFadeUntil === 0) {
+        this.wantedFadeUntil = nowMs + WANTED_FADE_MS // last chaser just dropped us — start the fade
+      }
+      if (this.wantedFadeUntil !== 0 && nowMs >= this.wantedFadeUntil) {
+        this.wantedFadeUntil = 0
+        this.lastHunted = false
+      }
+      const badge = chased || this.wantedFadeUntil !== 0
+      const fading = !chased && badge
+      if ((badge !== this.lastHunted || fading !== this.lastFading) && !this.player.isDetained) {
+        useGameStore.getState().patchHud({ hunted: badge, wantedFading: fading })
+      }
+      this.lastHunted = badge
+      this.lastFading = fading
+      if (this.bossActiveLocal) AudioManager.setTheme('boss')
+      else if (badge) AudioManager.setTheme('chase') // chase bed holds through the fade — the escape isn't over yet
+      else AudioManager.setTheme('ambient')
+      AudioManager.setCrowdLevel(badge ? 0.9 : Math.max(0.3, 1 - Math.abs(focus.z) / 560))
     }
-    // adaptive music: chase when chased — also drives the WANTED alert.
-    // Round 25 fix: only chase states that target THIS player count. A Season officer
-    // chasing a bot across town must not flash WANTED on unrelated screens, and a
-    // police-role player is never the quarry at all (officer immunity).
-    const meId = this.offline ? 'me' : this.net.playerId
-    const chased = this.role !== 'police' && this.npcs.nearestChaserDistance(focus.x, focus.z, meId) < 18
-    if (chased !== this.lastHunted) {
-      this.lastHunted = chased
-      if (!this.player.isDetained) useGameStore.getState().patchHud({ hunted: chased })
-    }
-    if (this.bossActiveLocal) AudioManager.setTheme('boss')
-    else if (chased) AudioManager.setTheme('chase')
-    else if (this.running) AudioManager.setTheme('ambient')
-    AudioManager.setCrowdLevel(chased ? 0.9 : Math.max(0.3, 1 - Math.abs(focus.z) / 560))
   }
-  private lastZoneKey = ''
+  private lastZoneIdx = -1
   private envTick = 0 // 1s cadence for the HUD environment chip
+  /** v52 — resolved per-match weather mode (explicit user choice or district pin).
+   *  While set, the render loop pushes THIS instead of the raw settings value, so a
+   *  pinned monsoon/fog district actually holds its sky; cleared on leave/finalize. */
+  private weatherOverride: import('./sky').WeatherMode | null = null
+  private hudMinimapAcc = 0 // v50 — 30Hz corner-radar cadence (was 60Hz every frame)
   private lowDcStreak = 0 // consecutive 1Hz samples with a collapsed draw-call count
   private errStreak = 0 // consecutive 1Hz samples while a frame-phase fault keeps firing
   private emptyWorldStreak = 0 // consecutive 1Hz samples with a near-empty world group
+  private worldDrawStreak = 0 // v55 — consecutive 1Hz samples where the populated world submits only sky-level triangles
 
   /** One auto-reload per 30s window — a lost GL context / collapsed draw pipeline
    *  recovers far more reliably through a fresh page than in-place. */
@@ -2925,6 +3163,59 @@ export class Game {
       console.warn(`[VoteChor] Auto-reload (${reason})`)
       location.reload()
     } catch { /* sessionStorage unavailable — reload anyway */ location.reload() }
+  }
+
+  /**
+   * v54 — ONE shared arming path for the static-geometry culler (constructor boot
+   * AND the startMatch district re-arm). Before this, a district re-arm built a
+   * fresh culler with the constructor default `enabled = true` — silently ignoring
+   * the user's Performance Visibility preference and losing the anomaly fail-safe
+   * wiring entirely. Every culler instance now: honors the saved preference, and
+   * carries the fail-safe that PERSISTS the disable (v54): the historic "blue
+   * world" device renders fine on the no-culling path, but a session-only disable
+   * was undone by the very reload the recovery triggers — the new tab looped blue
+   * forever while the long-lived preview tab (already converged) worked.
+   */
+  private armCuller(group: THREE.Object3D, radius: number) {
+    this.culler = new WorldDistanceCuller(group, radius)
+    // honor the user's performance-visibility preference (Options → Performance).
+    // v50 ships it ON for the measured FPS win; the fail-safe below is the escape
+    // hatch for the device class that renders blue with it active.
+    this.culler.enabled = useGameStore.getState().settings.distanceCulling === true
+    // fail-safe host: if the culler ever mass-hides on this device it has already
+    // restored the world and disabled itself — persist that decision, make it
+    // visible + reportable, and align every dependent knob.
+    this.culler.onAnomaly = (visibleNear) => {
+      console.warn(`[VoteChor] Distance-culler fail-safe — only ${visibleNear} meshes visible near the player; culling disabled, world fully restored`, {
+        mode: this.mode, offline: this.offline, t: new Date().toISOString(),
+      })
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      ;(w.__vcDiag ??= []).push({ kind: 'cullerFailSafe', visibleNear, t: Date.now(), at: { x: this.player?.pos.x ?? 0, z: this.player?.pos.z ?? 0 } })
+      this.store.notify('Graphics safety: distance culling disabled — world fully restored', 'warning')
+      this.persistCullingOff('culler fail-safe')
+    }
+  }
+
+  /**
+   * v54 — persist Performance Visibility OFF through the exact contract the
+   * settings panel uses (setSettings + localStorage 'votechor_settings'), so the
+   * safe no-culling path survives reloads and new tabs on the affected device.
+   * The setSettings subscription live-applies the dependent knobs (culler, shadow
+   * throttle, NPC far LOD); the explicit assignments below cover a subscription
+   * that hasn't been wired yet (very first boot tick).
+   */
+  private persistCullingOff(reason: string) {
+    try {
+      const st = useGameStore.getState()
+      if (st.settings.distanceCulling !== false) {
+        const merged = { ...st.settings, distanceCulling: false, keybinds: { ...st.settings.keybinds } }
+        st.setSettings({ distanceCulling: false })
+        localStorage.setItem('votechor_settings', JSON.stringify(merged))
+        console.warn(`[VoteChor] Performance Visibility disabled and saved (${reason})`)
+      }
+    } catch { /* private browsing — the session disable still holds */ }
+    this.engine.shadowThrottle = false
+    if (this.npcs) this.npcs.farLod = false
   }
 
   /**
@@ -2989,7 +3280,7 @@ export class Game {
   private syncHud() {
     if (!this.player) return
     const p = this.player
-    const zone = this.zoneOverride(p.pos.x, p.pos.z) ?? this.world.zones.find(z => p.pos.z <= z.zStart && p.pos.z > z.zEnd)
+    const zone = this.world.zones.find(z => p.pos.z <= z.zStart && p.pos.z > z.zEnd)
     const store = useGameStore.getState()
     let objective: string
     if (this.role === 'police') {
@@ -3098,24 +3389,61 @@ export class Game {
     if (!c) return cv
     const b = this.world.bounds
     const toX = (x: number) => ((x - b.minX) / (b.maxX - b.minX)) * W
-    const toY = (z: number) => ((10 - z) / 582) * H
+    const toY = (z: number) => ((b.maxZ - z) / (b.maxZ - b.minZ)) * H // v66 — bounds-driven (was hardcoded 10/582)
     // out-of-world ink + ground
     c.fillStyle = '#171512'
     c.fillRect(0, 0, W, H)
     c.fillStyle = '#2a2318'
     c.fillRect(toX(b.minX), 0, toX(b.maxX) - toX(b.minX), H)
     // zone tints
-    const zoneColors = ['rgba(201,111,74,0.32)', 'rgba(184,92,62,0.32)', 'rgba(127,154,140,0.32)', 'rgba(201,168,106,0.32)', 'rgba(154,123,95,0.38)']
+    const zoneColors = ['rgba(201,111,74,0.32)', 'rgba(184,92,62,0.32)', 'rgba(127,154,140,0.32)', 'rgba(201,168,106,0.32)', 'rgba(154,123,95,0.38)', 'rgba(58,84,54,0.5)']
     this.world.zones.forEach((z, i) => {
       c.fillStyle = zoneColors[i % zoneColors.length]
       c.fillRect(toX(b.minX), toY(z.zStart), toX(b.maxX) - toX(b.minX), toY(z.zEnd) - toY(z.zStart))
     })
-    // roads: main spine + avenue widening + east-west cross streets
+    // roads: main spine + avenue widening + ring roads + east-west cross streets
     c.fillStyle = 'rgba(70,66,58,0.75)'
     c.fillRect(toX(-8), 0, toX(8) - toX(-8), H)
     c.fillRect(toX(-16), toY(-280), toX(16) - toX(-16), toY(-420) - toY(-280))
+    for (const rx of [-166, 166]) c.fillRect(toX(rx - 8), 0, toX(rx + 8) - toX(rx - 8), H) // v66 ring roads
     for (const cr of this.world.crossRoads) {
-      c.fillRect(toX(-114), toY(cr.z + cr.halfW), toX(114) - toX(-114), toY(cr.z - cr.halfW) - toY(cr.z + cr.halfW))
+      c.fillRect(toX(b.minX + 4), toY(cr.z + cr.halfW), toX(b.maxX - 4) - toX(b.minX + 4), toY(cr.z - cr.halfW) - toY(cr.z + cr.halfW))
+    }
+    // v68 — Vanodyan Deep ink: Bhayanak river + dirt trail + ridge peaks
+    c.fillStyle = 'rgba(44,107,116,0.85)'
+    c.fillRect(toX(-196), toY(-696), toX(196) - toX(-196), toY(-678) - toY(-696))
+    c.strokeStyle = 'rgba(156,124,80,0.65)'
+    c.lineWidth = Math.max(1.5, W / 420)
+    c.beginPath()
+    c.moveTo(toX(0), toY(-576)); c.lineTo(toX(10), toY(-602)); c.lineTo(toX(30), toY(-632)); c.lineTo(toX(52), toY(-662)); c.lineTo(toX(66), toY(-687)); c.lineTo(toX(66), toY(-722)); c.lineTo(toX(58), toY(-748))
+    c.stroke()
+    // v70 — mountain ink driven by the actual deco list (south ridge + the full
+    // 360° Vanodyan Rim + the green foothill ring), replacing the hardcoded array.
+    // v71 — the countryside tracks + crop fields get their own ink so the rural
+    // fringe reads on the big map; hill tint jitter handled via variant.
+    c.strokeStyle = 'rgba(156,124,80,0.6)'
+    c.lineWidth = Math.max(1.2, W / 520)
+    for (const track of COUNTRYSIDE_TRACKS) {
+      c.beginPath()
+      track.forEach(([tx, tz], i) => { if (i === 0) c.moveTo(toX(tx), toY(tz)); else c.lineTo(toX(tx), toY(tz)) })
+      c.stroke()
+    }
+    for (const d of this.world.decorations) {
+      if (d.kind === 'field') {
+        const fs = (d.s ?? 8) * 1.9
+        c.fillStyle = 'rgba(150,132,74,0.55)'
+        c.fillRect(toX(d.x - fs / 2), toY(d.z + fs / 2), fs * (W / (b.maxX - b.minX)), fs * (H / (b.maxZ - b.minZ)))
+        continue
+      }
+      if (d.kind !== 'mountain') continue
+      const ms = d.s ?? 20
+      const r = (toX(d.x + ms * 0.9) - toX(d.x))
+      c.fillStyle = d.variant === 1 ? 'rgba(74,105,60,0.85)' : 'rgba(150,150,142,0.85)'
+      c.beginPath()
+      c.moveTo(toX(d.x), toY(d.z) - r)
+      c.lineTo(toX(d.x) - r, toY(d.z) + r * 0.7)
+      c.lineTo(toX(d.x) + r, toY(d.z) + r * 0.7)
+      c.closePath(); c.fill()
     }
     // building footprints — soft ink blocks (skip thin props by footprint area)
     c.fillStyle = 'rgba(16,13,10,0.85)'
@@ -3128,17 +3456,37 @@ export class Game {
       const d = col.maxZ - col.minZ
       if (w * d < 8 || w < 1.2 || d < 1.2) continue
       const x = toX(col.minX), y = toY(col.maxZ)
-      c.fillRect(x, y, Math.max(1, w / 240 * W), Math.max(1, d / 582 * H))
-      c.strokeRect(x + 0.5, y + 0.5, Math.max(1, w / 240 * W) - 1, Math.max(1, d / 582 * H) - 1)
+      const wS = (W / (b.maxX - b.minX))
+      const hS = (H / (b.maxZ - b.minZ))
+      c.fillRect(x, y, Math.max(1, w * wS), Math.max(1, d * hS))
+      c.strokeRect(x + 0.5, y + 0.5, Math.max(1, w * wS) - 1, Math.max(1, d * hS) - 1)
     }
-    // boss arena ring
+    // boss arena ring (v69 — scale from real bounds, not the old 240m width)
     c.strokeStyle = 'rgba(140,31,40,0.7)'
     c.lineWidth = 2
     c.setLineDash([5, 4])
     c.beginPath()
-    c.arc(toX(this.world.bossArena.x), toY(this.world.bossArena.z), (this.world.bossArena.radius / 240) * W, 0, 7)
+    c.arc(toX(this.world.bossArena.x), toY(this.world.bossArena.z), (this.world.bossArena.radius / (b.maxX - b.minX)) * W, 0, 7)
     c.stroke()
     c.setLineDash([])
+    // v69 — the ROUND world: mask the underlay to the jungle disc and stroke the
+    // boundary so the map reads as a circle of wild surrounding the city.
+    {
+      const cx = toX(WORLD_DISC.cx), cy = toY(WORLD_DISC.cz)
+      const rPx = (WORLD_DISC.r / (b.maxX - b.minX)) * W
+      c.save()
+      c.globalCompositeOperation = 'destination-in'
+      c.beginPath()
+      c.arc(cx, cy, rPx, 0, 7)
+      c.fillStyle = '#fff'
+      c.fill()
+      c.restore()
+      c.strokeStyle = 'rgba(96,118,78,0.95)'
+      c.lineWidth = 2.5
+      c.beginPath()
+      c.arc(cx, cy, rPx, 0, 7)
+      c.stroke()
+    }
     return cv
   }
 
@@ -3149,10 +3497,10 @@ export class Game {
     if (!ctx) return
     const W = canvas.width, H = canvas.height
     ctx.clearRect(0, 0, W, H)
-    // world: z from 10 to -572, x -120..120 → full-city strip (bounds-driven)
+    // world: bounds-driven (v66 — greater city 400m wide, north jungle to z 42)
     const b = this.world.bounds
     const toX = (x: number) => ((x - b.minX) / (b.maxX - b.minX)) * W
-    const toY = (z: number) => ((10 - z) / 582) * H
+    const toY = (z: number) => ((b.maxZ - z) / (b.maxZ - b.minZ)) * H
     // static underlay (rebuilt only if the buffer size changes)
     if (!this.mapUnderlay || this.mapUnderlay.width !== W || this.mapUnderlay.height !== H) {
       this.mapUnderlay = this.buildMapUnderlay(W, H)
@@ -3434,10 +3782,16 @@ export class Game {
     })()
     const summary: MatchSummary = { ...stats, xpEarned, funnyTitle: title, newAchievements, leveledUp, newLevel, matchId: serverPayload?.matchId ?? 'offline', duration: serverPayload?.duration ?? Math.round(this.matchTime), playersOnline: serverPayload?.playersOnline ?? 1, dailyBonus, dailyDesc, dailyJustCompleted, weeklyBonus, weeklyJustCompleted, streak, streakUp, solidarityBonus, squadSize, xpMul, unlockedMap }
     store.setMatchSummary(summary)
+    // v48 — drop any open overlays with the match (closed AFTER the uiMode flip so
+    // the close path can't re-arm input; the end screen owns the pointer now)
     store.setUIMode('ended')
-    AudioManager.setTheme('none') // v48: end screen is quiet too — the victory/defeat stinger already played
-    AudioManager.stopCrowd()
-    AudioManager.stopRain() // v49: kill any lingering weather bed
+    store.toggleMap(false)
+    store.toggleChat(false)
+    store.toggleSquad(false)
+    AudioManager.setTheme('menu')
+    AudioManager.setCrowdLevel(0.2)
+    AudioManager.setRain(0) // v50 — end screen keeps music + faint crowd, never the storm
+    this.weatherOverride = null // v52 — end screen never re-pins a district storm
   }
 
   // ================= photo mode =================
@@ -3549,6 +3903,8 @@ export class Game {
     this.crowd?.dispose()
     this.crowd = null
     if (this.animals) { this.animals.dispose(); this.engine?.scene.remove(this.animals.group) }
+    if (this.zombies) { this.zombies.dispose(); this.engine?.scene.remove(this.zombies.group) }
+    this.ambience?.reset()
     this.input?.dispose()
     this.engine?.dispose()
     if (this.dmgFlashTimer) clearTimeout(this.dmgFlashTimer)
@@ -3559,6 +3915,12 @@ export class Game {
 }
 
 function randomOf<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)] }
+
+// v50 — reusable scratch vectors for the render loop: the remote-player lerp and
+// the detained-spectate focus used to allocate a fresh THREE.Vector3 EVERY FRAME
+// for EVERY rigged remote (24 rigs × 60fps ≈ 1,400 objects/s of pure GC churn).
+const _lerpTarget = new THREE.Vector3()
+const _focusTmp = new THREE.Vector3()
 
 // Touch bridge for mobile UI controls
 export function touchBridge() {

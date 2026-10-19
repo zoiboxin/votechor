@@ -8,14 +8,14 @@ export type SfxName =
   | 'heal' | 'revive' | 'checkpoint' | 'uiClick' | 'uiHover' | 'bossHit' | 'stampSlam'
   | 'shockwave' | 'paperRustle' | 'dizzy' | 'victory' | 'defeat' | 'cash' | 'horn' | 'moo' | 'gate'
   | 'shout' | 'thunder'
+  | 'chatter' | 'chant' | 'order'
   | 'bark' | 'meow' | 'chirp' | 'crunch'
-  | 'growl' | 'howl' | 'sting'
+  | 'hornHi' | 'hornLo' // v66 — bike (high reedy) / bus-truck (deep dual-tone) horns
+  | 'birdJungle' | 'insect' | 'growl' | 'owlHoot' // v68 — Vanodyan Deep ambience
+  | 'crowCaw' | 'wolfHowl' // v69 — the Kabristan + the deep ring at dusk
+  | 'zombieMoan' | 'scareSting' // v68 — the undead + the moment one spots you
 
-/**
- * Adaptive music themes. 'none' = sequencer fully stopped (silent menus —
- * v48: background sound only plays while a match is running).
- */
-export type MusicTheme = 'menu' | 'ambient' | 'chase' | 'boss' | 'victory' | 'none'
+export type MusicTheme = 'menu' | 'ambient' | 'chase' | 'boss' | 'victory'
 
 class AudioManagerImpl {
   private ctx: AudioContext | null = null
@@ -298,6 +298,52 @@ class AudioManagerImpl {
         this.whistleTone(t, 2350, 2500, 0.5, 0.07 * v, 22, 90)
         break
       }
+      case 'chatter': {
+        // v52 — nearby-bot TALKING: unintelligible speech built from syllable-
+        // gated saw voices at a conversational pitch (110–180 Hz) with a chest
+        // octave and formant-band breath between bursts. 2–4 syllables, per-play
+        // pitch jitter + statement contour (last syllable drops) so two bots
+        // never sound like the same loop.
+        const j = 0.9 + Math.random() * 0.2
+        const f0 = (110 + Math.random() * 70) * j
+        const syl = 2 + Math.floor(Math.random() * 3)
+        let tS = t
+        for (let i = 0; i < syl; i++) {
+          const dur = 0.09 + Math.random() * 0.13
+          const last = i === syl - 1
+          const pf = last ? f0 * 0.82 : f0 * (0.92 + Math.random() * 0.22)
+          this.osc('sawtooth', pf, tS, dur, 0.055 * v, pf * (0.8 + Math.random() * 0.3))
+          this.osc('square', pf * 0.5, tS, dur, 0.02 * v)
+          this.noise(dur * 0.7, tS, 0.028 * v, 900 + Math.random() * 900, 1.2)
+          tS += dur + 0.03 + Math.random() * 0.07
+        }
+        break
+      }
+      case 'chant': {
+        // v52 — protest CHANT: two punchy group-call syllables ("hey—HO!"), the
+        // second held a fifth up with a wider breath layer so it reads as a
+        // cluster of voices barking a rhythm, not a solo beep
+        const j = 0.92 + Math.random() * 0.16
+        const f0 = (150 + Math.random() * 50) * j
+        this.osc('sawtooth', f0, t, 0.14, 0.09 * v, f0 * 1.25)
+        this.osc('square', f0 * 0.5, t, 0.14, 0.035 * v)
+        this.noise(0.1, t, 0.05 * v, 1100, 0.9)
+        this.osc('sawtooth', f0 * 1.5, t + 0.3, 0.3, 0.1 * v, f0 * 1.35)
+        this.osc('square', f0 * 0.75, t + 0.3, 0.3, 0.04 * v)
+        this.noise(0.22, t + 0.3, 0.06 * v, 950, 0.8)
+        break
+      }
+      case 'order': {
+        // v52 — officer's COMMAND BARK: hard consonant noise attack, chest saw
+        // that slams DOWN (imperative "stop!" contour) with a clipped tail —
+        // the audio cue that the chase is aimed at YOU
+        const j = 0.94 + Math.random() * 0.12
+        this.noise(0.05, t, 0.12 * v, 1800, 1.1)
+        this.osc('sawtooth', 210 * j, t + 0.02, 0.22, 0.16 * v, 120 * j)
+        this.osc('square', 105 * j, t + 0.02, 0.24, 0.06 * v, 60)
+        this.noise(0.09, t + 0.24, 0.05 * v, 700, 0.9)
+        break
+      }
       case 'pickup': {
         // physical grab (hand/cloth snap) + short rising confirming chirp
         this.noise(0.045, t, 0.1 * v, 950, 1.6)
@@ -374,6 +420,9 @@ class AudioManagerImpl {
         break
       }
       case 'horn': this.osc('sawtooth', 310, t, 0.4, 0.14 * v, 290); this.osc('sawtooth', 155, t, 0.4, 0.12 * v, 145); break
+      // v66 — vehicle horn family: bikes scream higher, buses/trucks double-blast deep
+      case 'hornHi': this.osc('square', 520, t, 0.3, 0.09 * v, 470); this.osc('square', 390, t, 0.3, 0.07 * v, 350); break
+      case 'hornLo': this.osc('sawtooth', 200, t, 0.6, 0.16 * v, 180); this.osc('sawtooth', 100, t, 0.6, 0.13 * v, 90); break
       case 'moo': {
         // proper cow moo — slow attack (no click), saw voice gliding down with a
         // sub-octave chest layer and a breathy low band. Reads as a big animal.
@@ -400,64 +449,6 @@ class AudioManagerImpl {
         o.start(t); o.stop(t + 1)
         sub.start(t); sub.stop(t + 1)
         this.noise(0.55, t + 0.1, 0.05 * v, 340, 0.6)
-        break
-      }
-      case 'growl': {
-        // v64 zombie moan — low saw voice with a sickly pitch wobble + breath noise
-        const j = 0.9 + Math.random() * 0.2
-        const o = this.ctx.createOscillator()
-        o.type = 'sawtooth'
-        o.frequency.setValueAtTime(96 * j, t)
-        o.frequency.linearRampToValueAtTime(78 * j, t + 0.35)
-        o.frequency.linearRampToValueAtTime(88 * j, t + 0.7)
-        const g = this.ctx.createGain()
-        g.gain.setValueAtTime(0.0001, t)
-        g.gain.exponentialRampToValueAtTime(0.13 * v, t + 0.12)
-        g.gain.setValueAtTime(0.13 * v, t + 0.55)
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9)
-        o.connect(g).connect(this.out())
-        o.start(t); o.stop(t + 0.95)
-        const lfo = this.ctx.createOscillator()
-        lfo.frequency.value = 6.5
-        const lg = this.ctx.createGain()
-        lg.gain.value = 9
-        lfo.connect(lg).connect(o.frequency)
-        lfo.start(t); lfo.stop(t + 0.95)
-        break
-      }
-      case 'howl': {
-        // v64 distant wild howl — sine glide up then down, quiet and lonely
-        const j = 0.94 + Math.random() * 0.12
-        const o = this.ctx.createOscillator()
-        o.type = 'sine'
-        o.frequency.setValueAtTime(196 * j, t)
-        o.frequency.exponentialRampToValueAtTime(392 * j, t + 0.55)
-        o.frequency.exponentialRampToValueAtTime(174 * j, t + 1.5)
-        const g = this.ctx.createGain()
-        g.gain.setValueAtTime(0.0001, t)
-        g.gain.exponentialRampToValueAtTime(0.06 * v, t + 0.3)
-        g.gain.setValueAtTime(0.06 * v, t + 0.9)
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6)
-        o.connect(g).connect(this.out())
-        o.start(t); o.stop(t + 1.65)
-        break
-      }
-      case 'sting': {
-        // v64 scare stinger — dissonant tritone stab when a zombie detects you
-        const o = this.ctx.createOscillator()
-        o.type = 'sawtooth'
-        o.frequency.setValueAtTime(466, t)
-        const o2 = this.ctx.createOscillator()
-        o2.type = 'sawtooth'
-        o2.frequency.setValueAtTime(331, t)
-        const g = this.ctx.createGain()
-        g.gain.setValueAtTime(0.0001, t)
-        g.gain.exponentialRampToValueAtTime(0.16 * v, t + 0.03)
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.65)
-        o.connect(g); o2.connect(g)
-        g.connect(this.out())
-        o.start(t); o.stop(t + 0.7)
-        o2.start(t); o2.stop(t + 0.7)
         break
       }
       case 'bark': {
@@ -515,6 +506,110 @@ class AudioManagerImpl {
         this.osc('sine', 70, t, 1.6, 0.3 * v, 32)
         break
       }
+      // ---- v68 Vanodyan Deep ambience + the undead ----
+      case 'birdJungle': {
+        // exotic canopy call: three descending bell-tones + a fast trill tail
+        const j = 0.9 + Math.random() * 0.2
+        for (const [dt2, f0] of [[0, 1250], [0.16, 990], [0.3, 760]] as const) {
+          this.osc('sine', f0 * j, t + dt2, 0.13, 0.05 * v, f0 * 0.72 * j)
+          this.osc('triangle', f0 * 2.01 * j, t + dt2, 0.08, 0.018 * v)
+        }
+        for (let i = 0; i < 5; i++) this.osc('sine', (1750 - i * 60) * j, t + 0.5 + i * 0.045, 0.04, 0.028 * v)
+        break
+      }
+      case 'insect': {
+        // cicada burst — AM square whine, three swelling pulses
+        const j = 0.94 + Math.random() * 0.12
+        for (const [dt2, dv] of [[0, 1], [0.28, 0.85], [0.55, 0.6]] as const) {
+          this.osc('square', 4200 * j, t + dt2, 0.22, 0.016 * v * dv, 3900 * j)
+          this.osc('square', 5600 * j, t + dt2 + 0.02, 0.18, 0.008 * v * dv)
+        }
+        break
+      }
+      case 'growl': {
+        // big-cat rumble: sub saw + noisy chest, slow attack, double pulse
+        const j = 0.9 + Math.random() * 0.2
+        this.osc('sawtooth', 92 * j, t, 0.9, 0.16 * v, 58 * j)
+        this.osc('sawtooth', 61 * j, t + 0.08, 0.85, 0.13 * v, 40 * j)
+        this.noise(0.8, t + 0.05, 0.1 * v, 210, 0.5)
+        this.noise(0.5, t + 1.05, 0.08 * v, 160, 0.5)
+        break
+      }
+      case 'owlHoot': {
+        // two hollow hoots — sine with a soft attack and a lower answer
+        const j = 0.92 + Math.random() * 0.16
+        this.osc('sine', 340 * j, t, 0.32, 0.075 * v, 300 * j)
+        this.osc('sine', 168 * j, t + 0.02, 0.3, 0.05 * v)
+        this.osc('sine', 300 * j, t + 0.5, 0.42, 0.08 * v, 250 * j)
+        this.osc('sine', 148 * j, t + 0.52, 0.4, 0.05 * v)
+        break
+      }
+      case 'crowCaw': {
+        // v69 — graveyard crow: two harsh descending caws with a raspy tail
+        const j = 0.9 + Math.random() * 0.2
+        for (const [dt2, f0] of [[0, 720], [0.34, 640]] as const) {
+          this.osc('sawtooth', f0 * j, t + dt2, 0.2, 0.06 * v, f0 * 0.55 * j)
+          this.osc('square', f0 * 1.51 * j, t + dt2 + 0.015, 0.16, 0.02 * v)
+          this.noise(0.16, t + dt2 + 0.03, 0.022 * v, 1800, 0.6)
+        }
+        break
+      }
+      case 'wolfHowl': {
+        // v69 — far wolf: long sine glide up, hold with vibrato, fall away
+        const j = 0.92 + Math.random() * 0.16
+        const o = this.ctx.createOscillator()
+        o.type = 'sine'
+        o.frequency.setValueAtTime(220 * j, t)
+        o.frequency.exponentialRampToValueAtTime(430 * j, t + 0.55)
+        o.frequency.setValueAtTime(430 * j, t + 1.35)
+        o.frequency.exponentialRampToValueAtTime(190 * j, t + 2.4)
+        const lfo = this.ctx.createOscillator()
+        lfo.frequency.value = 5.2
+        const lfoGain = this.ctx.createGain()
+        lfoGain.gain.value = 7
+        lfo.connect(lfoGain); lfoGain.connect(o.frequency)
+        const g2 = this.ctx.createGain()
+        g2.gain.setValueAtTime(0.0001, t)
+        g2.gain.exponentialRampToValueAtTime(0.075 * v, t + 0.3)
+        g2.gain.setValueAtTime(0.075 * v, t + 1.5)
+        g2.gain.exponentialRampToValueAtTime(0.0001, t + 2.5)
+        o.connect(g2); g2.connect(this.sfxGain!)
+        o.start(t); o.stop(t + 2.55)
+        lfo.start(t); lfo.stop(t + 2.55)
+        this.osc('sine', 430 * j * 1.005, t + 0.55, 1.8, 0.02 * v)
+        break
+      }
+      case 'zombieMoan': {
+        // undead moan — wobbling saw sliding down + breathy noise, unsettling vibrato
+        const j = 0.88 + Math.random() * 0.24
+        const o = this.ctx.createOscillator()
+        o.type = 'sawtooth'
+        o.frequency.setValueAtTime(132 * j, t)
+        o.frequency.exponentialRampToValueAtTime(64 * j, t + 1.15)
+        const lfo = this.ctx.createOscillator()
+        lfo.frequency.value = 6.5
+        const lfoGain = this.ctx.createGain()
+        lfoGain.gain.value = 9
+        lfo.connect(lfoGain); lfoGain.connect(o.frequency)
+        const g = this.ctx.createGain()
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(0.13 * v, t + 0.18)
+        g.gain.setValueAtTime(0.13 * v, t + 0.7)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 1.25)
+        o.connect(g); g.connect(this.out())
+        o.start(t); o.stop(t + 1.3); lfo.start(t); lfo.stop(t + 1.3)
+        this.noise(1.0, t + 0.1, 0.045 * v, 420, 0.7)
+        break
+      }
+      case 'scareSting': {
+        // horror sting — dissonant minor-second cluster + sub boom + shriek slide
+        this.osc('sawtooth', 660, t, 0.9, 0.1 * v, 1244)
+        this.osc('sawtooth', 698, t, 0.9, 0.1 * v, 1318)
+        this.osc('sine', 48, t, 1.1, 0.26 * v, 30)
+        this.noise(0.4, t, 0.14 * v, 2400, 0.8)
+        this.osc('square', 1900, t + 0.06, 0.5, 0.05 * v, 3400)
+        break
+      }
     }
   }
 
@@ -523,22 +618,12 @@ class AudioManagerImpl {
   private rainSrc: AudioBufferSourceNode | null = null
 
   /** level 0..1 — smoothly fades a looping filtered-noise rain bed in/out.
-   *  v49: level ≤ 0.01 also HARD-STOPS the looping source after the fade tail —
-   *  a parked rain loop used to keep hissing behind menus after quitting a match. */
+   *  v52 — once the level settles ≤0.01 the source node is RETIRED (stopped and
+   *  dropped ~4 s after the fade) instead of looping silently forever: the bed
+   *  can not resurrect itself and the graph stays clean for the next storm. */
   setRain(level: number) {
     if (!this.ctx || !this.master) return
-    if (level <= 0.01) {
-      if (this.rainGain && this.ctx) this.rainGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.8)
-      if (this.rainSrc) {
-        const src = this.rainSrc
-        this.rainSrc = null
-        this.rainGain = null
-        try { src.stop(this.ctx.currentTime + 2.5) } catch { /* already stopped */ }
-        src.onended = () => { try { src.disconnect() } catch { /* already disconnected */ } }
-      }
-      return
-    }
-    if (!this.rainSrc) {
+    if (level > 0.01 && !this.rainSrc) {
       const len = this.ctx.sampleRate * 2
       const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
       const data = buf.getChannelData(0)
@@ -566,12 +651,74 @@ class AudioManagerImpl {
     }
     if (this.rainGain && this.ctx) {
       this.rainGain.gain.setTargetAtTime(level * 0.16, this.ctx.currentTime, 1.2)
+      if (level <= 0.01 && this.rainSrc) {
+        const src = this.rainSrc
+        this.rainSrc = null
+        this.rainGain = null
+        try { src.stop(this.ctx.currentTime + 4) } catch { /* already stopped */ }
+      }
     }
   }
 
-  /** Fully stop the rain bed (menus are silent — v49). */
-  stopRain() {
-    this.setRain(0)
+  // ---------- v68 jungle ambience (looping cicada bed, gain-driven) ----------
+  private jungleGain: GainNode | null = null
+  private jungleSrc: AudioBufferSourceNode | null = null
+  private jungleLfo: OscillatorNode | null = null
+  private jungleLfoGain: GainNode | null = null
+
+  /** level 0..1 — how deep in the wild the player is. Fades a bright, slowly
+   *  pulsing insect bed in/out (same retire-at-zero contract as setRain so the
+   *  graph stays clean when the player returns to the city). */
+  setJungle(level: number) {
+    if (!this.ctx || !this.master) return
+    if (level > 0.01 && !this.jungleSrc) {
+      const len = this.ctx.sampleRate * 2
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
+      const data = buf.getChannelData(0)
+      let last = 0
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1
+        last = (last + 0.25 * white) / 1.25
+        data[i] = last * 1.4 + white * 0.5
+      }
+      const src = this.ctx.createBufferSource()
+      src.buffer = buf
+      src.loop = true
+      // tight bright band — cicada whine, clearly thinner than the rain hiss
+      const bp = this.ctx.createBiquadFilter()
+      bp.type = 'bandpass'
+      bp.frequency.value = 4800
+      bp.Q.value = 1.1
+      const g = this.ctx.createGain()
+      g.gain.value = 0
+      // slow AM wobble so the bed breathes like a real insect chorus
+      const lfo = this.ctx.createOscillator()
+      lfo.frequency.value = 0.55
+      const lfoGain = this.ctx.createGain()
+      lfoGain.gain.value = 0.35
+      lfo.connect(lfoGain); lfoGain.connect(g.gain)
+      src.connect(bp); bp.connect(g); g.connect(this.master)
+      src.start(); lfo.start()
+      this.jungleSrc = src
+      this.jungleGain = g
+      this.jungleLfo = lfo
+      this.jungleLfoGain = lfoGain
+    }
+    if (this.jungleGain && this.ctx) {
+      this.jungleGain.gain.setTargetAtTime(level * 0.05, this.ctx.currentTime, 1.6)
+      // the AM wobble scales WITH the bed — subtle at the jungle fringe, eerie deep in
+      this.jungleLfoGain?.gain.setTargetAtTime(level * 0.022, this.ctx.currentTime, 1.6)
+      if (level <= 0.01 && this.jungleSrc) {
+        const src = this.jungleSrc
+        const lfo = this.jungleLfo
+        this.jungleSrc = null
+        this.jungleGain = null
+        this.jungleLfo = null
+        this.jungleLfoGain = null
+        try { src.stop(this.ctx.currentTime + 5) } catch { /* already stopped */ }
+        try { lfo?.stop(this.ctx.currentTime + 5) } catch { /* already stopped */ }
+      }
+    }
   }
 
   // ---------- crowd ambience ----------
@@ -604,25 +751,14 @@ class AudioManagerImpl {
     this.crowdGain.gain.setTargetAtTime(v * 0.5, this.ctx.currentTime, 0.8)
   }
 
-  /** Fully stop the crowd bed (menus are silent — v48). startCrowd() rebuilds it safely. */
-  stopCrowd() {
-    if (this.crowdSource) {
-      try { this.crowdSource.stop() } catch { /* already stopped */ }
-      this.crowdSource.disconnect()
-      this.crowdSource = null
-    }
-    if (this.ctx && this.crowdGain) this.crowdGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.4)
-  }
-
   // ---------- adaptive music (tiny step sequencer) ----------
   setTheme(theme: MusicTheme) {
     if (this.theme === theme) return
     this.theme = theme
     this.step = 0
     if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null }
-    // 'none' (or no ctx yet): sequencer stays stopped — silence until the next real theme
-    if (!this.ctx || theme === 'none') return
-    const tempos: Record<MusicTheme, number> = { menu: 2600, ambient: 3200, chase: 1900, boss: 1550, victory: 2000, none: 3200 }
+    if (!this.ctx) return
+    const tempos: Record<MusicTheme, number> = { menu: 2600, ambient: 3200, chase: 1900, boss: 1550, victory: 2000 }
     this.musicTimer = setInterval(() => this.tickMusic(), tempos[theme])
     this.tickMusic()
   }

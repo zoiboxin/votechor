@@ -396,14 +396,6 @@ io.on('connection', (socket) => {
     room?.pickup(socket.id, data.itemId)
   })
 
-  // v64 — zombie kill in the wild: client picked a whitelisted respawn point,
-  // room validates + adopts it (health reset, anti-warp accepts the hop)
-  socket.on('game:wildDeath', (data: { x?: unknown; z?: unknown } = {}) => {
-    const roomId = socketRooms.get(socket.id)
-    const room = roomId ? rooms.get(roomId) : undefined
-    room?.wildDeath(socket.id, data.x, data.z)
-  })
-
   // Detainee reports its inventory cards for confiscation → loot pile at the capture spot
   socket.on('game:confiscate', (data: { items?: unknown } = {}) => {
     const roomId = socketRooms.get(socket.id)
@@ -518,6 +510,13 @@ io.on('connection', (socket) => {
     const roomId = socketRooms.get(socket.id)
     const room = roomId ? rooms.get(roomId) : undefined
     room?.revive(socket.id, data.targetId)
+  })
+
+  // v68 — killed by the deep-jungle undead: server picks a random validated respawn
+  socket.on('game:wildDeath', () => {
+    const roomId = socketRooms.get(socket.id)
+    const room = roomId ? rooms.get(roomId) : undefined
+    room?.handleWildDeath(socket.id)
   })
 
   // ---------- squad handlers ----------

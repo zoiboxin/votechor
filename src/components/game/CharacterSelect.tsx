@@ -41,7 +41,7 @@ const POLICE_SLOTS: SlotSpec[] = [
 ]
 
 const DEFAULTS: Record<CosmeticKind, string> = {
-  hat: 'none', hair: 'bald', face: 'clean', build: 'regular', outfit: 'classic', footwear: 'shoes', gear: 'none', held: 'none',
+  hat: 'none', hair: 'default', face: 'clean', build: 'regular', outfit: 'classic', footwear: 'shoes', gear: 'none', held: 'none',
   policeOutfit: 'khaki', policeHat: 'peak',
 }
 
@@ -67,11 +67,10 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const profile = useGameStore((s) => s.profile)
   const setProfile = useGameStore((s) => s.setProfile)
   const notify = useGameStore((s) => s.notify)
-  const hiFiSetting = useGameStore((s) => s.settings.hiFiModel) // preview must mirror the in-game model (v52)
 
   const [archetype, setArchetype] = useState(profile?.archetype ?? 'student')
   const [hat, setHat] = useState(profile?.cosmetics?.hat ?? 'none')
-  const [hair, setHair] = useState(profile?.cosmetics?.hair ?? 'bald')
+  const [hair, setHair] = useState(profile?.cosmetics?.hair ?? 'default')
   const [gender, setGender] = useState<'male' | 'female'>(profile?.cosmetics?.gender === 'female' ? 'female' : 'male')
   const [policeOutfit, setPoliceOutfit] = useState(profile?.cosmetics?.policeOutfit ?? 'khaki')
   const [policeHat, setPoliceHat] = useState(profile?.cosmetics?.policeHat ?? 'peak')
@@ -207,9 +206,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     if (next === gender) return
     setGender(next)
     let nextHair = hair
-    if (hair === 'bald') {
-      // bald is the untouched default and suits both silhouettes — keep it
-    } else if (hair === 'default' || hair === 'buzz') {
+    if (hair === 'default' || hair === 'buzz' || hair === 'bald') {
       // untouched masculine styles flip to the signature feminine ponytail (and back)
       nextHair = next === 'female' ? 'ponytail' : 'default'
       setHair(nextHair)
@@ -476,13 +473,8 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
               {/* Preview + build + skin tones */}
               <div className="space-y-3">
                 <div className="vc-dots overflow-hidden rounded-xl border-2 border-[#1c1a17]/50 bg-gradient-to-b from-[#cfe0e8] to-[#efe6c8]">
-                  <CharacterPreview look={look} hiFi={hiFiSetting && !police} className="h-[300px] w-full" />
+                  <CharacterPreview look={look} className="h-[300px] w-full" />
                 </div>
-                {hiFiSetting && !police && (
-                  <p className="rounded-lg border border-[#1c1a17]/25 bg-[#f5efdc]/85 px-2.5 py-1.5 text-[9px] font-bold uppercase leading-relaxed tracking-wide text-[#1c1a17]/70">
-                    Showing your in-game High-Fi model — every slot applies live: outfit &amp; team colours, skin tone, hair, headgear, face, footwear, back gear, in-hand item, specs &amp; build.
-                  </p>
-                )}
                 {/* Build — male / female selection (round 23) */}
                 <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
                   <div className="mb-1.5 flex items-center justify-between">

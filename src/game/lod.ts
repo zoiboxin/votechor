@@ -32,6 +32,13 @@ export class WorldDistanceCuller {
   private anomalyStreak = 0
   enabled = true
   lastCulled = 0
+  /** v55 — watchdog accessors: total cached static meshes and how many the last sweep
+   *  left visible near the focus (entries minus hidden). Both public-read by design:
+   *  the game-level world-draw-failure watchdog needs the culler's bookkeeping to
+   *  decide whether "nothing on screen" is a culler mass-hide (its own fail-safe owns
+   *  that class) or a populated-but-undrawn world (the sky-only blue screen). */
+  get count(): number { return this.entries.length }
+  get visibleNear(): number { return this.entries.length - this.lastCulled }
   /** Fired AFTER the fail-safe restored the world and disabled this culler.
    *  A healthy sweep always leaves MANY meshes visible within the cull radius —
    *  the city is dense everywhere. If consecutive sweeps leave almost nothing
@@ -60,9 +67,7 @@ export class WorldDistanceCuller {
       // InstancedMesh IS a Mesh subclass — skip it (instance transforms are baked,
       // and there are only ~13 of them). Sprites/Points fail isMesh and are skipped.
       if ((mesh as THREE.InstancedMesh).isInstancedMesh) continue
-      // v64 — mountains opt out of distance culling: the skyline MUST read from
-      // anywhere on the 1300 m disc (their fog-immune material already beats fog)
-      if (mesh.userData?.noCull) continue
+      if (mesh.userData.noCull) continue // v70 — Vanodyan Rim skyline cones never cull
       const bs = mesh.geometry.boundingSphere ?? mesh.geometry.computeBoundingSphere()
       if (!bs || !isFinite(bs.radius)) continue
       mesh.updateWorldMatrix(true, false)

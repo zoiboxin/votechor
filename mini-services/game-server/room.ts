@@ -7,6 +7,7 @@ import {
   createNpcStates,
   tickNpc,
   applyNoise,
+  propagateChase,
   type NpcBrainState,
   type NpcPlayerView,
 } from '../../src/game/shared/npc-brain'
@@ -23,6 +24,7 @@ import {
   TOKENS_NEEDED,
   DETENTION_SECONDS,
   DAMAGE,
+  DETECT,
   MATCH_TIME_LIMIT,
   CAPTURE_MESSAGES,
   archetypeById,
@@ -52,6 +54,10 @@ export const WORLD = buildWorldDef()
 export interface ReleasePoint { id: string; x: number; z: number; label: string }
 
 const RELEASE_PAD = 1.2 // clearance required from every (non-walkable) collider
+/** v49 — post-release police grace: a just-released protester is `hidden` to NPC
+ *  brains (invisible beyond 3 m) and immune to human-officer arrest/baton for this
+ *  long, so nobody gets re-caught the instant they respawn. */
+const RELEASE_GRACE_MS = 6000
 
 /**
  * Candidates derived from WORLD data: the four checkpoint detention spots, the plaza
@@ -96,6 +102,28 @@ export const RELEASE_POINTS: ReleasePoint[] = (() => {
   return out
 })()
 
+/** v68 — wild-death pool: the city release posts plus jungle-edge and deep-jungle
+ *  clearings (each validated against the world colliders like the city list).
+ *  v69 — ring-jungle points for the round wild. */
+const WILD_EXTRA: ReleasePoint[] = [
+  { id: 'wild_ring_e', x: 166, z: -360, label: 'East Ring Road' },
+  { id: 'wild_aam', x: 140, z: -500, label: 'Aam Bagicha' },
+  { id: 'wild_camp', x: 66, z: -706, label: 'The Lost Camp' },
+  { id: 'wild_deep', x: -60, z: -620, label: 'Vanodyan Deep' },
+  { id: 'wild_bank', x: -84, z: -670, label: 'River Bank' },
+  { id: 'wild_east_wing', x: 240, z: -379, label: 'East Jungle' },
+  { id: 'wild_west_wing', x: -240, z: -240, label: 'West Jungle' },
+  { id: 'wild_graves_se', x: 300, z: -596, label: 'Forgotten Graves' },
+]
+export const WILD_RELEASE_POINTS: ReleasePoint[] = (() => {
+  const out = [...RELEASE_POINTS]
+  for (const c of WILD_EXTRA) {
+    if (!releasePointBlocked(c.x, c.z, RELEASE_PAD)) out.push(c)
+    else console.log(`[room] wild respawn point REJECTED (collides with world): ${c.id}`)
+  }
+  return out
+})()
+
 /**
  * Pick a random release destination (Phase 6).
  * Filters: (a) never the player's lastReleaseId, (b) ≥30 m from any non-detained
@@ -106,30 +134,25 @@ export const RELEASE_POINTS: ReleasePoint[] = (() => {
 export function pickReleasePoint(
   lastReleaseId: string | null,
   squadPositions: ReadonlyArray<{ x: number; z: number }>,
+  points: readonly ReleasePoint[] = RELEASE_POINTS,
 ): ReleasePoint {
   const arena = WORLD.bossArena
   const inArena = (x: number, z: number) => Math.hypot(x - arena.x, z - arena.z) < arena.radius + 4
-  const base = RELEASE_POINTS.filter((pt) =>
+  const base = points.filter((pt) =>
     pt.id !== lastReleaseId && !inArena(pt.x, pt.z) && !releasePointBlocked(pt.x, pt.z, RELEASE_PAD))
-  let pool = base.filter((pt) => !squadPositions.some((s) => Math.hypot(s.x - pt.x, s.z - pt.z) < 30))
-  if (pool.length < 2) pool = base // keep ≥2 alternatives: drop the squadmate filter first
-  if (pool.length === 0) pool = RELEASE_POINTS.filter((pt) => !inArena(pt.x, pt.z))
-  if (pool.length === 0) pool = RELEASE_POINTS.slice()
-  if (pool.length === 0) return { id: 'spawn', x: WORLD.spawn.x, z: WORLD.spawn.z, label: 'Protest Plaza' }
-  return randomOf(pool)
+  let cand = base.filter((pt) => !squadPositions.some((s) => Math.hypot(s.x - pt.x, s.z - pt.z) < 30))
+  if (cand.length < 2) cand = base // keep ≥2 alternatives: drop the squadmate filter first
+  if (cand.length === 0) cand = points.filter((pt) => !inArena(pt.x, pt.z))
+  if (cand.length === 0) cand = points.slice()
+  if (cand.length === 0) return { id: 'spawn', x: WORLD.spawn.x, z: WORLD.spawn.z, label: 'Protest Plaza' }
+  return randomOf(cand)
 }
 
 export const ROOM_CAP = 20
 export const PLAYER_CAP = 200
-// v64 WILD ROUND WORLD — the server accepts the full 1300 m disc (the wild
-// jungle + mountain rim are playable, not just the city).
-const BOUNDS_X = 658 // ±
+const BOUNDS_X = 658 // v72 — the grown ROUND world disc (bounding square; the client leash is the circle)
 const BOUNDS_Z_MIN = -998
 const BOUNDS_Z_MAX = 318
-/** v64 — valid zombie-kill respawn destinations (city checkpoint detentions + spawn plaza). */
-const WILD_RELEASE_POINTS: Array<{ x: number; z: number }> = [
-  { x: 0, z: -8 }, { x: 10, z: -70 }, { x: 12, z: -190 }, { x: 10, z: -268 }, { x: 14, z: -408 },
-]
 // Max horizontal movement accepted between two client state updates (>18 m/tick is a
 // teleport — snap back to the last accepted position). Phase 3/10 tightened from 25:
 // legit sprint tops out ~1 m per 83 ms update, so 18 m is a huge grace margin while
@@ -173,6 +196,7 @@ export interface PlayerState {
   maxHealth: number
   detained: boolean
   detainUntil: number
+  releaseGraceUntil: number // v49 — until this ms tick, brains cannot re-target and officers cannot cuff/strike this player
   dazed: boolean
   dazedUntil: number
   tokens: number
@@ -183,6 +207,7 @@ export interface PlayerState {
   lastZ: number
   noiseTimes: number[]
   emoteTimes: number[]
+  wildDeathAt?: number // v68 — last wild-death respawn ms tick (rate-limit)
   giftTimes: number[]
   inviteTimes: number[]
   kudosTimes: number[]
@@ -301,6 +326,7 @@ export class Room {
       maxHealth,
       detained: false,
       detainUntil: 0,
+      releaseGraceUntil: 0,
       dazed: false,
       dazedUntil: 0,
       tokens: 0,
@@ -371,28 +397,6 @@ export class Room {
   // ---------- client-driven actions (validated server-side) ----------
 
   /** Store a validated player state update. Detained players are ignored. */
-  /**
-   * v64 — a zombie killed this protester in the wild. The client already
-   * respawned locally; validate its chosen point against the whitelist and
-   * adopt it so anti-warp accepts the teleport, then reset health server-side.
-   */
-  wildDeath(socketId: string, rx: unknown, rz: unknown) {
-    const p = this.players.get(socketId)
-    if (!p) return
-    const x = num(rx, NaN)
-    const z = num(rz, NaN)
-    if (!Number.isFinite(x) || !Number.isFinite(z)) return
-    const okPoint = WILD_RELEASE_POINTS.some(pt => Math.hypot(pt.x - x, pt.z - z) < 4)
-    if (!okPoint) return
-    const inCity = Math.abs(p.x) < 120 && p.z < 10 && p.z > -572
-    if (inCity) return // died in the city — no wild respawn
-    p.x = x
-    p.z = z
-    p.y = 0
-    p.health = 60
-    console.log(`[wild] ${p.name} was claimed by the Vanodyan wild — respawning in the city`)
-  }
-
   handleState(socketId: string, s: { x?: unknown; y?: unknown; z?: unknown; ry?: unknown; anim?: unknown; carrying?: unknown }) {
     const p = this.players.get(socketId)
     if (!p || p.detained) return // detained → freeze, ignore updates
@@ -644,6 +648,7 @@ export class Room {
     const target = this.players.get(targetId)
     if (!target || target.role === 'police') return false
     if (target.detained || target.dazed) return false
+    if (now < target.releaseGraceUntil) return false // v49 — post-release grace: no instant re-cuffs at the respawn
     // v47 — elevation-aware reach: officers can cuff UP onto objects (carts, the
     // stage, the fountain rim, containers) — horizontal range grows with the
     // target's height above the officer, mirroring the client's game.ts formula.
@@ -675,6 +680,7 @@ export class Room {
     const target = this.players.get(targetId)
     if (!target || target.role === 'police') return false // officers never strike fellow officers
     if (target.detained || target.dazed) return false
+    if (now < target.releaseGraceUntil) return false // v49 — post-release grace: no instant lathi at the respawn
     // v47 — elevation-aware lathi (mirrors the client's game.ts formula): the
     // reach grows with the target's height above the officer, capped at +2.2 m
     const dyUp = Math.max(0, (target.y ?? 0) - (officer.y ?? 0))
@@ -785,10 +791,34 @@ export class Room {
    * the boss arena. Detention duration semantics are unchanged.
    */
   private releasePlayer(p: PlayerState) {
+    this.releasePlayerWith(p, (last, squad) => pickReleasePoint(last, squad))
+  }
+
+  /** v68 — killed by the deep-jungle undead: respawn at a random point from the
+   *  wild pool (city posts + jungle-edge/deep clearings). Same contract as the
+   *  detention release: anti-warp re-baseline, chase reset, 6 s grace window.
+   *  Rate-limited to one respawn per 5 s per player. */
+  handleWildDeath(playerId: string) {
+    const p = this.players.get(playerId)
+    if (!p) return
+    const now = Date.now()
+    if (now - (p.wildDeathAt ?? 0) < 5000) return
+    p.wildDeathAt = now
+    console.log(`[wild] ${p.name} was claimed by the Vanodyan Deep — respawning elsewhere`)
+    this.releasePlayerWith(p, (last, squad) => pickReleasePoint(last, squad, WILD_RELEASE_POINTS))
+  }
+
+  /** Shared release tail: pick the destination, teleport (server-side too, so the
+   *  anti-warp speed check accepts the next client state), drop every officer's
+   *  stale chase, open the grace window, broadcast the shared game:release. */
+  private releasePlayerWith(
+    p: PlayerState,
+    pick: (lastReleaseId: string | null, squad: ReadonlyArray<{ x: number; z: number }>) => ReleasePoint,
+  ) {
     const squad = this.squadmatePositions
       ? this.squadmatePositions(p.id)
       : [...this.humans()].filter((h) => h.id !== p.id && !h.detained).map((h) => ({ x: h.x, z: h.z }))
-    const dest = pickReleasePoint(p.lastReleaseId, squad)
+    const dest = pick(p.lastReleaseId, squad)
     p.lastReleaseId = dest.id
     p.detained = false
     p.detainUntil = 0
@@ -799,6 +829,16 @@ export class Room {
     p.lastZ = dest.z
     p.lastStateTime = Date.now()
     p.anim = 'idle'
+    // v49 — fresh start: open the post-release grace window and drop EVERY officer's
+    // stale chase on this player (the capturer already resets itself at capture time,
+    // but other officers kept alert ≥ 1 through the whole detention and would
+    // instantly re-acquire the respawn — the stale WANTED banner bug).
+    p.releaseGraceUntil = Date.now() + RELEASE_GRACE_MS
+    for (const n of this.npcs) {
+      if (n.targetId === p.id) {
+        n.state = 'return'; n.targetId = null; n.alert = 0; n.captureProgress = 0; n.attackTelegraphUntil = 0
+      }
+    }
     // 4th arg `label` is additive — existing clients ignore extra args
     this.emitRoom('game:release', p.id, p.x, p.z, dest.label)
   }
@@ -818,7 +858,8 @@ export class Room {
     for (const p of this.players.values()) {
       if (!p.detained && !p.dazed) {
         const grace = now - p.joinedAt < 10000 && dist2d(p.x, p.z, WORLD.spawn.x, WORLD.spawn.z) < 16
-        const view: NpcPlayerView = { id: p.id, x: p.x, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace, bot: p.bot, health: p.health, police: p.role === 'police' }
+        // v51 — y in the view: brains do elevation-aware strikes/captures (platform exploit fix)
+        const view: NpcPlayerView = { id: p.id, x: p.x, y: p.y, z: p.z, detained: p.detained, dazed: p.dazed, hidden: grace || now < p.releaseGraceUntil, bot: p.bot, health: p.health, police: p.role === 'police' }
         views.push(view)
         if (!p.bot) bossViews.push(view)
       }
@@ -836,6 +877,8 @@ export class Room {
         }
       }
     }
+    // v51 — pack pursuit: an active chase is contagious to nearby officers
+    propagateChase(this.npcs, DETECT.packChaseRadius, now)
 
     // 2. Searchlight rotation
     for (const sl of this.searchlights) sl.ry += sl.speed * dt
@@ -971,6 +1014,7 @@ export class Room {
       if (p.detained) {
         p.detained = false
         p.detainUntil = 0
+        p.releaseGraceUntil = Date.now() + RELEASE_GRACE_MS // v49 — reset path releases detainees too
       }
       p.confiscatedFor = 0
       p.tokens = 0

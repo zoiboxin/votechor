@@ -31,12 +31,16 @@ const WEATHER: Record<WeatherKind, WeatherDef> = {
 
 // auto (markov-ish) weather progression — makes multi-hour sessions feel alive
 const NEXT_WEATHER: Record<WeatherKind, [WeatherKind, number][]> = {
-  clear:    [['clear', 0.42], ['cloudy', 0.34], ['fog', 0.12], ['overcast', 0.12]],
-  cloudy:   [['clear', 0.3], ['cloudy', 0.24], ['overcast', 0.28], ['rain', 0.14], ['fog', 0.04]],
-  overcast: [['rain', 0.34], ['cloudy', 0.3], ['storm', 0.14], ['overcast', 0.12], ['clear', 0.1]],
-  rain:     [['rain', 0.3], ['storm', 0.26], ['overcast', 0.28], ['cloudy', 0.16]],
-  storm:    [['rain', 0.5], ['overcast', 0.3], ['storm', 0.2]],
-  fog:      [['clear', 0.4], ['cloudy', 0.34], ['fog', 0.26]],
+  // v52 — de-stickied: the old matrix held rain 56% / storm 80% of the time, so
+  // sessions that drifted wet stayed wet for the whole match (the "rain always
+  // playing" report). Wet states now reliably dry out; escalation to a storm is
+  // still possible but never the default.
+  clear:    [['clear', 0.5], ['cloudy', 0.28], ['fog', 0.1], ['overcast', 0.12]],
+  cloudy:   [['clear', 0.36], ['cloudy', 0.26], ['overcast', 0.2], ['rain', 0.14], ['fog', 0.04]],
+  overcast: [['cloudy', 0.34], ['rain', 0.26], ['clear', 0.18], ['storm', 0.12], ['overcast', 0.1]],
+  rain:     [['cloudy', 0.34], ['overcast', 0.26], ['rain', 0.22], ['storm', 0.18]],
+  storm:    [['rain', 0.34], ['overcast', 0.3], ['cloudy', 0.22], ['storm', 0.14]],
+  fog:      [['clear', 0.44], ['cloudy', 0.32], ['fog', 0.24]],
 }
 
 interface PaletteKey {
@@ -392,6 +396,29 @@ export class SkySystem {
     this.weatherMode = m
     if (m !== 'auto') this.targetWeather = m
     this.wTimer = 150 + Math.random() * 180
+  }
+
+  /**
+   * v52 — deterministic match-start weather. The old startMatch path called
+   * setWeatherMode('auto') (which early-returns when already 'auto' and keeps the
+   * PREVIOUS session's targetWeather) — a match could spawn inside the last
+   * session's storm and hold it for 150–330 s. startFresh() snaps the visual+audio
+   * state to `kind` instantly (the loading screen covers the jump), then hands
+   * control to `mode`: 'auto' keeps the living weather machine (first change in
+   * ~1.5–3 min), a fixed kind holds for the whole match.
+   */
+  startFresh(mode: WeatherMode, kind: WeatherKind) {
+    this.weatherMode = mode
+    this.targetWeather = kind
+    this.wTimer = 80 + Math.random() * 100
+    const d = WEATHER[kind]
+    this.cur.cloudOp = d.cloudOp
+    this.cur.cloudDark = d.cloudDark
+    this.cur.rain = d.rain
+    this.cur.fogMul = d.fogMul
+    this.cur.sunMult = d.sunMult
+    this.cur.wind = d.wind
+    this.cur.lightning = d.lightning
   }
 
   /** Human-readable environment info for the HUD chip. */

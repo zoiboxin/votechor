@@ -9,18 +9,30 @@ export const TOKENS_NEEDED = 12
 export const MATCH_TIME_LIMIT = 900 // 15 minutes
 
 // ---------- World extent (must match world-def walls; used by maps/minimap/BigMap) ----------
-// v64 WILD ROUND WORLD: the playable map is a 1300 m disc — the city rectangle
-// sits inside it and the Vanodyan jungle wraps it 360°, out to a continuous
-// mountain rim on the disc edge. Bounds are the wall-ring bounding square.
+// v69 — the ROUND world: a giant disc of jungle surrounding the rectangular city.
+// WORLD_BOUNDS is the disc's bounding square (kept as a rectangle so the minimap,
+// big map and the server's backstop clamp keep working); the true playfield is the
+// circle below — walls, leash, minimap mask and ground all follow WORLD_DISC.
+// v72 — "make map big, mountains far from the city": the disc grew r 465 → 650
+// (1300 m across, ~2x the diameter) and the center shifted north (−379 → −340) so
+// the jungle wraps the long city evenly. The layered rings in world-def push the
+// green hills to r 470..545, the Vanodyan Rim to 587..647 and the Far Range to
+// 690..770 — from the city edge there is now 86..375 m of dense jungle before the
+// first foothill, and the skyline reads as a distant horizon range, not a wall.
 export const WORLD_BOUNDS = { minX: -658, maxX: 658, minZ: -998, maxZ: 318 }
 export const WORLD_DISC = { cx: 0, cz: -340, r: 650 }
+// v69 — the Vanodyan Kabristan: the graveyard deep in the west jungle
+export const GRAVEYARD = { x: -265, z: -330, r: 44 }
 
 // ---------- Movement (meters, seconds) ----------
+// v51 — walk 5.2→6.0 & accel 34→40: the user-reported "normal walking feels slow
+// and heavy". NPC per-type chase speeds (npc-brain) were raised in lock-step
+// (6.2/6.8/7.0) so officers can still catch a walking protester.
 export const MOVE = {
-  walkSpeed: 5.2,
+  walkSpeed: 6.0,
   sprintSpeed: 9.2,
-  npcChaseSpeed: 6.6,
-  accel: 34,
+  npcChaseSpeed: 7.0,
+  accel: 40,
   friction: 22,
   jumpVel: 7.4,
   doubleJumpVel: 6.9,   // mid-air second jump impulse
@@ -57,6 +69,14 @@ export const DETECT = {
   noiseRadius: 20,
   forgetAfter: 7,
   sameTargetCooldown: 8,
+  // v51 — soft escape: a chase is dropped once the target is clearly out of reach
+  // (escapeMul × viewDist ≈ 33 m) after at least escapeAfterSec of pursuit, so
+  // outrunning the officer actually ends the hunt (the WANTED badge then fades).
+  escapeMul: 2.2,
+  escapeAfterSec: 6,
+  // v51 — pack pursuit: officers within this distance of an actively-chasing
+  // colleague pick up the same target (propagateChase in npc-brain).
+  packChaseRadius: 16,
 }
 
 // ---------- Police melee combat (Phase 5) — shared by server FSM + client telegraphs ----------

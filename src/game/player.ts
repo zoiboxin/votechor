@@ -1,9 +1,9 @@
 // VoteChor player controller — acceleration, sprint stamina, jump, slide, damage, states.
 import * as THREE from 'three'
 import { CharacterRig } from './character'
-import { MOVE, DAMAGE, WORLD_DISC, archetypeById } from './shared/constants'
+import { MOVE, DAMAGE, archetypeById, WORLD_DISC } from './shared/constants'
 import { policeUniformColors } from '../lib/cosmetics'
-import { pickLoco, mapToAnimName, GlbLocoFallback } from './anim'
+import { pickLoco, mapToAnimName } from './anim'
 import type { GLBAnimDriver, LocoState } from './anim'
 import type { GLBInstance } from './glb'
 import type { AnimName } from './shared/types'
@@ -52,7 +52,7 @@ export class PlayerController {
   /** Numeric-glitch sentinel fired when pos/vel stopped being finite (see applyInput). */
   onNanRecover: ((reason?: 'nan' | 'bounds') => void) | null = null
   // ---- High-Fi GLB rig (optional — procedural rig stays as the fallback) ----
-  glb: { inst: GLBInstance; driver: GLBAnimDriver; loco: GlbLocoFallback } | null = null
+  glb: { inst: GLBInstance; driver: GLBAnimDriver } | null = null
   /** Last resolved animation state, published to the network (works for BOTH backends). */
   netAnim: AnimName = 'idle'
 
@@ -135,19 +135,19 @@ export class PlayerController {
       this.onNanRecover?.('nan')
     }
 
-    // ---- world-bounds leash (self-healing, v64 radial) ----
+    // ---- world-bounds leash (self-healing) ----
     // A finite-but-absurd position (flung past the map edge by a physics edge
     // case) does NOT trip the NaN sentinel above, yet leaves every static mesh
-    // beyond the cull radius — the same sky-only "blue world" report, but
-    // permanent while the player stays out there. The playable world is the
-    // 1300 m disc (r 650 around 0,-340); anything clearly outside r 664 is
-    // pulled back to the last safe spot (disc-checked so a poisoned lastSafe
+    // beyond the 195 m cull radius — the same sky-only "blue world" report, but
+    // permanent while the player stays out there.
+    // v69 — ROUND world: anything outside the jungle disc (WORLD_DISC, + margin)
+    // is pulled back to the last safe spot (disc-checked so a poisoned lastSafe
     // can't become the rescue point) with velocity zeroed.
-    const wdx = this.pos.x - WORLD_DISC.cx, wdz = this.pos.z - WORLD_DISC.cz
-    if (wdx * wdx + wdz * wdz > 664 * 664) {
-      const sdx = this.lastSafe.x - WORLD_DISC.cx, sdz = this.lastSafe.z - WORLD_DISC.cz
+    // v72 — the disc grew to r 650: leash = wall ring (r 658) + 6, safe = −2.
+    const ldx = this.pos.x - WORLD_DISC.cx, ldz = this.pos.z - WORLD_DISC.cz
+    if (ldx * ldx + ldz * ldz > 664 * 664) {
       const okSafe = Number.isFinite(this.lastSafe.x) && Number.isFinite(this.lastSafe.z) &&
-        sdx * sdx + sdz * sdz < 656 * 656
+        Math.hypot(this.lastSafe.x - WORLD_DISC.cx, this.lastSafe.z - WORLD_DISC.cz) < 656
       const sx = okSafe ? this.lastSafe.x : 0
       const sz = okSafe ? this.lastSafe.z : -8
       this.pos.set(sx, this.physics.spawnHeight(sx, sz), sz)
@@ -309,7 +309,8 @@ export class PlayerController {
       // remember recent solid ground (0.4s cadence) as the fall-recovery point
       // (finite-guarded — a poisoned position must never become the rescue point)
       const now = performance.now()
-      if (now - this.lastSafeAt > 400 && Number.isFinite(this.pos.x) && Number.isFinite(this.pos.z) && this.pos.z > -580 && this.pos.z < 20 && Math.abs(this.pos.x) < 130) {
+      if (now - this.lastSafeAt > 400 && Number.isFinite(this.pos.x) && Number.isFinite(this.pos.z) &&
+        Math.hypot(this.pos.x - WORLD_DISC.cx, this.pos.z - WORLD_DISC.cz) < WORLD_DISC.r) {
         this.lastSafeAt = now
         this.lastSafe.x = this.pos.x
         this.lastSafe.z = this.pos.z
@@ -371,22 +372,20 @@ export class PlayerController {
   release(x: number, z: number) {
     this.state = 'normal'
     this.health = Math.max(this.health, DAMAGE.dazedRecoverHealth)
-    this.pos.set(x, this.physics.groundHeight(x, z, 2), z)
+    this.pos.set(x, this.physics.spawnHeight(x, z), z)
     this.vel.set(0, 0, 0)
     this.recoverTimer = 0.8 // getup animation after being freed
     this.lastSafe.x = x; this.lastSafe.z = z
   }
 
   teleport(x: number, z: number) {
-    this.pos.set(x, this.physics.groundHeight(x, z, 2), z)
+    this.pos.set(x, this.physics.spawnHeight(x, z), z)
     this.vel.set(0, 0, 0)
   }
 
   /** Attach the High-Fi GLB rig (hides the procedural body; both stay positioned). */
   attachGlb(inst: GLBInstance, driver: GLBAnimDriver) {
-    const loco = new GlbLocoFallback()
-    loco.patch(inst.group) // arm-swing shader for clip-less models (no-op pose-wise until applied)
-    this.glb = { inst, driver, loco }
+    this.glb = { inst, driver }
     this.glb.driver.snap('idle')
     this.rig.group.visible = false
     inst.group.visible = true
@@ -396,7 +395,6 @@ export class PlayerController {
   detachGlb() {
     if (!this.glb) return
     this.glb.driver.dispose()
-    this.glb.loco.dispose()
     this.glb = null
     this.rig.group.visible = true
   }
@@ -436,13 +434,6 @@ export class PlayerController {
       this.glb.driver.update(dt)
       this.glb.inst.group.position.copy(this.pos)
       this.glb.inst.group.rotation.y = this.ry
-      // clip-less models (textured avatar) get the procedural bob/lean/arm+leg layer;
-      // rigged models play the authored clips — the double-jump flip rides on top
-      if (this.glb.driver.playableClips === 0) {
-        this.glb.loco.apply(this.glb.inst.group, dt, hSpeed, this.grounded, { vy: this.vel.y, baseY: this.pos.y })
-      } else {
-        this.glb.loco.applyFlipOnly(this.glb.inst.group, dt)
-      }
     }
     // procedural backend always updates (it holds the name tag + is the fallback)
     this.rig.update(dt, this.netAnim, hSpeed)

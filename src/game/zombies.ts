@@ -1,185 +1,339 @@
-// VoteChor ZombieSystem (v64 rebuild of the lost v58/v68 deep + v69/v70 ring
-// layers) — the Vanodyan wild is HUNTED: zombies wander the jungle ring, detect
-// the player at 14 m, chase with moans + a scare stinger, and strike for 16.
-// They NEVER enter the city (sanctuary clamp with boundary slide) and they ride
-// the mountain heightfield like the player does. A zombie kill triggers the
-// wildDeath flow (client emits, server validates + respawns elsewhere).
+// VoteChor v68 — the Vanodyan Dead: shambling undead that haunt the deep jungle.
+// Fully client-local bots (same contract as the animals): lurch around a home
+// clearing until the player comes close, then CHASE with a horror stinger and
+// moaning voices. They strike in melee; if the player's health hits zero the
+// game's wild-death flow respawns them at a random location (server-sanctioned
+// when online). Sprinting outruns them; walking barely does — keep moving.
 import * as THREE from 'three'
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { AudioManager } from './audio'
 import { mountainHeightAt } from './mountain-field'
-import type { SfxName } from './audio'
+import type { FxSystem } from './fx'
 
-/** Hunt spots — all OUTSIDE the city rect, inside the playable ring (r ≤ 430). */
-const ZOMBIE_SPOTS: Array<[number, number]> = [
-  [-180, -140], [185, -150], [-220, -300], [230, -320],
-  [-150, -450], [160, -470], [-260, -520], [255, -560],
-  [-90, -610], [90, -640], [-320, -380], [320, -400],
-  [150, -240], [-150, -265], [350, -250], [-350, -240],
-  [200, -680], [-200, -700],
-]
-
-/** City sanctuary — zombies clamp out of here (matches the city walls + margin). */
-function inCitySanctuary(x: number, z: number): boolean {
-  return Math.abs(x) < 126 && z < 16 && z > -578
-}
+type ZombieState = 'lurch' | 'chase'
 
 interface Zombie {
-  grp: THREE.Group
-  x: number; z: number
-  hx: number; hz: number // home spot
-  tx: number; tz: number // wander target
-  chasing: boolean
-  retarget: number
-  moanT: number
-  strikeT: number
+  group: THREE.Group
+  bodyRoot: THREE.Group
+  armL: THREE.Group
+  armR: THREE.Group
+  legL: THREE.Object3D
+  legR: THREE.Object3D
+  head: THREE.Group
+  home: { x: number; z: number }
+  target: { x: number; z: number }
+  state: ZombieState
+  ry: number
+  speed: number // chase speed 4.9..5.6 — walking (6.0) escapes, sprinting laughs
   phase: number
+  moveAmt: number
+  stateT: number
+  strikeT: number
+  moanT: number
+  loseT: number // >0 while the player is out of sight but not yet forgotten
+  lunge: number // arm-swing driver on strike
 }
 
-export interface ZombieHooks {
-  onStrike?: (dmg: number) => void
-  onDetect?: () => void
-  sfx?: (name: SfxName, sx: number, sz: number) => void
-  listener?: () => { x: number; z: number; yaw: number }
+// ---- shared material cache (module level — no per-instance allocation) ----
+const matCache = new Map<string, THREE.MeshStandardMaterial>()
+function mat(color: string, emissive?: string, ei = 1): THREE.MeshStandardMaterial {
+  const key = color + (emissive ?? '') + ei
+  let m = matCache.get(key)
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.9 })
+    if (emissive) { m.emissive = new THREE.Color(emissive); m.emissiveIntensity = ei }
+    matCache.set(key, m)
+  }
+  return m
+}
+
+function box(w: number, h: number, d: number, x = 0, y = 0, z = 0): THREE.BoxGeometry {
+  const g = new THREE.BoxGeometry(w, h, d)
+  g.translate(x, y, z)
+  return g
+}
+
+function merged(parts: THREE.BufferGeometry[], material: THREE.Material): THREE.Mesh {
+  const norm = parts.map(p => {
+    const q = p.index ? p : mergeVertices(p, 1e-4) ?? p
+    if (q.attributes.uv) q.deleteAttribute('uv')
+    if (q.attributes.uv1) q.deleteAttribute('uv1')
+    return q
+  })
+  const geo = mergeGeometries(norm, false)
+  const mesh = new THREE.Mesh(geo ?? parts[0], material)
+  if (geo) for (const p of norm) p.dispose()
+  return mesh
+}
+
+const SKIN = ['#7d9459', '#6f8a52', '#87986a'] // sickly jungle-rot greens
+const RAGS = ['#3c3a34', '#463f33', '#33392f'] // torn kurta rags
+
+/** One undead: hunched rag figure, arms thrust forward, ember eyes. ~1.75m tall. */
+function buildZombie(variant: number): {
+  group: THREE.Group; bodyRoot: THREE.Group; armL: THREE.Group; armR: THREE.Group
+  legL: THREE.Object3D; legR: THREE.Object3D; head: THREE.Group
+} {
+  const skin = mat(SKIN[variant % SKIN.length])
+  const rag = mat(RAGS[variant % RAGS.length])
+  const dark = mat('#1c2016')
+  const eye = mat('#d6ff5e', '#a4f43c', 1.7)
+  const group = new THREE.Group()
+  const bodyRoot = new THREE.Group()
+  bodyRoot.rotation.x = 0.24 // permanent hungry hunch
+  group.add(bodyRoot)
+  // torso + ragged shoulders
+  bodyRoot.add(merged([
+    box(0.4, 0.52, 0.24, 0, 1.02, 0),
+    box(0.46, 0.14, 0.28, 0, 1.24, 0),
+    box(0.3, 0.18, 0.2, 0, 0.78, 0.1), // gut
+  ], rag))
+  // spine wound / rot patch
+  const wound = new THREE.Mesh(box(0.12, 0.14, 0.03, 0.06, 1.05, -0.13), dark)
+  bodyRoot.add(wound)
+  // head — tilted, hollow sockets, ember eyes (visible in the dark canopy)
+  const head = new THREE.Group()
+  head.position.set(0, 1.38, 0.06)
+  head.rotation.x = -0.3 // craned up out of the hunch
+  head.add(merged([
+    box(0.24, 0.26, 0.24, 0, 0.1, 0.02),
+    box(0.16, 0.1, 0.12, 0, 0.0, 0.15), // jaw
+  ], skin))
+  head.add(merged([
+    box(0.05, 0.055, 0.02, 0.062, 0.13, 0.135),
+    box(0.05, 0.055, 0.02, -0.062, 0.13, 0.135),
+  ], eye))
+  bodyRoot.add(head)
+  // arms — thrust forward, claw hands; pivots at the shoulders
+  const mkArm = (side: 1 | -1) => {
+    const pivot = new THREE.Group()
+    pivot.position.set(0.27 * side, 1.2, 0.04)
+    pivot.rotation.x = -1.25 // reaching
+    const arm = merged([
+      box(0.09, 0.42, 0.09, 0, -0.21, 0),
+      box(0.1, 0.16, 0.1, 0, -0.48, 0.02), // hand
+    ], skin)
+    pivot.add(arm)
+    return pivot
+  }
+  const armL = mkArm(-1), armR = mkArm(1)
+  bodyRoot.add(armL, armR)
+  // legs — pivots at the hips
+  const mkLeg = (side: 1 | -1) => {
+    const pivot = new THREE.Group()
+    pivot.position.set(0.11 * side, 0.78, 0)
+    const leg = merged([box(0.12, 0.78, 0.13, 0, -0.39, 0)], rag)
+    pivot.add(leg)
+    return pivot
+  }
+  const legL = mkLeg(-1), legR = mkLeg(1)
+  bodyRoot.add(legL, legR)
+  return { group, bodyRoot, armL, armR, legL, legR, head }
+}
+
+/** Deep-jungle spawn pockets — all in open clearings (world-def keeps trees,
+ *  the river band, the trail and the mountain bases clear of these points). */
+const ZOMBIE_SPOTS: Array<[number, number]> = [
+  [-60, -620], [30, -615], [-140, -650], [100, -645],
+  [-30, -700], [-110, -715], [20, -735], [150, -690],
+  [-170, -720], [86, -742], [-56, -742], [186, -740],
+  // v68b — wider coverage so the deep south always feels hunted
+  [120, -620], [165, -655], [40, -655], [-105, -730], [-150, -735], [90, -730],
+  // v69 — the ROUND wild: ambushes at every city exit, the wings, and the
+  // Kabristan pack guarding the graves
+  [190, -150], [190, -379], [188, -540], [-190, -150], [-190, -379], [-188, -540],
+  [60, 55], [-90, 50], [160, 35],
+  [260, -379], [-260, -500], [300, -620],
+  [-250, -310], [-280, -345], [-240, -350], [-295, -320],
+]
+
+// v70 — CITY SANCTUARY: the undead never cross the wildness-0 line
+// (|x| < 150 and -560 < z < 14 — exactly the zone wildnessAt() scores zero).
+// Chasers slide along the boundary like gate guards and give up the moment the
+// player is safely inside; wanderers never pick targets across the line.
+const citySafe = (x: number, z: number) => Math.abs(x) < 150 && z < 14 && z > -560
+
+const DETECT_R = 14 // jungle is dense — you hear it before you see it
+const LOSE_R = 30 // sprint and the canopy swallows you
+const STRIKE_R = 1.7
+const STRIKE_DMG = 16
+
+export interface ZombieCallbacks {
+  onStrike: (amount: number) => void
+  onSpot: () => void
 }
 
 export class ZombieSystem {
   group = new THREE.Group()
-  list: Zombie[] = []
-  private hooks: ZombieHooks
-  private howlT = 8
+  private zombies: Zombie[] = []
+  private cb: ZombieCallbacks
 
-  constructor(hooks: ZombieHooks = {}) {
-    this.hooks = hooks
-    const skin = new THREE.MeshStandardMaterial({ color: '#5a7048', roughness: 0.9, flatShading: true })
-    const dark = new THREE.MeshStandardMaterial({ color: '#3a4430', roughness: 0.95, flatShading: true })
-    const eye = new THREE.MeshBasicMaterial({ color: '#ffd24a' })
-    for (const [sx, sz] of ZOMBIE_SPOTS) {
-      for (let k = 0; k < 2; k++) {
-        const g = new THREE.Group()
-        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.72, 3, 8), k ? dark : skin)
-        body.position.y = 0.92
-        body.castShadow = true
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 8, 7), k ? dark : skin)
-        head.position.y = 1.6
-        head.castShadow = true
-        const e1 = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), eye)
-        e1.position.set(-0.09, 1.64, 0.19)
-        const e2 = e1.clone(); e2.position.x = 0.09
-        const armL = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.62, 0.13), skin)
-        armL.position.set(-0.36, 1.18, 0.22); armL.rotation.x = -1.25
-        const armR = armL.clone(); armR.position.x = 0.36
-        g.add(body, head, e1, e2, armL, armR)
-        const x = sx + (k ? 5 : -5) + Math.random() * 6 - 3
-        const z = sz + Math.random() * 6 - 3
-        g.position.set(x, mountainHeightAt(x, z), z)
-        this.group.add(g)
-        this.list.push({
-          grp: g, x, z, hx: sx, hz: sz, tx: x, tz: z,
-          chasing: false, retarget: 1 + Math.random() * 4,
-          moanT: 2 + Math.random() * 8, strikeT: 0, phase: Math.random() * 6.28,
-        })
-      }
+  constructor(fx: FxSystem, cb: ZombieCallbacks) {
+    this.cb = cb
+    for (let i = 0; i < ZOMBIE_SPOTS.length; i++) {
+      const [hx, hz] = ZOMBIE_SPOTS[i]
+      const fig = buildZombie(i)
+      fig.group.position.set(hx, mountainHeightAt(hx, hz), hz) // v77: ride the mountain terrain
+      this.group.add(fig.group)
+      this.zombies.push({
+        group: fig.group, bodyRoot: fig.bodyRoot, armL: fig.armL, armR: fig.armR,
+        legL: fig.legL, legR: fig.legR, head: fig.head,
+        home: { x: hx, z: hz }, target: { x: hx, z: hz },
+        state: 'lurch', ry: Math.random() * 6.28,
+        speed: 4.9 + Math.random() * 0.7,
+        phase: Math.random() * 6.28, moveAmt: 0, stateT: Math.random() * 4,
+        strikeT: 0, moanT: 4 + Math.random() * 10, loseT: 0, lunge: 0,
+      })
     }
   }
 
-  /**
-   * Tick the hunt. `player` is the local protester (or null in menus).
-   * dt is clamped by the caller like every other system.
-   */
-  update(dt: number, player: { x: number; y: number; z: number } | null) {
-    const lis = this.hooks.listener?.()
-    for (const z of this.list) {
-      z.phase += dt
-      let vx = 0, vz = 0
-      const dx = player ? player.x - z.x : 999
-      const dz = player ? player.z - z.z : 999
-      const d = Math.hypot(dx, dz)
-      const wasChasing = z.chasing
-      z.chasing = !!player && d < 14 && d > 0.4 && !inCitySanctuary(player.x, player.z)
-      if (z.chasing && !wasChasing) {
-        this.hooks.onDetect?.()
-        if (lis && Math.hypot(z.x - lis.x, z.z - lis.z) < 60) this.hooks.sfx?.('sting', z.x, z.z)
-      }
-      if (z.chasing && player) {
-        vx = dx / d; vz = dz / d
-        const sp = 3.55
-        this.step(z, vx * sp * dt, vz * sp * dt)
-        // strike
-        z.strikeT -= dt
-        if (d < 1.75 && z.strikeT <= 0) {
-          z.strikeT = 1.1
-          this.hooks.onStrike?.(16)
-          if (lis) this.hooks.sfx?.('growl', z.x, z.z)
+  /** Distance from (x,z) to the nearest zombie — respawn-point filter + QA. */
+  minDist(x: number, z: number): number {
+    let best = Infinity
+    for (const z0 of this.zombies) best = Math.min(best, Math.hypot(z0.group.position.x - x, z0.group.position.z - z))
+    return best
+  }
+
+  get count(): number { return this.zombies.length }
+  get chasing(): number { return this.zombies.reduce((n, z0) => n + (z0.state === 'chase' ? 1 : 0), 0) }
+
+  /** After a wild death (or teleport) the whole horde forgets the player. */
+  resetAggro() {
+    for (const z0 of this.zombies) {
+      z0.state = 'lurch'
+      z0.loseT = 0
+      z0.strikeT = 0
+      z0.target = { ...z0.home }
+    }
+  }
+
+  update(dt: number, worldTime: number, playerPos: { x: number; y: number; z: number }, listenerYaw: number) {
+    for (const zb of this.zombies) {
+      const px = zb.group.position.x, pz = zb.group.position.z
+      const dx = playerPos.x - px, dz = playerPos.z - pz
+      const dist = Math.hypot(dx, dz)
+
+      // ---- state machine ----
+      if (zb.state === 'lurch') {
+        if (dist < DETECT_R) {
+          zb.state = 'chase'
+          zb.loseT = 0
+          zb.strikeT = 0.4 // first swipe comes fast — the scare is the point
+          this.cb.onSpot()
+          AudioManager.playAt('zombieMoan', px, pz, playerPos.x, playerPos.z, listenerYaw, 48, 1.1)
         }
+      } else if (dist > LOSE_R) {
+        zb.loseT += dt
+        if (zb.loseT > 4) { zb.state = 'lurch'; zb.target = { ...zb.home } }
       } else {
-        // wander near home
-        z.retarget -= dt
-        if (z.retarget <= 0) {
-          z.retarget = 3 + Math.random() * 5
-          z.tx = z.hx + Math.random() * 16 - 8
-          z.tz = z.hz + Math.random() * 16 - 8
+        zb.loseT = 0
+      }
+
+      // ---- movement ----
+      let moving = false
+      if (zb.state === 'chase' && dist > 0.05) {
+        const sp = dist < STRIKE_R + 0.4 ? zb.speed * 0.25 : zb.speed
+        const inv = 1 / Math.max(dist, 0.001)
+        // v70 — sanctuary block: step toward the player, slide along the city
+        // line when the straight step would cross it, freeze if fully blocked.
+        let mx = dx * inv * sp * dt, mz = dz * inv * sp * dt
+        if (citySafe(px + mx, pz + mz)) {
+          if (!citySafe(px + mx, pz)) { mz = 0 }
+          else if (!citySafe(px, pz + mz)) { mx = 0 }
+          else { mx = 0; mz = 0 }
         }
-        const wx = z.tx - z.x, wz = z.tz - z.z
-        const wd = Math.hypot(wx, wz)
-        if (wd > 0.6) {
-          vx = wx / wd; vz = wz / wd
-          this.step(z, vx * 1.15 * dt, vz * 1.15 * dt)
+        if (mx !== 0 || mz !== 0) {
+          zb.group.position.x += mx
+          zb.group.position.z += mz
+          zb.group.position.y = mountainHeightAt(zb.group.position.x, zb.group.position.z) // v77: ride terrain
+          zb.ry = Math.atan2(dx, dz)
+          moving = true
+        }
+        // the player reached safety — the hunt is over, walk home
+        if (citySafe(playerPos.x, playerPos.z)) {
+          zb.state = 'lurch'
+          zb.target = { ...zb.home }
+          zb.loseT = 0
+          zb.strikeT = 0
+        }
+      } else if (zb.state === 'lurch') {
+        zb.stateT -= dt
+        const tdx = zb.target.x - px, tdz = zb.target.z - pz
+        const tdist = Math.hypot(tdx, tdz)
+        if (zb.stateT <= 0) {
+          zb.stateT = 2.5 + Math.random() * 4
+          if (tdist < 0.8) {
+            // pick a new wander target around home (v70 — never across the city line)
+            const ang = Math.random() * 6.28, r = 2 + Math.random() * 6
+            const tx = zb.home.x + Math.cos(ang) * r, tz = zb.home.z + Math.sin(ang) * r
+            zb.target = citySafe(tx, tz) ? { ...zb.home } : { x: tx, z: tz }
+          }
+        }
+        if (tdist > 0.6) {
+          const sp = 0.75
+          const inv = 1 / tdist
+          // v70 — sanctuary block for wanderers too
+          let mx = tdx * inv * sp * dt, mz = tdz * inv * sp * dt
+          if (citySafe(px + mx, pz + mz)) {
+            if (!citySafe(px + mx, pz)) { mz = 0 }
+            else if (!citySafe(px, pz + mz)) { mx = 0 }
+            else { mx = 0; mz = 0 }
+          }
+          if (mx !== 0 || mz !== 0) {
+            zb.group.position.x += mx
+            zb.group.position.z += mz
+            const want = Math.atan2(tdx, tdz)
+            // turn toward the target smoothly
+            let d = want - zb.ry
+            while (d > Math.PI) d -= 6.2832
+            while (d < -Math.PI) d += 6.2832
+            zb.ry += d * Math.min(1, dt * 2.2)
+            moving = true
+          }
         }
       }
-      // ride the terrain + face movement
-      z.grp.position.set(z.x, mountainHeightAt(z.x, z.z), z.z)
-      if (vx || vz) {
-        const targetRy = Math.atan2(vx, vz)
-        let dr = targetRy - z.grp.rotation.y
-        while (dr > Math.PI) dr -= Math.PI * 2
-        while (dr < -Math.PI) dr += Math.PI * 2
-        z.grp.rotation.y += dr * Math.min(1, dt * 6)
-        // shambling bob
-        z.grp.position.y += Math.abs(Math.sin(z.phase * 6)) * 0.06
+      zb.group.rotation.y = zb.ry
+
+      // ---- strike (chase, in reach, cooldown elapsed) ----
+      zb.strikeT -= dt
+      if (zb.state === 'chase' && dist < STRIKE_R && zb.strikeT <= 0) {
+        zb.strikeT = 1.15
+        zb.lunge = 1
+        this.cb.onStrike(STRIKE_DMG)
       }
-      // moans — spatial, heard through the jungle
-      z.moanT -= dt
-      if (z.moanT <= 0) {
-        z.moanT = 4 + Math.random() * 9
-        if (lis) {
-          const md = Math.hypot(z.x - lis.x, z.z - lis.z)
-          if (md < 38) this.hooks.sfx?.('growl', z.x, z.z)
-        }
+
+      // ---- animation ----
+      zb.moveAmt += ((moving ? 1 : 0) - zb.moveAmt) * Math.min(1, dt * 5)
+      zb.phase += dt * (2.4 + zb.moveAmt * 3.4)
+      const swing = Math.sin(zb.phase) * 0.5 * zb.moveAmt
+      zb.legL.rotation.x = swing
+      zb.legR.rotation.x = -swing
+      // arms reach and sway; the lunge throws the near arm forward
+      zb.lunge = Math.max(0, zb.lunge - dt * 2.6)
+      const lungeR = zb.lunge * 0.9
+      zb.armR.rotation.x = -1.25 + Math.sin(zb.phase * 0.9) * 0.12 * zb.moveAmt - lungeR
+      zb.armL.rotation.x = -1.25 + Math.sin(zb.phase * 0.9 + 1.2) * 0.12 * zb.moveAmt
+      zb.bodyRoot.rotation.z = Math.sin(zb.phase * 0.5) * 0.09 * (0.4 + zb.moveAmt) // drunk sway
+      zb.bodyRoot.position.y = Math.abs(Math.sin(zb.phase)) * 0.05 * zb.moveAmt
+      zb.head.rotation.y = Math.sin(worldTime * 0.7 + zb.phase) * 0.3 // scanning for flesh
+
+      // ---- voices ----
+      zb.moanT -= dt
+      if (zb.moanT <= 0) {
+        zb.moanT = zb.state === 'chase' ? 2.6 + Math.random() * 1.6 : 9 + Math.random() * 7
+        AudioManager.playAt('zombieMoan', zb.group.position.x, zb.group.position.z, playerPos.x, playerPos.z, listenerYaw, zb.state === 'chase' ? 52 : 34, zb.state === 'chase' ? 1 : 0.7)
       }
     }
-    // distant howls keep the deep wild scary (v69 ambience)
-    this.howlT -= dt
-    if (this.howlT <= 0) {
-      this.howlT = 11 + Math.random() * 15
-      if (lis && !inCitySanctuary(lis.x, lis.z)) {
-        const spot = ZOMBIE_SPOTS[Math.floor(Math.random() * ZOMBIE_SPOTS.length)]
-        this.hooks.sfx?.('howl', spot[0], spot[1])
-      }
-    }
-  }
-
-  /** Move with the city sanctuary clamp + boundary slide. */
-  private step(z: Zombie, mx: number, mz: number) {
-    const nx = z.x + mx, nz = z.z + mz
-    if (!inCitySanctuary(nx, z.z)) z.x = nx
-    if (!inCitySanctuary(z.x, nz)) z.z = nz
-  }
-
-  /** Count of zombies currently chasing (QA + HUD tension readout). */
-  get chasingCount() { return this.list.reduce((n, z) => n + (z.chasing ? 1 : 0), 0) }
-
-  /** Nearest chasing zombie distance (QA). */
-  minDist(x: number, zQ: number): number {
-    let m = Infinity
-    for (const z of this.list) m = Math.min(m, Math.hypot(z.x - x, z.z - zQ))
-    return m
   }
 
   dispose() {
-    this.group.traverse((o) => {
-      const mesh = o as THREE.Mesh
-      if (mesh.geometry) mesh.geometry.dispose()
-    })
-    this.group.removeFromParent()
-    this.list = []
+    for (const zb of this.zombies) {
+      zb.group.traverse((o) => {
+        const m = o as THREE.Mesh
+        if (m.isMesh) m.geometry.dispose()
+      })
+    }
+    this.zombies = []
+    this.group.clear()
   }
 }

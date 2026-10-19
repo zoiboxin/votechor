@@ -3,8 +3,9 @@
 import * as THREE from 'three'
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { WorldDef, Deco } from './shared/types'
+import { profileR, cragVertical, jagTerm } from './shared/terrain-noise'
+import { COUNTRYSIDE_TRACKS } from './shared/world-def'
 import { WORLD_DISC } from './shared/constants'
-import { profileR, cragVertical, jagTerm, bandJit, snowlineFor, mHash } from './shared/terrain-noise'
 
 const ZONE_COLORS = ['#c96f4a', '#b85c3e', '#7f9a8c', '#c9a86a', '#9a7b5f']
 
@@ -43,48 +44,82 @@ function getTreeGeo(variant: number): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = []
   const barkLo = new THREE.Color('#43301f')
   const barkHi = new THREE.Color('#6f5138')
-  // trunk — tapered, slight lean, vertical bark gradient
+  // v71 species: 0 broad canopy · 1 tall straight · 2 banyan-style elder · 3 palm
   const tall = variant === 1
-  const trunkH = tall ? 3.0 : 2.5
-  const trunk = new THREE.CylinderGeometry(tall ? 0.11 : 0.13, tall ? 0.22 : 0.26, trunkH, 7)
+  const banyan = variant === 2
+  const palm = variant === 3
+  const trunkH = palm ? 3.6 : banyan ? 1.9 : tall ? 3.0 : 2.5
+  const trunk = new THREE.CylinderGeometry(
+    palm ? 0.09 : tall ? 0.11 : banyan ? 0.2 : 0.13,
+    palm ? 0.17 : tall ? 0.22 : banyan ? 0.4 : 0.26,
+    trunkH, 7)
   trunk.translate(0, trunkH / 2, 0)
   trunk.rotateZ(tall ? -0.04 : 0.03)
   parts.push(treePaint(trunk, (_x, y) => barkLo.clone().lerp(barkHi, Math.min(1, Math.max(0, y / trunkH)))))
-  // branches reaching into the canopy
-  const branchSpec: Array<[number, number, number, number]> = tall
-    ? [[0.5, 0.09, 0.28, trunkH * 0.78], [-0.62, 0.1, -0.2, trunkH * 0.62]]           // rz, rx, z offset, y
-    : [[0.55, 0.12, 0.3, trunkH * 0.8], [-0.6, 0.14, -0.25, trunkH * 0.72], [0.1, -0.5, 0.45, trunkH * 0.68]]
-  for (const [rz, rx, zoff, by] of branchSpec) {
-    const br = new THREE.CylinderGeometry(0.05, 0.085, 1.15, 5)
-    br.translate(0, 0.575, 0)
-    br.rotateZ(rz); br.rotateX(rx)
-    br.translate(0, by, zoff)
-    parts.push(treePaint(br, () => barkHi.clone().multiplyScalar(0.9)))
-  }
-  // layered canopy — foliage clumps, darker low / lighter high, squashed vertically
-  const leafLo = new THREE.Color(tall ? '#4a7440' : '#4e7a42')
-  const leafMid = new THREE.Color(tall ? '#5c8a4e' : '#5c8a4e')
-  const leafHi = new THREE.Color(tall ? '#86a05a' : '#6e9a58')
-  const blobs: Array<[number, number, number, number, THREE.Color]> = tall
-    ? [
-        [0, 4.05, 0, 1.0, leafMid],
-        [0.58, 3.5, 0.18, 0.68, leafLo],
-        [-0.56, 3.62, -0.22, 0.74, leafLo],
-        [0.05, 4.75, -0.05, 0.72, leafHi],
-      ]
-    : [
-        [0, 3.45, 0, 1.28, leafMid],
-        [0.92, 3.0, 0.32, 0.84, leafLo],
-        [-0.86, 3.05, -0.26, 0.9, leafLo],
-        [0.1, 3.1, -0.95, 0.8, leafLo],
-        [-0.26, 3.2, 0.92, 0.74, leafMid],
-        [0.05, 4.28, -0.05, 0.9, leafHi],
-      ]
-  for (const [bx, by, bz, r, col] of blobs) {
-    const blob = new THREE.IcosahedronGeometry(r, 1)
-    blob.scale(1, 0.85, 1)
-    blob.translate(bx, by, bz)
-    parts.push(treePaint(blob, (x, y, z) => jitterColor(col, x, y, z, 0.14)))
+  if (palm) {
+    // palm crown: a star of long flattened drooping fronds + a nut cluster
+    const frondCol = new THREE.Color('#4e8a3c')
+    for (let f = 0; f < 7; f++) {
+      const fr = new THREE.ConeGeometry(0.17, 1.9, 4)
+      fr.translate(0, 0.95, 0)
+      fr.scale(1, 1, 0.4)
+      fr.rotateX(1.28)
+      fr.rotateY((f / 7) * 6.283)
+      fr.translate(0, trunkH, 0)
+      parts.push(treePaint(fr, (x, y, z) => jitterColor(frondCol, x, y, z, 0.2)))
+    }
+    const nut = new THREE.IcosahedronGeometry(0.14, 0)
+    nut.translate(0.1, trunkH - 0.08, 0.05)
+    parts.push(treePaint(nut, () => new THREE.Color('#6b4f2a')))
+  } else {
+    // branches reaching into the canopy (banyan elders get extra droopers)
+    const branchSpec: Array<[number, number, number, number]> = banyan
+      ? [[0.7, 0.05, 0.4, trunkH * 0.9], [-0.7, 0.06, -0.35, trunkH * 0.85], [0.15, -0.62, 0.5, trunkH * 0.8], [-0.1, 0.55, -0.5, trunkH * 0.75]]
+      : tall
+        ? [[0.5, 0.09, 0.28, trunkH * 0.78], [-0.62, 0.1, -0.2, trunkH * 0.62]]           // rz, rx, z offset, y
+        : [[0.55, 0.12, 0.3, trunkH * 0.8], [-0.6, 0.14, -0.25, trunkH * 0.72], [0.1, -0.5, 0.45, trunkH * 0.68]]
+    for (const [rz, rx, zoff, by] of branchSpec) {
+      const br = new THREE.CylinderGeometry(0.05, 0.085, 1.15, 5)
+      br.translate(0, 0.575, 0)
+      br.rotateZ(rz); br.rotateX(rx)
+      br.translate(0, by, zoff)
+      parts.push(treePaint(br, () => barkHi.clone().multiplyScalar(0.9)))
+    }
+    // layered canopy — foliage clumps, darker low / lighter high, squashed vertically
+    // (v71 — banyan elders: wide low umbrella of many clumps)
+    const leafLo = new THREE.Color(tall ? '#4a7440' : '#4e7a42')
+    const leafMid = new THREE.Color(tall ? '#5c8a4e' : '#5c8a4e')
+    const leafHi = new THREE.Color(tall ? '#86a05a' : '#6e9a58')
+    const blobs: Array<[number, number, number, number, THREE.Color]> = banyan
+      ? [
+          [0, 2.75, 0, 1.5, leafMid],
+          [1.35, 2.45, 0.4, 0.95, leafLo],
+          [-1.3, 2.5, -0.35, 1.0, leafLo],
+          [0.35, 2.4, -1.35, 0.9, leafLo],
+          [-0.4, 2.42, 1.3, 0.92, leafLo],
+          [0.05, 3.35, -0.05, 1.05, leafHi],
+        ]
+      : tall
+        ? [
+            [0, 4.05, 0, 1.0, leafMid],
+            [0.58, 3.5, 0.18, 0.68, leafLo],
+            [-0.56, 3.62, -0.22, 0.74, leafLo],
+            [0.05, 4.75, -0.05, 0.72, leafHi],
+          ]
+        : [
+            [0, 3.45, 0, 1.28, leafMid],
+            [0.92, 3.0, 0.32, 0.84, leafLo],
+            [-0.86, 3.05, -0.26, 0.9, leafLo],
+            [0.1, 3.1, -0.95, 0.8, leafLo],
+            [-0.26, 3.2, 0.92, 0.74, leafMid],
+            [0.05, 4.28, -0.05, 0.9, leafHi],
+          ]
+    for (const [bx, by, bz, r, col] of blobs) {
+      const blob = new THREE.IcosahedronGeometry(r, 1)
+      blob.scale(1, 0.85, 1)
+      blob.translate(bx, by, bz)
+      parts.push(treePaint(blob, (x, y, z) => jitterColor(col, x, y, z, 0.14)))
+    }
   }
   const norm = parts.map(p => (p.index ? p : (mergeVertices(p, 1e-4) ?? p)))
   const geo = mergeGeometries(norm, false) ?? parts[0]
@@ -95,95 +130,77 @@ function getTreeGeo(variant: number): THREE.BufferGeometry {
   return geo
 }
 
-// ============================================================================
-// v64 REALISTIC MOUNTAINS — one noise-displaced ridged massif per peak.
-// Rebuild of the lost v62 pipeline: cone geometry displaced by two octaves of
-// deterministic value noise sampled on the cos/sin circle (seamless through
-// the wrap), matterhorn-concave flanks, craggy lobes strongest low, jagged-
-// cluster sub-summits, baked vertex colors (forest skirt → rock bands →
-// snow above a jittered snowline). All shape math lives in shared/
-// terrain-noise.ts — mountain-field.ts inverts THE SAME functions, so the
-// collision surface is exactly the drawn surface.
-//
-// REFERENCE SIZE convention: geometry is built at h=100, base=40 and SCALED
-// per peak (scale.y = h/100, scale.xz = base/40). The heightfield divides the
-// world offset by the same factors before inverting. One rotation total: the
-// deco group rotates by d.ry (mesh stays unrotated — cleaner than the lost
-// build's accidental double rotation).
-// ============================================================================
-
-/** Reference build height (m) — peaks scale this. Must match mountain-field REF_H. */
-export const MOUNTAIN_REF_H = 100
-/** Reference base radius (m) — peaks scale this. Must match mountain-field REF_BASE. */
-export const MOUNTAIN_REF_BASE = 40
-
+// ---- v62 (Task 72) REALISTIC MOUNTAINS -------------------------------------
+// "make mountain shape looks real not tringle type": every peak is a noise-
+// displaced ridged massif — matterhorn-concave flanks, craggy lobes around the
+// circumference, secondary summits grown into the jagged-cluster variant — with
+// BAKED VERTEX COLORS (forest skirt → exposed rock bands → snow above a
+// jittered snowline) and flat shading for a crisp low-poly-real read.
+// Geometries are cached per (seed bucket × variant × colorway) so ~150 peaks
+// share ~40 unique meshes; one fog-immune material serves the whole skyline.
+const MOUNTAIN_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true, fog: false })
 const mountainGeoCache = new Map<string, THREE.BufferGeometry>()
-const mountainMats = new Map<number, THREE.MeshStandardMaterial>()
-
-/** Fog-immune shared material per colorway — the skyline reads beyond the fog wall. */
-function getMountainMat(cw: number): THREE.MeshStandardMaterial {
-  let m = mountainMats.get(cw)
-  if (!m) {
-    m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, fog: false })
-    mountainMats.set(cw, m)
-  }
-  return m
+const mHash = (n: number) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s) }
+/** Deterministic bilinear value noise — continuous, hash-lattice, no PRNG state. */
+function mNoise(x: number, y: number, seed: number): number {
+  const xi = Math.floor(x), yi = Math.floor(y)
+  const xf = x - xi, yf = y - yi
+  const h = (i: number, j: number) => mHash(i * 57.31 + j * 131.71 + seed * 977.13)
+  const u = xf * xf * (3 - 2 * xf), w = yf * yf * (3 - 2 * yf)
+  return h(xi, yi) * (1 - u) * (1 - w) + h(xi + 1, yi) * u * (1 - w) +
+         h(xi, yi + 1) * (1 - u) * w + h(xi + 1, yi + 1) * u * w
 }
-
-/**
- * Build (or fetch from cache) the ridged massif for (seed bucket, variant,
- * colorway) at reference size. Deterministic — same inputs, same mesh.
- */
-export function buildMountainGeometry(seed: number, variant: number, cw: number): THREE.BufferGeometry {
-  const key = `${seed}:${variant}:${cw}`
+const MOUNTAIN_PALETTES: Array<{ low: number; mid: number; high: number; snow: number; snowLine: number }> = [
+  { low: 0x46543c, mid: 0x6b675a, high: 0x7d786a, snow: 0xedf0ee, snowLine: 0.62 }, // 0 granite rim + ridge
+  { low: 0x3d5233, mid: 0x50684a, high: 0x5f7654, snow: 0xe8ece6, snowLine: 1.1 },  // 1 green foothill hills
+  { low: 0x6d7a80, mid: 0x8d99a0, high: 0xa7b0ba, snow: 0xe3e9ec, snowLine: 0.55 }, // 2 hazy far range
+]
+export function getMountainGeo(seed: number, variant: number, colorway: number): THREE.BufferGeometry {
+  const key = `${seed}:${variant}:${colorway}`
   const hit = mountainGeoCache.get(key)
   if (hit) return hit
-
+  const pal = MOUNTAIN_PALETTES[colorway] ?? MOUNTAIN_PALETTES[0]
+  // v77 REBUILD — fold-free UNIT-space ridged massif (radius 1, height 1):
+  // horizontal profile strictly monotonic (matterhorn concave flanks), ALL crag
+  // displacement VERTICAL (never radial — radial noise folds the mesh and
+  // breaks exact collision inversion), summit-damped so the collapsed top
+  // ring agrees at every angle, integer-frequency periodic noise (seamless
+  // wrap AND identical whether the caller passes +angle or angle-2π).
+  // src/game/mountain-field.ts inverts EXACTLY these functions.
   const RINGS = 12, SEGS = 24
-  const grid: THREE.Vector3[][] = []
-  const colors: THREE.Color[][] = []
-  const snowline = snowlineFor(cw)
-  // colorway palettes: 0 granite rim/ridge · 1 green hills · 2 hazy far
-  const rockCol = new THREE.Color(cw === 2 ? '#8b939c' : cw === 1 ? '#6b7a5e' : '#6b6f66')
-  const rockLo = new THREE.Color(cw === 2 ? '#78818b' : cw === 1 ? '#5c6b52' : '#565a52')
-  const forestCol = new THREE.Color(cw === 1 ? '#3e5c37' : '#3d5237')
-  const snowCol = new THREE.Color('#e8edf2')
-
+  const grid: Array<Array<[number, number, number]>> = []
   for (let k = 0; k <= RINGS; k++) {
     const ny = k / RINGS
-    const ring: THREE.Vector3[] = []
-    const cring: THREE.Color[] = []
+    const ring: Array<[number, number, number]> = []
     for (let j = 0; j < SEGS; j++) {
       const a = (j / SEGS) * Math.PI * 2
-      const prof = profileR(ny, variant)
-      // non-uniform plan scale: ridge-mass elongation + per-seed jitter
-      const ez = variant === 2 ? 1.85 : 0.9 + mHash(seed, 4) * 0.2
-      // vertical-only crags keep R(ny) strictly monotonic — exact heightfield parity
-      const r = MOUNTAIN_REF_BASE * prof
-      const jag = variant === 3 ? jagTerm(a, ny, seed) : 0
-      const y = MOUNTAIN_REF_H * ny * (1 + jag) + cragVertical(a, ny, seed) * MOUNTAIN_REF_H
-      const x = Math.cos(a) * r
-      const z = Math.sin(a) * r * ez
-      ring.push(new THREE.Vector3(x, y, z))
-      // baked vertex colors — forest skirt, noise-irregular rock bands, jittered snowline
-      const nyF = y / MOUNTAIN_REF_H
-      const bjit = bandJit(a, ny, seed)
-      let col: THREE.Color
-      if (nyF < 0.15 + bjit) col = forestCol.clone()
-      else if (snowline > 0 && nyF > snowline + bjit) col = snowCol.clone()
-      else col = rockLo.clone().lerp(rockCol, Math.min(1, (nyF - 0.15) * 2.2))
-      const shade = 0.9 + mHash(seed * 100 + j, k) * 0.16
-      col.multiplyScalar(shade)
-      cring.push(col)
+      const r = profileR(ny, variant)
+      const jag = variant === 2 ? jagTerm(a, ny, seed) : 0
+      const y = Math.max(0, ny * (1 + jag) + cragVertical(a, ny, seed))
+      ring.push([Math.cos(a) * r, y, Math.sin(a) * r])
     }
     grid.push(ring)
-    colors.push(cring)
   }
-
-  // stitch rings + cap the summit
+  // stitch + baked elevation bands with noise-irregular boundaries
   const pos: number[] = [], colArr: number[] = [], idx: number[] = []
-  for (const ring of grid) for (const v of ring) { pos.push(v.x, v.y, v.z) }
-  for (const ring of colors) for (const c of ring) { colArr.push(c.r, c.g, c.b) }
+  for (const ring of grid) for (const v of ring) pos.push(v[0], v[1], v[2])
+  const cLow = new THREE.Color(pal.low), cMid = new THREE.Color(pal.mid)
+  const cHigh = new THREE.Color(pal.high), cSnow = new THREE.Color(pal.snow)
+  const tmp = new THREE.Color()
+  for (let k = 0; k <= RINGS; k++) {
+    for (let j = 0; j < SEGS; j++) {
+      const a = (j / SEGS) * Math.PI * 2
+      const y = grid[k][j][1]
+      const ridgeB = mNoise(Math.cos(2 * a + 1.3) * 3.7 + 9.1, Math.sin(2 * a + 1.3) * 3.7 + 9.1, seed + 31)
+      const e = y + (ridgeB - 0.5) * 0.14
+      if (e < 0.15) tmp.copy(cLow)
+      else if (e < 0.45) tmp.copy(cLow).lerp(cMid, (e - 0.15) / 0.3)
+      else if (e < pal.snowLine) tmp.copy(cMid).lerp(cHigh, Math.min(1, (e - 0.45) / Math.max(0.05, pal.snowLine - 0.45)))
+      else tmp.copy(cSnow)
+      const shade = 0.92 + mNoise(y * 2.9 + 7.7, grid[k][j][0] * 2.9 + 2.9, seed + 53) * 0.16
+      colArr.push(Math.min(1, tmp.r * shade), Math.min(1, tmp.g * shade), Math.min(1, tmp.b * shade))
+    }
+  }
   const at = (k: number, j: number) => k * SEGS + (j % SEGS)
   for (let k = 0; k < RINGS; k++) {
     for (let j = 0; j < SEGS; j++) {
@@ -191,12 +208,14 @@ export function buildMountainGeometry(seed: number, variant: number, cw: number)
       idx.push(a0, b0, a1, a1, b0, b1)
     }
   }
-  // summit cap: fan from the peak vertex (average top ring, raised to the ref height)
+  // summit cap — the top ring is summit-damped to a common height
+  let px = 0, pz = 0, py = 0
+  for (let j = 0; j < SEGS; j++) { px += grid[RINGS][j][0]; py += grid[RINGS][j][1]; pz += grid[RINGS][j][2] }
   const peakIndex = pos.length / 3
-  let px = 0, pz = 0
-  for (let j = 0; j < SEGS; j++) { px += grid[RINGS][j].x; pz += grid[RINGS][j].z }
-  pos.push(px / SEGS, MOUNTAIN_REF_H, pz / SEGS)
-  colArr.push(snowline > 0 ? snowCol.r : rockCol.r, snowline > 0 ? snowCol.g : rockCol.g, snowline > 0 ? snowCol.b : rockCol.b)
+  pos.push(px / SEGS, py / SEGS, pz / SEGS)
+  const topE = py / SEGS
+  const capCol = topE >= pal.snowLine ? cSnow : topE >= 0.45 ? cHigh : cMid
+  colArr.push(capCol.r, capCol.g, capCol.b)
   for (let j = 0; j < SEGS; j++) idx.push(at(RINGS, j), peakIndex, at(RINGS, j + 1))
 
   const geo = new THREE.BufferGeometry()
@@ -204,95 +223,37 @@ export function buildMountainGeometry(seed: number, variant: number, cw: number)
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3))
   geo.setIndex(idx)
   geo.computeVertexNormals()
-  geo.userData.vcShared = true
+  geo.userData.vcShared = true // survives WorldRenderer.dispose() like the tree geos
   mountainGeoCache.set(key, geo)
   return geo
 }
 
-// ---- v64 jungle flora geometries — cached merged vertex-colored meshes ----
-const jungleGeoCache = new Map<string, THREE.BufferGeometry>()
-
-function getJungleGeo(kind: 'jtree' | 'deadTree' | 'fern' | 'log' | 'stump' | 'shrub' | 'grass', variant: number): THREE.BufferGeometry {
-  const key = `${kind}:${variant}`
-  const hit = jungleGeoCache.get(key)
+// v71 — fern ground cover: one cached merged geometry (6 radiating fronds + bud),
+// 1 draw call per fern.
+const fernGeoCache = new Map<number, THREE.BufferGeometry>()
+function getFernGeo(): THREE.BufferGeometry {
+  const hit = fernGeoCache.get(0)
   if (hit) return hit
   const parts: THREE.BufferGeometry[] = []
-  const bark = new THREE.Color('#4a3826')
-  if (kind === 'jtree') {
-    // massive jungle canopy — thick leaning trunk + 3-4 layered dark-green blobs
-    const trunk = new THREE.CylinderGeometry(0.22, 0.42, 4.6, 7)
-    trunk.translate(0, 2.3, 0)
-    trunk.rotateZ(variant === 1 ? -0.07 : 0.05)
-    parts.push(treePaint(trunk, (_x, y) => bark.clone().multiplyScalar(0.9 + y * 0.03)))
-    const greens = [new THREE.Color('#2e5a2e'), new THREE.Color('#3a6b35'), new THREE.Color('#274d28')]
-    const blobs: Array<[number, number, number, number]> = variant === 0
-      ? [[0, 5.6, 0, 1.7], [1.15, 4.9, 0.4, 1.15], [-1.05, 5.0, -0.4, 1.2], [0.1, 6.6, 0, 1.1]]
-      : variant === 1
-        ? [[0, 6.0, 0, 1.5], [1.3, 5.2, -0.3, 1.0], [-1.2, 5.3, 0.35, 1.05], [-0.2, 6.9, 0.2, 0.95]]
-        : [[0, 5.4, 0, 1.65], [0.9, 6.2, 0.5, 1.0], [-0.95, 4.7, -0.5, 1.1], [0.15, 6.8, -0.15, 1.0]]
-    for (const [bx, by, bz, r] of blobs) {
-      const blob = new THREE.IcosahedronGeometry(r, 1)
-      blob.scale(1.12, 0.82, 1.12)
-      blob.translate(bx, by, bz)
-      parts.push(treePaint(blob, (x, y, z) => jitterColor(greens[(Math.abs(Math.round(x + y + z)) % 3)], x, y, z, 0.16)))
-    }
-  } else if (kind === 'deadTree') {
-    // bare grey-brown snag — trunk + two broken branches, no foliage
-    const trunk = new THREE.CylinderGeometry(0.12, 0.3, 4.2, 6)
-    trunk.translate(0, 2.1, 0)
-    trunk.rotateZ(0.08)
-    parts.push(treePaint(trunk, () => new THREE.Color('#6b5d4a')))
-    for (const [rz, y] of [[0.7, 2.9], [-0.8, 3.4]] as const) {
-      const br = new THREE.CylinderGeometry(0.04, 0.09, 1.3, 5)
-      br.translate(0, 0.65, 0)
-      br.rotateZ(rz)
-      br.translate(0, y, 0)
-      parts.push(treePaint(br, () => new THREE.Color('#7a6b55')))
-    }
-  } else if (kind === 'fern') {
-    for (let i = 0; i < 6; i++) {
-      const frond = new THREE.ConeGeometry(0.16, 1.15, 4)
-      frond.translate(0, 0.575, 0)
-      frond.rotateX(1.0 + (i % 2) * 0.18)
-      frond.rotateY((i / 6) * Math.PI * 2)
-      parts.push(treePaint(frond, () => new THREE.Color(i % 2 ? '#3f6b38' : '#35592f')))
-    }
-  } else if (kind === 'log') {
-    const log = new THREE.CylinderGeometry(0.42, 0.5, 4.4, 8)
-    log.rotateZ(Math.PI / 2)
-    log.translate(0, 0.42, 0)
-    parts.push(treePaint(log, (x) => (Math.abs(x) > 2.0 ? new THREE.Color('#8a7350') : bark.clone().multiplyScalar(0.85))))
-  } else if (kind === 'stump') {
-    const st = new THREE.CylinderGeometry(0.5, 0.62, 0.9, 8)
-    st.translate(0, 0.45, 0)
-    parts.push(treePaint(st, (x, y, z) => (y > 0.82 ? new THREE.Color('#9a8258') : bark.clone())))
-  } else if (kind === 'shrub') {
-    for (const [bx, bz, r] of [[0.35, 0.1, 0.75], [-0.3, -0.2, 0.6]] as const) {
-      const blob = new THREE.DodecahedronGeometry(r, 0)
-      blob.scale(1.25, 0.7, 1.25)
-      blob.translate(bx, r * 0.42, bz)
-      parts.push(treePaint(blob, (x, y, z) => jitterColor(new THREE.Color(['#3d5c34', '#48683c', '#35502f'][variant % 3]), x, y, z, 0.12)))
-    }
-  } else { // grass tuft — three thin tilted blades
-    for (let i = 0; i < 3; i++) {
-      const blade = new THREE.ConeGeometry(0.09, 0.62, 4)
-      blade.translate(0, 0.31, 0)
-      blade.rotateX(0.32 + (i % 2) * 0.14)
-      blade.rotateY((i / 3) * Math.PI * 2)
-      parts.push(treePaint(blade, () => new THREE.Color(i === 1 ? '#5a7a42' : '#4a6b3a')))
-    }
+  const frond = new THREE.Color('#3f6e33')
+  for (let f = 0; f < 6; f++) {
+    const c = new THREE.ConeGeometry(0.3, 1.15, 4)
+    c.translate(0, 0.55, 0)
+    c.scale(1, 1, 0.45)
+    c.rotateX(0.9)
+    c.rotateY((f / 6) * 6.283)
+    parts.push(treePaint(c, (x, y, z) => jitterColor(frond, x, y, z, 0.22)))
   }
+  const bud = new THREE.ConeGeometry(0.12, 0.5, 5)
+  bud.translate(0, 0.3, 0)
+  parts.push(treePaint(bud, () => new THREE.Color('#54803c')))
   const norm = parts.map(p => (p.index ? p : (mergeVertices(p, 1e-4) ?? p)))
   const geo = mergeGeometries(norm, false) ?? parts[0]
-  if (geo !== parts[0]) for (const p of norm) p.dispose()
   geo.computeVertexNormals()
   geo.userData.vcShared = true
-  jungleGeoCache.set(key, geo)
+  fernGeoCache.set(0, geo)
   return geo
 }
-
-const jungleMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 })
-
 
 // v43 district tinting: the canvas textures stay the classic colors — a multiply
 // color on the material shifts them per map without new texture uploads.
@@ -436,6 +397,7 @@ export class WorldRenderer {
     this.world = world
     this.buildGround()
     this.buildRoads()
+    this.buildWilderness()
     for (const d of world.decorations) this.buildDeco(d)
     this.buildHomes(world)
     this.buildWalls(world)
@@ -497,38 +459,26 @@ export class WorldRenderer {
       }
     }, 86, 60)
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(260, 640),
+      // v69 — the ROUND world disc of earth under the whole wild ring
+      // (v72 — follows WORLD_DISC: r 656, center 0,-340, 96 segments)
+      new THREE.CircleGeometry(WORLD_DISC.r + 6, 96),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1, color: tintRatio(tint, '#c9a97c') }),
     )
     ground.rotation.x = -Math.PI / 2
-    ground.position.set(0, -0.02, -280)
+    ground.position.set(WORLD_DISC.cx, -0.02, WORLD_DISC.cz)
     ground.receiveShadow = true
     this.group.add(ground)
-
-    // v64 WILD ROUND WORLD — the 1300 m jungle disc under everything + an apron
-    // that reaches past the Far Range so the world never shows a rectangular edge.
-    const wildTex = canvasTex(256, 256, (ctx) => {
-      ctx.fillStyle = '#4a5c3a'
-      ctx.fillRect(0, 0, 256, 256)
-      for (let i = 0; i < 1100; i++) {
-        ctx.fillStyle = ['#435635', '#516343', '#3e5031', '#49603c'][i % 4]
-        ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 3)
-      }
-    }, 40, 40)
-    const wild = new THREE.Mesh(
-      new THREE.CircleGeometry(WORLD_DISC.r + 6, 96),
-      new THREE.MeshStandardMaterial({ map: wildTex, roughness: 1 }),
-    )
-    wild.rotation.x = -Math.PI / 2
-    wild.position.set(WORLD_DISC.cx, -0.05, WORLD_DISC.cz)
-    wild.receiveShadow = true
-    this.group.add(wild)
+    // v71 — ZONE E apron: dark highland floor beyond the playable disc so the
+    // Far Range peaks sit on land instead of the void background.
+    // Non-playable (the leash ends at the disc) — pure backdrop.
+    // v72 — r 880 covers the pushed-out Far Range (peaks to r 770 + bases).
     const apron = new THREE.Mesh(
       new THREE.CircleGeometry(880, 64),
-      new THREE.MeshStandardMaterial({ color: '#3c4a33', roughness: 1, fog: false }),
+      new THREE.MeshStandardMaterial({ color: '#4b5038', roughness: 1 }),
     )
     apron.rotation.x = -Math.PI / 2
-    apron.position.set(WORLD_DISC.cx, -0.12, WORLD_DISC.cz)
+    apron.position.set(WORLD_DISC.cx, -0.3, WORLD_DISC.cz)
+    apron.receiveShadow = false
     this.group.add(apron)
   }
 
@@ -546,13 +496,27 @@ export class WorldRenderer {
       for (let y = 0; y < 256; y += 64) ctx.fillRect(61, y, 6, 34)
     }, 1, 60)
     const road = new THREE.Mesh(
-      new THREE.PlaneGeometry(17, 620),
+      new THREE.PlaneGeometry(17, 640),
       new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.95, color: tintRatio(this.world.roadTint ?? '#6d675f', '#6d675f') }),
     )
     road.rotation.x = -Math.PI / 2
-    road.position.set(0, 0.01, -275)
+    road.position.set(0, 0.01, -265)
     road.receiveShadow = true
     this.group.add(road)
+
+    // v66 — outer ring roads (N-S, x ±166): connect all four cross streets into
+    // traffic loops and carry the player into the mall district / west colony / jungle
+    for (const rx of [-166, 166]) {
+      const ring = new THREE.Mesh(
+        new THREE.PlaneGeometry(16, 640),
+        new THREE.MeshStandardMaterial({ map: roadTex.clone(), roughness: 0.95, color: tintRatio(this.world.roadTint ?? '#6d675f', '#6d675f') }),
+      )
+      ;(ring.material as THREE.MeshStandardMaterial).map!.repeat.set(1, 30)
+      ring.rotation.x = -Math.PI / 2
+      ring.position.set(rx, 0.006, -265)
+      ring.receiveShadow = true
+      this.group.add(ring)
+    }
 
     // Avenue widening (zone D)
     const road2 = new THREE.Mesh(
@@ -589,7 +553,8 @@ export class WorldRenderer {
       const tex = roadTex.clone()
       tex.repeat.set(1, 22)
       const road = new THREE.Mesh(
-        new THREE.PlaneGeometry(cr.halfW * 2, 228),
+        // v66 — cross streets now span the full greater-city width (x ±196)
+        new THREE.PlaneGeometry(cr.halfW * 2, 392),
         new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, color: roadTint }),
       )
       road.rotation.x = -Math.PI / 2
@@ -609,6 +574,109 @@ export class WorldRenderer {
           sw.receiveShadow = true
           this.group.add(sw)
         }
+      }
+    }
+  }
+
+  /**
+   * v68 — Vanodyan Deep terrain: the Bhayanak river (shallow — fording is open),
+   * its mud banks, two plank bridges and the dirt trail from the arena gate to the
+   * lost camp. Pure visuals — walk blockers come from world-def colliders.
+   */
+  private buildWilderness() {
+    const RIVER_Z = -687, RIVER_W = 18
+    // water — teal sheet with a subtle two-band ripple texture
+    const waterTex = canvasTex(128, 128, (ctx) => {
+      ctx.fillStyle = '#2c6b74'
+      ctx.fillRect(0, 0, 128, 128)
+      for (let i = 0; i < 60; i++) {
+        ctx.strokeStyle = i % 2 ? 'rgba(210,235,235,0.16)' : 'rgba(16,60,66,0.30)'
+        ctx.lineWidth = 1 + Math.random() * 1.6
+        const y = Math.random() * 128
+        ctx.beginPath(); ctx.moveTo(0, y)
+        ctx.bezierCurveTo(42, y + (Math.random() * 8 - 4), 86, y + (Math.random() * 8 - 4), 128, y)
+        ctx.stroke()
+      }
+    }, 30, 22)
+    const water = new THREE.Mesh(
+      new THREE.PlaneGeometry(392, RIVER_W),
+      new THREE.MeshStandardMaterial({ map: waterTex, roughness: 0.28, metalness: 0.08, transparent: true, opacity: 0.94 }),
+    )
+    ;(water.material as THREE.MeshStandardMaterial).map!.repeat.set(6, 1)
+    water.rotation.x = -Math.PI / 2
+    water.position.set(0, 0.014, RIVER_Z)
+    water.receiveShadow = true
+    this.group.add(water)
+    // mud banks — darker wet-earth strips framing the channel
+    const bankMat = new THREE.MeshStandardMaterial({ color: '#6a563f', roughness: 1 })
+    for (const bz of [RIVER_Z - RIVER_W / 2 - 2, RIVER_Z + RIVER_W / 2 + 2]) {
+      const bank = new THREE.Mesh(new THREE.PlaneGeometry(392, 4.5), bankMat)
+      bank.rotation.x = -Math.PI / 2
+      bank.position.set(0, 0.008, bz)
+      bank.receiveShadow = true
+      this.group.add(bank)
+    }
+    // two plank bridges (x −84 scenic + x 66 on the trail) — deck walkable at 0.1,
+    // posts block the sides via world-def colliders
+    const plankMat = new THREE.MeshStandardMaterial({ color: '#7a5c38', roughness: 0.9 })
+    const postMat = new THREE.MeshStandardMaterial({ color: '#5d4429', roughness: 0.95 })
+    for (const bx of [-84, 66]) {
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.12, RIVER_W + 10), plankMat)
+      deck.position.set(bx, 0.1, RIVER_Z)
+      deck.castShadow = true; deck.receiveShadow = true
+      this.group.add(deck)
+      for (const pz of [RIVER_Z - RIVER_W / 2 - 4, RIVER_Z, RIVER_Z + RIVER_W / 2 + 4]) {
+        for (const px of [bx - 2.15, bx + 2.15]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.6, 0.3), postMat)
+          post.position.set(px, 1.3, pz)
+          post.castShadow = true
+          this.group.add(post)
+        }
+      }
+      // rail bars
+      for (const px of [bx - 2.15, bx + 2.15]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, RIVER_W + 10), postMat)
+        rail.position.set(px, 2.55, RIVER_Z)
+        this.group.add(rail)
+      }
+    }
+    // dirt trail — elongated quads hugging the world-def TRAIL polyline
+    const dirtTex = canvasTex(64, 64, (ctx) => {
+      ctx.fillStyle = '#9c7c50'
+      ctx.fillRect(0, 0, 64, 64)
+      for (let i = 0; i < 40; i++) {
+        ctx.fillStyle = ['#93744a', '#a5855a', '#8a6c45'][i % 3]
+        ctx.fillRect(Math.random() * 64, Math.random() * 64, 3, 3)
+      }
+    }, 14, 10)
+    const TRAIL: Array<[number, number]> = [[0, -576], [10, -602], [30, -632], [52, -662], [66, -687], [66, -722], [58, -748]]
+    for (let i = 0; i < TRAIL.length - 1; i++) {
+      const [ax, az] = TRAIL[i], [bx, bz] = TRAIL[i + 1]
+      const len = Math.hypot(bx - ax, bz - az)
+      const seg = new THREE.Mesh(new THREE.PlaneGeometry(4.2, len + 3), new THREE.MeshStandardMaterial({ map: dirtTex, roughness: 1 }))
+      ;(seg.material as THREE.MeshStandardMaterial).map!.repeat.set(1, Math.max(1, len / 7))
+      // order YXZ: flatten on X first, then heading around world Y (local +Y → world −Z)
+      seg.rotation.order = 'YXZ'
+      seg.rotation.x = -Math.PI / 2
+      seg.rotation.y = Math.atan2(-(bx - ax), -(bz - az))
+      seg.position.set((ax + bx) / 2, 0.009, (az + bz) / 2)
+      seg.receiveShadow = true
+      this.group.add(seg)
+    }
+    // v71 — ZONE B countryside tracks: the ring roads continue as winding dirt
+    // paths into the wild (same mud texture as the deep trail, narrower).
+    for (const track of COUNTRYSIDE_TRACKS) {
+      for (let i = 0; i < track.length - 1; i++) {
+        const [ax, az] = track[i], [bx, bz] = track[i + 1]
+        const len = Math.hypot(bx - ax, bz - az)
+        const seg = new THREE.Mesh(new THREE.PlaneGeometry(3.4, len + 3), new THREE.MeshStandardMaterial({ map: dirtTex, roughness: 1 }))
+        ;(seg.material as THREE.MeshStandardMaterial).map!.repeat.set(1, Math.max(1, len / 7))
+        seg.rotation.order = 'YXZ'
+        seg.rotation.x = -Math.PI / 2
+        seg.rotation.y = Math.atan2(-(bx - ax), -(bz - az))
+        seg.position.set((ax + bx) / 2, 0.009, (az + bz) / 2)
+        seg.receiveShadow = true
+        this.group.add(seg)
       }
     }
   }
@@ -746,6 +814,277 @@ export class WorldRenderer {
         tree.scale.setScalar(s)
         tree.castShadow = shadow
         g.add(tree)
+        break
+      }
+      case 'rock': {
+        // v66 — jungle boulder: low-poly dodecahedron, flattened + randomly scaled,
+        // dusty mineral tint so it reads against the dry ground
+        const s = d.s ?? 1
+        const rockMat = new THREE.MeshStandardMaterial({ color: '#8d867c', roughness: 0.95, flatShading: true })
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1, 0), rockMat)
+        rock.scale.set(s, s * 0.62, s * 0.9)
+        rock.rotation.y = d.ry ?? 0
+        rock.position.y = s * 0.32
+        rock.castShadow = shadow
+        g.add(rock)
+        break
+      }
+      case 'shrub': {
+        // v68b — Vanodyan Deep undergrowth: two flattened jungle-green blobs.
+        // No collider (walk-through), no cast shadow — pure ground cover.
+        const s = d.s ?? 0.8
+        const leaf = new THREE.MeshStandardMaterial({ color: ['#3d5c34', '#48683c', '#35502f'][Math.floor(s * 7) % 3], roughness: 1, flatShading: true })
+        const b1 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.55 * s, 0), leaf)
+        b1.position.y = 0.32 * s; b1.scale.y = 0.72; b1.rotation.y = d.ry ?? 0
+        const b2 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.4 * s, 0), leaf)
+        b2.position.set(0.34 * s, 0.24 * s, 0.18 * s); b2.scale.y = 0.66; b2.rotation.y = (d.ry ?? 0) + 1.1
+        b1.receiveShadow = true; b2.receiveShadow = true
+        g.add(b1, b2)
+        break
+      }
+      case 'grave': {
+        // v69 — Vanodyan Kabristan tombstone: three variants — rounded stone,
+        // cross slab, tilted broken marker. Weathered grey, mossy base.
+        const s = d.s ?? 1
+        const gMat = new THREE.MeshStandardMaterial({ color: '#9a978c', roughness: 0.95, flatShading: true })
+        const moss = new THREE.MeshStandardMaterial({ color: '#4a5c3a', roughness: 1, flatShading: true })
+        const v = d.variant ?? 0
+        if (v === 0) {
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(0.8 * s, 1.15 * s, 0.16 * s), gMat)
+          slab.position.y = 0.57 * s
+          const top = new THREE.Mesh(new THREE.CylinderGeometry(0.4 * s, 0.4 * s, 0.16 * s, 10, 1, false, 0, Math.PI), gMat)
+          top.rotation.x = Math.PI / 2; top.rotation.y = Math.PI / 2
+          top.position.y = 1.15 * s
+          const base = new THREE.Mesh(new THREE.BoxGeometry(0.95 * s, 0.14 * s, 0.5 * s), moss)
+          base.position.y = 0.07
+          g.add(slab, top, base)
+        } else if (v === 1) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.2 * s, 1.3 * s, 0.18 * s), gMat)
+          post.position.y = 0.65 * s
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(0.75 * s, 0.18 * s, 0.16 * s), gMat)
+          bar.position.y = 0.95 * s
+          g.add(post, bar)
+        } else {
+          const slab = new THREE.Mesh(new THREE.BoxGeometry(0.72 * s, 0.85 * s, 0.15 * s), gMat)
+          slab.position.y = 0.32 * s
+          slab.rotation.z = 0.5 // toppled marker
+          g.add(slab)
+        }
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'crypt': {
+        // v69 — brick burial crypt: stone box + gable roof + a dark doorway
+        const cMat = new THREE.MeshStandardMaterial({ color: '#7d7568', roughness: 0.95, flatShading: true })
+        const rMat = new THREE.MeshStandardMaterial({ color: '#5c544a', roughness: 1, flatShading: true })
+        const dMat = new THREE.MeshStandardMaterial({ color: '#17130e', roughness: 1 })
+        const body = new THREE.Mesh(new THREE.BoxGeometry(6, 3.2, 4.4), cMat)
+        body.position.y = 1.6
+        const roof = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 6.2, 3, 1), rMat)
+        roof.rotation.z = Math.PI / 2; roof.rotation.y = Math.PI / 2
+        roof.position.y = 3.9; roof.scale.y = 0.62
+        const door = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.1, 0.2), dMat)
+        door.position.set(0, 1.05, 2.25)
+        g.add(body, roof, door)
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'deadTree': {
+        // v69 — bare graveyard tree: dark gnarled trunk + twisted bare branches
+        const s = d.s ?? 1
+        const bark = new THREE.MeshStandardMaterial({ color: '#2e2620', roughness: 1, flatShading: true })
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14 * s, 0.3 * s, 3.4 * s, 6), bark)
+        trunk.position.y = 1.7 * s
+        trunk.rotation.z = (d.ry ?? 0) % 0.14 - 0.07
+        g.add(trunk)
+        for (let bi = 0; bi < 4; bi++) {
+          const br = new THREE.Mesh(new THREE.CylinderGeometry(0.03 * s, 0.09 * s, 1.3 * s, 5), bark)
+          br.position.set(Math.cos(bi * 1.7) * 0.5 * s, (2.4 + bi * 0.42) * s, Math.sin(bi * 1.7) * 0.5 * s)
+          br.rotation.set(Math.sin(bi * 2.1) * 0.9, bi * 1.7, Math.cos(bi * 1.3) * 0.9)
+          g.add(br)
+        }
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'mountain': {
+        // v68 — Vanodyan Deep ridge. v70 — fog:false + userData.noCull: the rim
+        // is the world's SKYLINE and must read from the city center even though
+        // scene fog far is only 210 m and the cull radius 195.
+        // v62 (Task 72) — REALISTIC SILHOUETTES ("not tringle type"): ONE
+        // noise-displaced ridged massif per peak with baked vertex colors
+        // (forest skirt → rock bands → snow above a jittered snowline) replaces
+        // the old 5-segment cone + cap stacks. getMountainGeo caches per
+        // (seed × variant × colorway); cw picks the palette:
+        // 0 granite rim/ridge · 1 green hills · 2 hazy far range.
+        const s = d.s ?? 20, h = d.h ?? 34, v = d.variant ?? 0, cw = d.cw ?? 0
+        const seed = Math.floor(Math.abs(Math.sin(d.x * 12.9898 + d.z * 78.233) * 43758.5453)) % 8
+        const mesh = new THREE.Mesh(getMountainGeo(seed, v, cw), MOUNTAIN_MAT)
+        const elong = v === 3 ? 1.85 : 1 // ridge mass — a long sloping mountain wall
+        mesh.scale.set(s * elong, h * (v === 3 ? 0.8 : 1), s * (0.72 + mHash(seed * 7 + v * 3) * 0.42))
+        mesh.rotation.y = d.ry ?? 0
+        mesh.position.y = 0
+        mesh.userData.noCull = true
+        mesh.castShadow = shadow
+        g.add(mesh)
+        break
+      }
+      case 'field': {
+        // v71 — ZONE B crop field: tilled soil patch + one InstancedMesh of crop
+        // clumps (2 draw calls per field). variant: 0 wheat-green, 1 mustard,
+        // 2 vegetable rows.
+        const s = d.s ?? 8, v = d.variant ?? 0
+        const soil = new THREE.Mesh(
+          new THREE.PlaneGeometry(s * 2, s * 1.5),
+          new THREE.MeshStandardMaterial({ color: ['#7c6647', '#6f5a3e', '#59663f'][v], roughness: 1 }),
+        )
+        soil.rotation.x = -Math.PI / 2
+        soil.position.y = 0.02
+        soil.receiveShadow = true
+        g.add(soil)
+        const cropMat = new THREE.MeshStandardMaterial({ color: ['#7a8f3c', '#c9a83c', '#4e7d43'][v], roughness: 1, flatShading: true })
+        const rows = Math.max(3, Math.floor(s / 1.5))
+        const inst = new THREE.InstancedMesh(new THREE.ConeGeometry(0.34, 0.9, 5), cropMat, rows * rows)
+        const m4 = new THREE.Matrix4()
+        let n = 0
+        for (let ix = 0; ix < rows; ix++) {
+          for (let iz = 0; iz < rows; iz++) {
+            const px = (ix / (rows - 1) - 0.5) * s * 1.8
+            const pz = (iz / (rows - 1) - 0.5) * s * 1.3
+            m4.makeRotationY((ix * 7 + iz * 13) % 6)
+            m4.setPosition(px, 0.45, pz)
+            inst.setMatrixAt(n++, m4)
+          }
+        }
+        inst.castShadow = false
+        g.add(inst)
+        break
+      }
+      case 'hut': {
+        // v71 — ZONE B farm hut: mud-brick walls + thatch gable + dark doorway.
+        // variant 1 = derelict (collapsed roof tilt, no door).
+        const wMat = new THREE.MeshStandardMaterial({ color: '#9c8265', roughness: 1, flatShading: true })
+        const tMat = new THREE.MeshStandardMaterial({ color: '#8a713e', roughness: 1, flatShading: true })
+        const body = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.2, 3.6), wMat)
+        body.position.y = 1.1
+        const roof = new THREE.Mesh(new THREE.CylinderGeometry(2.55, 2.55, 4.6, 3, 1), tMat)
+        roof.rotation.z = Math.PI / 2
+        roof.rotation.y = Math.PI / 2
+        roof.position.y = 2.85
+        roof.scale.y = 0.55
+        if (d.variant === 1) roof.rotation.x = 0.18 // derelict slump
+        g.add(body, roof)
+        if (d.variant !== 1) {
+          const door = new THREE.Mesh(new THREE.BoxGeometry(1, 1.7, 0.16), new THREE.MeshStandardMaterial({ color: '#241a10', roughness: 1 }))
+          door.position.set(0, 0.85, 1.83)
+          g.add(door)
+        }
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'hay': {
+        // v71 — ZONE B hay bale: golden cylinder on its side
+        const s = d.s ?? 1
+        const hayMat = new THREE.MeshStandardMaterial({ color: '#c9a83c', roughness: 1, flatShading: true })
+        const bale = new THREE.Mesh(new THREE.CylinderGeometry(0.7 * s, 0.7 * s, 1.5 * s, 9), hayMat)
+        bale.rotation.z = Math.PI / 2
+        bale.rotation.y = d.ry ?? 0
+        bale.position.y = 0.7 * s
+        bale.castShadow = shadow
+        g.add(bale)
+        break
+      }
+      case 'fence': {
+        // v71 — ZONE B split-wood fence run (w = length). Decorative — no collider
+        // so fields stay enterable and route checks stay clean.
+        const len = d.w ?? 6
+        const woodMat = new THREE.MeshStandardMaterial({ color: '#7a6242', roughness: 1 })
+        const posts = Math.max(2, Math.round(len / 2))
+        for (let p = 0; p <= posts; p++) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.13, 1.15, 0.13), woodMat)
+          post.position.set(-len / 2 + (p / posts) * len, 0.57, (p % 2) * 0.06)
+          post.castShadow = shadow
+          g.add(post)
+        }
+        for (const ry2 of [0.45, 0.9]) {
+          const rail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.09, 0.06), woodMat)
+          rail.position.y = ry2
+          g.add(rail)
+        }
+        break
+      }
+      case 'well': {
+        // v71 — ZONE B stone well: ring + twin posts + little shingled roof
+        const stoneMat = new THREE.MeshStandardMaterial({ color: '#8d867c', roughness: 1, flatShading: true })
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.05, 0.85, 10), stoneMat)
+        ring.position.y = 0.42
+        const hole = new THREE.Mesh(new THREE.CircleGeometry(0.72, 10), new THREE.MeshStandardMaterial({ color: '#101418', roughness: 1 }))
+        hole.rotation.x = -Math.PI / 2
+        hole.position.y = 0.86
+        const postMat = new THREE.MeshStandardMaterial({ color: '#5d4429', roughness: 1 })
+        for (const px of [-0.8, 0.8]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 0.1), postMat)
+          post.position.set(px, 1.5, 0)
+          g.add(post)
+        }
+        const roof2 = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.08, 1.1), new THREE.MeshStandardMaterial({ color: '#6b5433', roughness: 1 }))
+        roof2.position.y = 2.3
+        roof2.rotation.z = 0.12
+        g.add(ring, hole, roof2)
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'scarecrow': {
+        // v71 — ZONE B scarecrow: pole + crossbar + straw body + sack head
+        const woodMat = new THREE.MeshStandardMaterial({ color: '#6b5433', roughness: 1 })
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 2.1, 6), woodMat)
+        pole.position.y = 1.05
+        const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.4, 5), woodMat)
+        bar.rotation.z = Math.PI / 2
+        bar.position.y = 1.55
+        const shirt = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.6, 0.28), new THREE.MeshStandardMaterial({ color: '#9a4a3a', roughness: 1 }))
+        shirt.position.y = 1.35
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 7, 6), new THREE.MeshStandardMaterial({ color: '#c9a83c', roughness: 1 }))
+        head.position.y = 1.85
+        const hat = new THREE.Mesh(new THREE.ConeGeometry(0.32, 0.22, 7), new THREE.MeshStandardMaterial({ color: '#8a713e', roughness: 1 }))
+        hat.position.y = 2.05
+        g.add(pole, bar, shirt, head, hat)
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'log': {
+        // v71 — ZONE C fallen jungle log: mossy deadfall (collider from world-def)
+        const len = d.w ?? 3
+        const barkMat = new THREE.MeshStandardMaterial({ color: '#5d4429', roughness: 1, flatShading: true })
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, len, 8), barkMat)
+        trunk.rotation.z = Math.PI / 2
+        trunk.position.y = 0.45
+        const moss = new THREE.Mesh(new THREE.BoxGeometry(len * 0.5, 0.1, 0.5), new THREE.MeshStandardMaterial({ color: '#4a6b35', roughness: 1, flatShading: true }))
+        moss.position.set(len * 0.1, 0.86, 0.12)
+        g.add(trunk, moss)
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
+        break
+      }
+      case 'fern': {
+        // v71 — ZONE C fern: cached merged frond fan (1 draw call), walk-through
+        const s = d.s ?? 1
+        const fern = new THREE.Mesh(getFernGeo(), treeMat)
+        fern.scale.setScalar(s)
+        fern.rotation.y = d.ry ?? 0
+        fern.position.y = 0
+        g.add(fern)
+        break
+      }
+      case 'stump': {
+        // v71 — ZONE C cut stump: short trunk + pale saw-cut top
+        const s = d.s ?? 1
+        const barkMat = new THREE.MeshStandardMaterial({ color: '#4e3a26', roughness: 1, flatShading: true })
+        const cutMat = new THREE.MeshStandardMaterial({ color: '#b09a72', roughness: 1, flatShading: true })
+        const stump = new THREE.Mesh(new THREE.CylinderGeometry(0.3 * s, 0.38 * s, 0.55 * s, 8), barkMat)
+        stump.position.y = 0.27 * s
+        const top = new THREE.Mesh(new THREE.CylinderGeometry(0.3 * s, 0.3 * s, 0.05, 8), cutMat)
+        top.position.y = 0.56 * s
+        g.add(stump, top)
+        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
         break
       }
       case 'bench': {
@@ -1124,129 +1463,6 @@ export class WorldRenderer {
         const roof = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.15, 2.4), new THREE.MeshStandardMaterial({ color: '#4a5a48' }))
         roof.position.y = 2.5
         g.add(shed, roof)
-        break
-      }
-      // ================= v64 WILD WORLD CASES =================
-      case 'mountain': {
-        // one noise-displaced ridged massif — the collision surface (mountain-field)
-        // is the analytic inverse of exactly this geometry. Group rotation d.ry is
-        // the ONLY rotation (single-rotation convention, see builder docs).
-        const seed = d.seed ?? 0
-        const mesh = new THREE.Mesh(buildMountainGeometry(seed, d.variant ?? 0, d.cw ?? 0), getMountainMat(d.cw ?? 0))
-        mesh.scale.set((d.base ?? 40) / MOUNTAIN_REF_BASE, (d.h ?? 60) / MOUNTAIN_REF_H, (d.base ?? 40) / MOUNTAIN_REF_BASE)
-        mesh.castShadow = true
-        mesh.userData.noCull = true // the skyline survives distance culling
-        g.add(mesh)
-        break
-      }
-      case 'jtree': {
-        const tree = new THREE.Mesh(getJungleGeo('jtree', d.variant ?? 0), jungleMat)
-        tree.scale.setScalar(d.s ?? 1)
-        tree.castShadow = shadow
-        g.add(tree)
-        break
-      }
-      case 'deadTree': {
-        const t = new THREE.Mesh(getJungleGeo('deadTree', 0), jungleMat)
-        t.scale.setScalar(d.s ?? 1)
-        t.castShadow = shadow
-        g.add(t)
-        break
-      }
-      case 'fern': {
-        const f = new THREE.Mesh(getJungleGeo('fern', 0), jungleMat)
-        f.scale.setScalar(d.s ?? 1)
-        g.add(f)
-        break
-      }
-      case 'log': {
-        const l = new THREE.Mesh(getJungleGeo('log', 0), jungleMat)
-        l.scale.setScalar(d.s && d.s > 3 ? d.s / 4.4 : 1) // s carries length; geo is 4.4 m long
-        l.scale.x = Math.max(0.6, Math.min(1.6, (d.s ?? 4) / 4.4))
-        l.castShadow = shadow
-        g.add(l)
-        break
-      }
-      case 'stump': {
-        const st = new THREE.Mesh(getJungleGeo('stump', 0), jungleMat)
-        st.scale.setScalar(d.s ?? 1)
-        st.castShadow = shadow
-        g.add(st)
-        break
-      }
-      case 'shrub': {
-        const sh = new THREE.Mesh(getJungleGeo('shrub', d.variant ?? 0), jungleMat)
-        sh.scale.setScalar(d.s ?? 1)
-        g.add(sh)
-        break
-      }
-      case 'grass': {
-        const gr = new THREE.Mesh(getJungleGeo('grass', 0), jungleMat)
-        gr.scale.setScalar(d.s ?? 1)
-        g.add(gr)
-        break
-      }
-      case 'boulder': {
-        const s = d.s ?? 1
-        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), new THREE.MeshStandardMaterial({ color: ['#7a7d72', '#6d7066', '#83867a'][(Math.abs(Math.round(d.x + d.z)) % 3)], flatShading: true, roughness: 1 }))
-        rock.scale.y = 0.72
-        rock.position.y = s * 0.55
-        rock.castShadow = shadow
-        g.add(rock)
-        break
-      }
-      case 'grave': {
-        // Kabristan tombstone — three weathered variants, slightly tilted by ry
-        const stone = new THREE.MeshStandardMaterial({ color: ['#9a958a', '#8a857c', '#a8a294'][d.variant ?? 0], flatShading: true, roughness: 1 })
-        if (d.variant === 1) {
-          const slab = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.1, 0.22), stone)
-          slab.position.y = 0.55
-          g.add(slab)
-        } else if (d.variant === 2) {
-          const round = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.45, 1.05, 10), stone)
-          round.position.y = 0.52
-          g.add(round)
-        } else {
-          const post = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.15, 0.24), stone)
-          post.position.y = 0.57
-          const cross = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.24, 0.22), stone)
-          cross.position.y = 0.88
-          g.add(post, cross)
-        }
-        const base = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.14, 0.62), new THREE.MeshStandardMaterial({ color: '#7a756b', flatShading: true }))
-        base.position.y = 0.07
-        g.add(base)
-        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
-        break
-      }
-      case 'track': {
-        // dirt trail patch — flat, slightly stacked to avoid z-fighting
-        const h2 = ((Math.abs(Math.round(d.x * 7 + d.z * 13))) % 6)
-        const patch = new THREE.Mesh(new THREE.CircleGeometry(d.s ?? 5, 9), new THREE.MeshStandardMaterial({ color: '#a3814f', roughness: 1, transparent: true, opacity: 0.85 }))
-        patch.rotation.x = -Math.PI / 2
-        patch.position.y = 0.015 + h2 * 0.004
-        patch.scale.setScalar(1 + (h2 % 3) * 0.14)
-        g.add(patch)
-        break
-      }
-      case 'hut': {
-        const s = d.s ?? 1
-        const body = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 3.2), new THREE.MeshStandardMaterial({ color: '#b8a488', flatShading: true }))
-        body.position.y = 1.3
-        const thatch = new THREE.Mesh(new THREE.ConeGeometry(2.9, 1.6, 4), new THREE.MeshStandardMaterial({ color: '#8a713e', flatShading: true }))
-        thatch.position.y = 3.4
-        thatch.rotation.y = Math.PI / 4
-        g.add(body, thatch)
-        g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = shadow })
-        break
-      }
-      case 'hay': {
-        const s = d.s ?? 1
-        const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 1.3, 10), new THREE.MeshStandardMaterial({ color: '#c2a452', flatShading: true }))
-        roll.rotation.z = Math.PI / 2
-        roll.position.y = 0.8
-        roll.castShadow = shadow
-        g.add(roll)
         break
       }
     }

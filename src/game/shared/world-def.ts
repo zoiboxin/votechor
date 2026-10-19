@@ -7,9 +7,8 @@
 // depot, two parks and government quarters. The original 5-zone spine (plaza →
 // market → checkpoint → avenue → parliament) is untouched down the middle.
 import type { AABB, Deco, DecoKind, ItemSpawn, NpcSpawn, VehicleDef, WorldDef, SearchlightDef, CrossRoadDef } from './types'
+import { WORLD_DISC, GRAVEYARD } from './constants'
 import { mapById } from './maps'
-import { WORLD_BOUNDS, WORLD_DISC } from './constants'
-import { mHash } from './terrain-noise'
 
 function mulberry32(seed: number) {
   let a = seed >>> 0
@@ -50,6 +49,102 @@ export const CROSS_ROADS: CrossRoadDef[] = [
   { z: -452, halfW: 5 },    // Colony Cross Road (government district)
 ]
 
+// v70 — THE VANODYAN RIM: a deterministic 360° mountain ring OUTSIDE the jungle
+// so the world reads city → jungle → mountains from everywhere (user ask). Two
+// rows — a foothill ridge and a taller snowcap row.
+// v72 — THE BIG PUSH: the user still saw mountains "at the edge of the city" —
+// the old radii (402..462 from center −379) hugged the long city rect. The ring
+// now derives from the grown WORLD_DISC (r 650, center −340): foothill row
+// r 587..611, snowcap row r 629..647 — 200..475 m beyond the city edge in every
+// direction, behind 86..375 m of real jungle. Peaks grew too: foothills 60..110 m,
+// snowcaps 100..175 m — a horizon range, not a fence.
+// Module scope + index-hash randomness (no shared PRNG state) so minimap.ts can
+// import the same peaks without running buildWorldDef. The renderer keeps these
+// cones fog-immune + cull-exempt (world.ts) — the skyline stays visible across
+// the whole disc even though scene fog far is only 210 m.
+const rimHash = (i: number) => { const s = Math.sin(i * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s) }
+// pockets the rim must keep open: the two forgotten-grave clusters that sit in
+// the band, the east-wing graveyard, the deep token and the trail's dead end.
+const RIM_KEEP: Array<[number, number, number]> = [[-30, 62, 40], [-330, -100, 40], [300, -620, 36], [120, -730, 26], [58, -748, 26]]
+export const VANODYAN_RIM: Array<[number, number, number, number]> = (() => {
+  const peaks: Array<[number, number, number, number]> = []
+  for (let i = 0; i < 44; i++) { // foothill ridge
+    const a = (i / 44) * 6.2832 + (rimHash(i) - 0.5) * 0.1
+    const r = WORLD_DISC.r - 63 + rimHash(i + 91) * 24 // v72: 587..611
+    const x = WORLD_DISC.cx + Math.cos(a) * r, z = WORLD_DISC.cz + Math.sin(a) * r
+    if (RIM_KEEP.some(([kx, kz, kr]) => Math.hypot(x - kx, z - kz) < kr)) continue
+    // v60b — taller: peaks must READ from the city center (measured: 44-74 m
+    // cones at 800 m render as a ~5° pale sliver the eye reads as haze)
+    // v72 — grander still: 60..110 m with 30..46 m bases
+    peaks.push([x, z, 30 + rimHash(i + 7) * 16, 60 + rimHash(i + 13) * 50])
+  }
+  for (let i = 0; i < 38; i++) { // high snowcap row
+    const a = ((i + 0.5) / 38) * 6.2832 + (rimHash(i + 41) - 0.5) * 0.12
+    const r = WORLD_DISC.r - 21 + rimHash(i + 57) * 18 // v72: 629..647
+    const x = WORLD_DISC.cx + Math.cos(a) * r, z = WORLD_DISC.cz + Math.sin(a) * r
+    if (RIM_KEEP.some(([kx, kz, kr]) => Math.hypot(x - kx, z - kz) < kr + 4)) continue
+    // v72 — 100..175 m summits: from the city these sit ~450-650 m out on the
+    // horizon, tall enough to read over the fog wall and the jungle canopy
+    peaks.push([x, z, 34 + rimHash(i + 71) * 20, 100 + rimHash(i + 83) * 75])
+  }
+  return peaks
+})()
+// v60b — the GREEN HILLS: an inner jungle-foothill ring so the
+// gradient reads city → jungle → green hills → gray snowcap peaks. Rendered via
+// the same 'mountain' deco kind (fog-immune + cull-exempt).
+// v72 — pushed out with the grown disc: r 470..545 (was 312..378), so the jungle
+// between the city edge and the first foothill is 86 m (north) to 375 m (east/west)
+// deep instead of the old thin strip that read as "mountains at the city edge".
+export const VANODYAN_HILLS: Array<[number, number, number, number]> = (() => {
+  const hills: Array<[number, number, number, number]> = []
+  const keep = (x: number, z: number, pad: number) =>
+    RIM_KEEP.some(([kx, kz, kr]) => Math.hypot(x - kx, z - kz) < kr + pad) ||
+    Math.hypot(x - GRAVEYARD.x, z - GRAVEYARD.z) < GRAVEYARD.r + 30 ||
+    (Math.abs(x) < 214 && z < -662 && z > -712) || // Bhayanak river band + pad
+    (Math.abs(x) < 190 && z < 64 && z > -600) || // v60b — the north city reaches r 312..423: no hills in the city column
+    Math.abs(Math.abs(x) - 166) < 24 || // the wild ring roads
+    CROSS_ROADS.some(cr => Math.abs(z - cr.z) < cr.halfW + 24) || // full-width cross streets
+    [-75.5, -195.5, -452].some(lz => Math.abs(z - lz) < 24) // vehicle lanes through the wild
+  for (let i = 0; i < 52; i++) {
+    const a = (i / 52) * 6.2832 + (rimHash(i + 200) - 0.5) * 0.14
+    const r = 470 + rimHash(i + 211) * 75 // v72: 470..545
+    const x = WORLD_DISC.cx + Math.cos(a) * r, z = WORLD_DISC.cz + Math.sin(a) * r
+    if (keep(x, z, 22)) continue
+    hills.push([x, z, 22 + rimHash(i + 233) * 14, 18 + rimHash(i + 247) * 20])
+  }
+  return hills
+})()
+
+// v71 — ZONE B COUNTRYSIDE TRACKS: winding dirt paths that carry the city's ring
+// roads out into the wild so roads "transition into rural paths and jungle trails
+// rather than ending abruptly" (the south already has the deep TRAIL). Rendered
+// as dirt quads by world.ts; vegetation keeps clear via onTrack().
+export const COUNTRYSIDE_TRACKS: Array<Array<[number, number]>> = [
+  [[-166, -240], [-190, -244], [-212, -262], [-228, -286], [-240, -306]],                 // west → Kabristan approach
+  [[166, -379], [192, -374], [218, -388], [240, -412], [252, -432]],                      // east → southern wild
+  [[0, 44], [4, 60], [-4, 74]],                                                            // north → far wild band
+  [[-166, -480], [-196, -502], [-218, -532], [-232, -556], [-236, -566]],                 // SW → river country
+  [[166, -540], [196, -556], [218, -584], [232, -606], [236, -614]],                      // SE → river country
+]
+
+// v71 — THE FAR RANGE (Zone E, non-playable): a third ring of mega-peaks BEHIND
+// the Vanodyan Rim so the skyline has layered depth and no gap ever shows the
+// world's true edge. Hazy blue-gray tint (aerial perspective), NO colliders —
+// the leash already ends the playable disc.
+// v72 — pushed to r 690..770 behind the grown rim, taller (150..260 m) so the
+// two skyline layers read separately from the far city.
+export const VANODYAN_FAR: Array<[number, number, number, number]> = (() => {
+  const peaks: Array<[number, number, number, number]> = []
+  for (let i = 0; i < 34; i++) {
+    const a = (i / 34) * 6.2832 + (rimHash(i + 301) - 0.5) * 0.16
+    const r = 690 + rimHash(i + 311) * 80 // v72: 690..770
+    const x = WORLD_DISC.cx + Math.cos(a) * r, z = WORLD_DISC.cz + Math.sin(a) * r
+    peaks.push([x, z, 50 + rimHash(i + 321) * 40, 150 + rimHash(i + 331) * 110])
+  }
+  return peaks
+})()
+
+
 let idc = 0
 const nid = (p: string) => `${p}_${(idc++).toString(36)}`
 
@@ -68,6 +163,10 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   const SHOPS = mapDef.shops ?? SHOP_NAMES
   const SIGNS = mapDef.signs ?? SIGN_TEXTS
   const rnd = mulberry32(20240614)
+  // v66 — greater-city expansion RNG: a SEPARATE stream so every existing placement
+  // keeps its exact rng() value (the skeleton stays byte-identical; only new bands
+  // consume rnd2).
+  const rnd2 = mulberry32(20240615)
   const colliders: AABB[] = []
   const decorations: Deco[] = []
   const items: ItemSpawn[] = []
@@ -115,18 +214,21 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   }
   const clothesline = (x: number, z: number, len: number, ry = 0) => deco({ kind: 'clothesline', x, z, w: len, ry })
 
-  // Invisible world walls — v64: the city is now OPEN to the wild on all four
-  // sides through 14 m jungle gates (N x±7, S x±7, E/W z -274..-286). Boulder
-  // gateposts mark every exit; the wall ring continues on the OUTER bounding
-  // square (below) so the 1300 m disc is the real playfield.
-  box(-124, 0, 10, -7, 14, 12)         // back wall (spawn side), west of gate
-  box(7, 0, 10, 124, 14, 12)           // back wall, east of gate
-  box(-124, 0, -576, -7, 14, -572)     // far wall (parliament end), west of gate
-  box(7, 0, -576, 124, 14, -572)       // far wall, east of gate
-  box(-124, 0, 10, -120, 14, -274)     // left wall, north of gate
-  box(-124, 0, -286, -120, 14, -576)   // left wall, south of gate
-  box(120, 0, 10, 124, 14, -274)       // right wall, north of gate
-  box(120, 0, -286, 124, 14, -576)     // right wall, south of gate
+  // Invisible world walls — v69 ROUND world: the jungle disc is ringed by 56
+  // axis-aligned wall slabs (each the AABB of one arc segment), so the playfield
+  // truly ends at the circle while the rectangular bounds stay as the server's
+  // backstop. Walls sit 8m outside the playable radius.
+  {
+    const R2 = WORLD_DISC.r + 8
+    const SEGS = 56
+    for (let i = 0; i < SEGS; i++) {
+      const a0 = (i / SEGS) * Math.PI * 2
+      const a1 = ((i + 1) / SEGS) * Math.PI * 2
+      const xs = [Math.cos(a0) * R2, Math.cos(a1) * R2]
+      const zs = [Math.sin(a0) * R2, Math.sin(a1) * R2]
+      box(WORLD_DISC.cx + Math.min(...xs), 0, WORLD_DISC.cz + Math.min(...zs), WORLD_DISC.cx + Math.max(...xs), 14, WORLD_DISC.cz + Math.max(...zs))
+    }
+  }
 
   // ================= ZONE A — PROTEST GATHERING PLAZA (z 0 .. -80) =================
   const plazaBuilding = (x: number, z: number, i: number) => {
@@ -416,13 +518,16 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
     deco({ kind: 'barrier', x: (x1 + x2) / 2, z: (z1 + z2) / 2, w: Math.max(2, maxX - minX), d: Math.max(2, maxZ - minZ) })
     box(minX, 0, minZ, maxX, 1.15, maxZ)
   }
-  fence(-122, -206, -12, -207.6); fence(12, -206, 122, -207.6)
-  fence(-122, -222, -26, -223.6); fence(26, -222, 122, -223.6)
+  // v66 — fence lines extend across the FULL greater-city width (x ±200) so the
+  // new mall/colony/jungle bands can't be used to walk around the checkpoint.
+  // Maze gaps in the center are untouched.
+  fence(-200, -206, -12, -207.6); fence(12, -206, 200, -207.6)
+  fence(-200, -222, -26, -223.6); fence(26, -222, 200, -223.6)
   fence(-12, -222, -6, -223.6); fence(6, -222, 12, -223.6)
-  fence(-122, -238, -18, -239.6); fence(18, -238, 122, -239.6)
+  fence(-200, -238, -18, -239.6); fence(18, -238, 200, -239.6)
   fence(-6, -238, 18, -239.6)
-  fence(-122, -254, -8, -255.6); fence(8, -254, 122, -255.6)
-  fence(-122, -270, -20, -271.6); fence(20, -270, 122, -271.6)
+  fence(-200, -254, -8, -255.6); fence(8, -254, 200, -255.6)
+  fence(-200, -270, -20, -271.6); fence(20, -270, 200, -271.6)
   fence(-8, -270, 20, -271.6)
   // Watchtowers with searchlights
   const towers: [number, number][] = [[-20, -214], [20, -214], [-24, -246], [24, -246]]
@@ -534,30 +639,50 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
     // (east side south of z -356 is blocked by the flyover ramp, x 6..18)
     { id: 'veh_auto1', kind: 'auto', speed: 7.2, path: [[-12.8, -308], [12.8, -308], [12.8, -347], [-12.8, -347]] },
     // Avenue Cross Road (C, no gate) — full-map crossers through the junction:
-    // car westbound north lane, auto centre lane, bike eastbound south lane
-    { id: 'veh_auto2', kind: 'auto', speed: 6.5, path: [[-100, -286], [100, -286]] },
-    { id: 'veh_auto3', kind: 'auto', speed: 6, path: [[-16, -455.2], [-100, -455.2]] },
+    // car westbound north lane, auto centre lane, bike eastbound south lane.
+    // v66 — extended across the new ring roads to the greater-city edges.
+    { id: 'veh_auto2', kind: 'auto', speed: 6.5, path: [[-190, -286], [190, -286]] },
+    { id: 'veh_auto3', kind: 'auto', speed: 6, path: [[-16, -455.2], [-162, -455.2]] },
     { id: 'veh_bus1', kind: 'bus', speed: 6, path: [[0, -300], [0, -415]] },
     { id: 'veh_cow1', kind: 'cow', speed: 1.2, path: [[-10, -330], [10, -395]] },
     // cross streets A + B carry checkpoint gate pillars at x ±8.5 — roamers stay
-    // on their own half (|x| >= 14) and never clip the gates
-    { id: 'veh_auto4', kind: 'auto', speed: 6, path: [[-96, -198], [-14, -198]] },
-    { id: 'veh_auto6', kind: 'auto', speed: 6.4, path: [[14, -198], [96, -198]] },
-    { id: 'veh_auto5', kind: 'auto', speed: 6.2, path: [[-100, -78], [-14, -78]] },
-    { id: 'veh_auto7', kind: 'auto', speed: 6, path: [[14, -78], [96, -78]] },
-    // Colony Cross Road (D, no gate) — the bus crosses the WHOLE map, the car
-    // turns off the junction and roams down the grand avenue (U-turn before the
-    // boss gate at z -478)
-    { id: 'veh_bus2', kind: 'bus', speed: 5.5, path: [[-100, -452], [100, -452]] },
+    // on their own half (|x| >= 14) and never clip the gates. v66 — extended to
+    // the ring roads so traffic reaches the mall district and west colony.
+    { id: 'veh_auto4', kind: 'auto', speed: 6, path: [[-162, -198], [-14, -198]] },
+    { id: 'veh_auto6', kind: 'auto', speed: 6.4, path: [[14, -198], [162, -198]] },
+    { id: 'veh_auto5', kind: 'auto', speed: 6.2, path: [[-162, -78], [-14, -78]] },
+    { id: 'veh_auto7', kind: 'auto', speed: 6, path: [[14, -78], [162, -78]] },
+    // Colony Cross Road (D, no gate) — the bus crosses the WHOLE greater city, the
+    // car turns off the junction and roams down the grand avenue (U-turn before
+    // the boss gate at z -478)
+    { id: 'veh_bus2', kind: 'bus', speed: 5.5, path: [[-190, -452], [190, -452]] },
     { id: 'veh_cow2', kind: 'cow', speed: 1.1, path: [[-96, -44], [-52, -58]] },
-    { id: 'veh_car1', kind: 'car', speed: 10.5, path: [[-88, -79.0], [-16, -79.0]] },    // Plaza Cross Rd westbound (lane north of the row-A shopfront corner)
-    { id: 'veh_car2', kind: 'car', speed: 9.5, path: [[16, -195.5], [94, -195.5]] },     // Market Exit eastbound
-    { id: 'veh_car3', kind: 'car', speed: 9, path: [[-100, -283.5], [100, -283.5]] },    // Avenue Cross Rd westbound — full map
-    { id: 'veh_car4', kind: 'car', speed: 8.6, path: [[-88, -449.4], [-4, -449.4], [-4, -470]] }, // Colony Rd → grand avenue, 90° turn at the junction
-    { id: 'veh_bike1', kind: 'bike', speed: 8.5, path: [[16, -75.5], [92, -75.5]] },     // Plaza Cross Rd eastbound
-    { id: 'veh_bike2', kind: 'bike', speed: 9, path: [[-92, -200.5], [-16, -200.5]] },   // Market Exit westbound
-    { id: 'veh_bike3', kind: 'bike', speed: 8.2, path: [[-100, -288.5], [100, -288.5]] }, // Avenue Cross Rd eastbound — full map
-    { id: 'veh_bike4', kind: 'bike', speed: 7.6, path: [[16, -455.2], [92, -455.2]] },   // Colony Cross Rd eastbound
+    { id: 'veh_car1', kind: 'car', speed: 10.5, path: [[-162, -79.0], [-16, -79.0]] },   // Plaza Cross Rd westbound (lane north of the row-A shopfront corner)
+    { id: 'veh_car2', kind: 'car', speed: 9.5, path: [[16, -195.5], [162, -195.5]] },    // Market Exit eastbound
+    { id: 'veh_car3', kind: 'car', speed: 9, path: [[-190, -283.5], [190, -283.5]] },    // Avenue Cross Rd westbound — full map
+    { id: 'veh_car4', kind: 'car', speed: 8.6, path: [[-162, -449.4], [-4, -449.4], [-4, -470]] }, // Colony Rd → grand avenue, 90° turn at the junction
+    { id: 'veh_bike1', kind: 'bike', speed: 8.5, path: [[16, -75.5], [162, -75.5]] },    // Plaza Cross Rd eastbound
+    { id: 'veh_bike2', kind: 'bike', speed: 9, path: [[-162, -202.3], [-16, -202.3]] },  // Market Exit westbound (south lane, clears the corridor crate at -98,-200)
+    { id: 'veh_bike3', kind: 'bike', speed: 8.2, path: [[-190, -288.5], [190, -288.5]] }, // Avenue Cross Rd eastbound — full map
+    { id: 'veh_bike4', kind: 'bike', speed: 7.6, path: [[16, -455.2], [162, -455.2]] },  // Colony Cross Rd eastbound
+    // v66 — RING-ROAD TRAFFIC: closed loops (first point repeats → cyclic traversal,
+    // no ping-pong) around the city quadrants on the ring roads + spine lanes, plus
+    // ring shuttles and jungle-edge cows. Spine legs keep |x| >= 12.8 (gate pillars
+    // at ±8.5, zone-D roadworks gaps) and E-W legs ride the cross-road lanes.
+    { id: 'veh_car5', kind: 'car', speed: 9, path: [[-162, -76.5], [-28.5, -76.5], [-28.5, -194.5], [-162, -194.5], [-162, -76.5]] },   // NW quadrant loop (spine leg x -28.5 swings west of the market-row wall)
+    { id: 'veh_bike5', kind: 'bike', speed: 10, path: [[28, -76.5], [162, -76.5], [162, -199.5], [28, -199.5], [28, -76.5]] },      // NE quadrant loop (spine leg x 28 swings EAST of the corner buildings)
+    { id: 'veh_auto8', kind: 'auto', speed: 7, path: [[-162, -284], [-12.8, -284], [-12.8, -454], [-162, -454], [-162, -284]] },    // SW quadrant loop
+    { id: 'veh_car6', kind: 'car', speed: 9.5, path: [[12.8, -284], [162, -284], [162, -454], [12.8, -454]] },                      // SE loop, OPEN path (ping-pong) — the closing leg would cross the flyover ramps (x 6..18, z -356..-392)
+    { id: 'veh_bus3', kind: 'bus', speed: 5.5, path: [[-166, -90], [-166, -196]] },     // west ring shuttle (north of the checkpoint corridor)
+    { id: 'veh_bus4', kind: 'bus', speed: 5.5, path: [[166, -288], [166, -450]] },      // east ring shuttle (south of the checkpoint corridor)
+    { id: 'veh_bike6', kind: 'bike', speed: 9, path: [[166, -90], [166, -196]] },       // east ring north shuttle
+    { id: 'veh_auto9', kind: 'auto', speed: 6.5, path: [[100, -75.5], [190, -75.5]] },  // Plaza Cross Rd far-east lane
+    { id: 'veh_auto10', kind: 'auto', speed: 6.5, path: [[-190, -195.5], [-100, -195.5]] }, // Market Exit far-west lane
+    { id: 'veh_cow3', kind: 'cow', speed: 1.0, path: [[-191, -120], [-185, -158]] },    // west jungle cow
+    { id: 'veh_cow4', kind: 'cow', speed: 1.0, path: [[191, -320], [186, -360]] },      // east jungle cow
+    // v68 — Vanodyan Deep cattle: the trail cow and the river-south grazer
+    { id: 'veh_cow5', kind: 'cow', speed: 1.0, path: [[8, -606], [24, -634]] },         // deep-jungle trail cow
+    { id: 'veh_cow6', kind: 'cow', speed: 1.0, path: [[58, -716], [72, -738]] },        // south-of-river grazing cow
   )
 
   // Street trees lining the avenue sidewalks (zones B+C) — every spot verified
@@ -754,171 +879,586 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   // Boss arena (center z=-520)
   landmarks.push({ name: 'BOSS: Vote Collector', x: 0, z: -520 })
 
-  // ========================================================================
-  // v64 THE WILD ROUND WORLD — countryside fringe, Vanodyan jungle ring,
-  // Kabristan graveyard, and the continuous mountain rim.
-  // Rings measured from the disc center (0,-340): the city rect reaches
-  // r ≈ 350 (north) / 232 (south) / 120 (east+west); jungle fills the gap to
-  // the green hills (470..545), then the snowcap rim (587..647) and the hazy
-  // far range (690..770) conceals the terrain edge on every side. Mountains
-  // NEVER sit inside the city or the playable jungle.
-  // ========================================================================
+  // ================= v66 GREATER-CITY EXPANSION =================
+  // The user asked for a bigger Delhi-like capital: malls, gardens, random homes,
+  // an outer jungle the player can actually explore, and the central protest road
+  // untouched. Layout (x east, z north):
+  //   x -196..-176 / 176..196  — VANODYAN JUNGLE ring (dense trees, boulders, cows)
+  //   x ±166                   — outer ring roads (paved in world.ts, 16m asphalt)
+  //   x -174..-124             — Vrindavan Colony homes + Vrindavan Garden
+  //   x 124..174               — Grand Mall district, Jan Kalyan Colony, Aam Bagicha grove
+  //   z 12..42                 — north jungle band behind the protest plaza
+  // Everything here uses rnd2 (separate RNG stream) so the pre-existing skeleton
+  // stays byte-identical.
   {
-    const CX = WORLD_DISC.cx, CZ = WORLD_DISC.cz
-    const rnd2 = mulberry32(0x5eed1970) // independent stream — the city's rnd sequence above is untouched
-    const distC = (x: number, z: number) => Math.hypot(x - CX, z - CZ)
-    const cityClear = (x: number, z: number, pad = 6) => Math.abs(x) < 120 + pad && z < 10 + pad && z > -572 - pad
-    const inGrave = (x: number, z: number, pad = 0) => Math.abs(x - GRAVE_X) < 96 + pad && Math.abs(z - GRAVE_Z) < 66 + pad
-    const GRAVE_X = -330, GRAVE_Z = -520 // Kabristan — west-southwest wild, r ≈ 376 from center
-
-    // ---- wild gates: boulder gateposts flank every city exit, dirt tracks lead out ----
-    const gatePost = (x: number, z: number) => { deco({ kind: 'boulder', x, z, s: 0.9 + rnd2() * 0.4 }); box(x - 1.1, 0, z - 1.1, x + 1.1, 1.7, z + 1.1) }
-    gatePost(-9, 15); gatePost(9, 15)          // north gate
-    gatePost(-9, -580); gatePost(9, -580)      // south gate
-    gatePost(-127, -270); gatePost(-127, -290) // west gate
-    gatePost(127, -270); gatePost(127, -290)   // east gate
-    const track = (x1: number, z1: number, x2: number, z2: number, w = 5) => {
-      const steps = Math.max(2, Math.ceil(Math.hypot(x2 - x1, z2 - z1) / 9))
-      for (let i = 0; i <= steps; i++) {
-        const t = i / steps
-        const jx = (rnd2() - 0.5) * 2.4, jz = (rnd2() - 0.5) * 2.4
-        deco({ kind: 'track', x: x1 + (x2 - x1) * t + jx, z: z1 + (z2 - z1) * t + jz, s: w + rnd2() * 2 })
-      }
+    // jungle tree — wild scale, trunk collider so the forest is solid to walk into
+    // v71 — 4 species: 0 broad canopy, 1 tall straight, 2 banyan-style wide elder,
+    // 3 slender palm-ish. Same single rnd2() call — stream order unchanged.
+    const jtree = (x: number, z: number, s = 1) => {
+      deco({ kind: 'tree', x, z, s: 1.15 + s, variant: Math.floor(rnd2() * 4) })
+      box(x - 0.4, 0, z - 0.4, x + 0.4, 3.4, z + 0.4)
     }
-    track(0, 14, 0, -620); track(0, -580, 0, -950)     // north + south spine tracks
-    track(-122, -280, -600, -420); track(122, -280, 600, -420) // east + west tracks
-    track(-30, -30, -560, -80); track(30, -120, 560, -200)     // two diagonal trails
-
-    // ---- countryside fringe: farms and hay OUTSIDE the city gates (Zone B) ----
-    // north band beyond the back wall (z > 14), south band beyond the far wall
-    // (z < -580), west/east bands beyond the side walls (|x| > 126) — never on
-    // city vehicle routes.
-    for (let i = 0; i < 7; i++) {
-      const side = i % 4
-      const hx = side === 0 ? -60 + rnd2() * 120 : side === 1 ? -60 + rnd2() * 120 : side === 2 ? -128 - rnd2() * 30 : 128 + rnd2() * 30
-      const hz = side === 0 ? 16 + rnd2() * 40 : side === 1 ? -580 - rnd2() * 50 : -320 + (rnd2() - 0.5) * 80
-      deco({ kind: 'hut', x: hx, z: hz, s: 1 + rnd2() * 0.35, ry: rnd2() * 6.28 })
-      box(hx - 2.2, 0, hz - 2.2, hx + 2.2, 3, hz + 2.2)
-    }
-    for (let i = 0; i < 12; i++) {
-      const side = i % 4
-      const hx = side === 0 ? -60 + rnd2() * 120 : side === 1 ? -60 + rnd2() * 120 : side === 2 ? -126 - rnd2() * 40 : 126 + rnd2() * 40
-      const hz = side === 0 ? 16 + rnd2() * 50 : side === 1 ? -582 - rnd2() * 60 : -300 + (rnd2() - 0.5) * 160
-      deco({ kind: 'hay', x: hx, z: hz, s: 0.8 + rnd2() * 0.5, ry: rnd2() * 6.28 })
+    const boulder = (x: number, z: number, s = 1) => {
+      deco({ kind: 'rock', x, z, s, ry: rnd2() * 6.28 })
+      box(x - 0.9 * s, 0, z - 0.9 * s, x + 0.9 * s, 1.2 * s, z + 0.9 * s)
     }
 
-    // ---- Vanodyan jungle ring (Zone C) — canopy attempts, giants, undergrowth ----
-    const jtree = (x: number, z: number, r: number, big = false) => {
-      deco({ kind: 'jtree', x, z, s: (big ? 1.7 : 0.9) + r * (big ? 0.9 : 0.5), variant: Math.floor(rnd2() * 3), ry: rnd2() * 6.28 })
-      box(x - 0.45, 0, z - 0.45, x + 0.45, 4.5, z + 0.45) // trunk collider — canopy is walk-through
-    }
-    for (let i = 0; i < 2600; i++) { // canopy — uniform-in-annulus, thinning toward the hills
-      const a = rnd2() * Math.PI * 2
-      const rr = 100 + Math.sqrt(rnd2()) * 540
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z)) continue
-      const d = distC(x, z)
-      if (d > 430 && mHash(x, z) * 120 < d - 430) continue // thinBand — sparse approaching the hills
-      if (inGrave(x, z, 6)) continue
+    // ---- NORTH JUNGLE (z 12..42) — behind the protest plaza, both sides of the spine road
+    for (let i = 0; i < 46; i++) {
+      const x = -192 + rnd2() * 384
+      const z = 14 + rnd2() * 26
+      if (Math.abs(x) < 12) continue // keep the spine road + plaza mouth open
+      if (Math.abs(Math.abs(x) - 166) < 10) continue // keep the ring roads clear
       jtree(x, z, rnd2())
     }
-    let giants = 0
-    for (let i = 0; i < 520 && giants < 46; i++) { // 46 giants — ancient canopy
-      const a = rnd2() * Math.PI * 2, rr = 120 + rnd2() * 310
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z) || inGrave(x, z, 6)) continue
-      jtree(x, z, rnd2(), true)
-      giants++
+    for (let i = 0; i < 8; i++) boulder(-150 + i * 42 + rnd2() * 8, 18 + rnd2() * 20, 0.8 + rnd2() * 0.7)
+    landmarks.push({ name: 'Vanodyan Jungle (North)', x: -60, z: 28 })
+    for (let i = 0; i < 3; i++) deco({ kind: 'crowd', x: -40 + i * 34 + rnd2() * 8, z: 20 + rnd2() * 14, ry: rnd2() * 6.28, variant: (i + 5) % 6 })
+
+    // ---- WEST EXTENSION (x -158..-124) — VRINDAVAN COLONY + GARDEN ----
+    // (the west ring road occupies x -174..-158; all placements stay east of it)
+    landmarks.push({ name: 'Vrindavan Colony', x: -140, z: -140 })
+    for (let r = 0; r < 6; r++) {
+      const zRow = -96 - r * 15
+      for (let k = 0; k < 5; k++) {
+        if (k === 2) continue // north-south gali through the block
+        home(-154 + k * 6.4 + rnd2(), zRow, 5.6 + rnd2() * 1.4, 6, 3.1 + rnd2() * 1.6, (r + k) % 3 === 2 ? 1 : 0, k % 2 ? Math.PI : 0)
+      }
+      if (r % 2 === 0) clothesline(-138, zRow + 4.6, 6)
+      if (r % 3 === 1) { deco({ kind: 'scooter', x: -151, z: zRow + 7, ry: rnd2() * 6.28 }); scooterBox(-151, zRow + 7) }
+      if (r === 4) { deco({ kind: 'cart', x: -144, z: zRow + 7, ry: 1.1, collider: true }); box(-145.2, 0, zRow + 5.6, -142.8, 1.5, zRow + 8.4) }
     }
-    for (let i = 0; i < 1900; i++) { // small grass — walk-through, densifies the floor
-      const a = rnd2() * Math.PI * 2, rr = 100 + Math.sqrt(rnd2()) * 500
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z) || distC(x, z) > 560) continue
-      deco({ kind: 'grass', x, z, s: 0.55 + rnd2() * 0.7, ry: rnd2() * 6.28 })
+    deco({ kind: 'lamp', x: -140, z: -100, ry: Math.PI / 2 })
+    deco({ kind: 'lamp', x: -140, z: -170, ry: -Math.PI / 2 })
+    // Vrindavan Garden — the west green lung between the colony and Market Exit road
+    for (let i = 0; i < 12; i++) {
+      const x = -154 + (i % 6) * 5.5 + rnd2() * 2, z = -176 - Math.floor(i / 6) * 8 - rnd2() * 4
+      deco({ kind: 'tree', x, z, s: 1 + rnd2() * 0.7, variant: i % 2 })
+      box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
     }
-    for (let i = 0; i < 1150; i++) { // boulders
-      const a = rnd2() * Math.PI * 2, rr = 100 + Math.sqrt(rnd2()) * 460
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z)) continue
-      deco({ kind: 'boulder', x, z, s: 0.9 + rnd2() * 0.9, ry: rnd2() * 6.28 })
-      box(x - 0.9, 0, z - 0.9, x + 0.9, 1.4, z + 0.9)
-    }
-    for (let i = 0; i < 200; i++) { // ferns
-      const a = rnd2() * Math.PI * 2, rr = 110 + Math.sqrt(rnd2()) * 380
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z)) continue
-      deco({ kind: 'fern', x, z, s: 0.7 + rnd2() * 0.6, ry: rnd2() * 6.28 })
-    }
-    for (let i = 0; i < 30; i++) { // fallen logs
-      const a = rnd2() * Math.PI * 2, rr = 130 + rnd2() * 280
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z)) continue
-      deco({ kind: 'log', x, z, s: 2.2 + rnd2() * 2.4, ry: rnd2() * 6.28 })
-    }
-    for (let i = 0; i < 38; i++) { // stumps
-      const a = rnd2() * Math.PI * 2, rr = 120 + rnd2() * 320
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z)) continue
-      deco({ kind: 'stump', x, z, s: 0.8 + rnd2() * 0.5, ry: rnd2() * 6.28 })
+    for (let i = 0; i < 4; i++) { const bx = -152 + i * 7, bz = -182 - (i % 2) * 6; deco({ kind: 'bench', x: bx, z: bz, ry: rnd2() * 3 }); benchBox(bx, bz) }
+    for (let i = 0; i < 4; i++) { const px = -152 + i * 7, pz = -180 + (i % 2) * 8; deco({ kind: 'planter', x: px, z: pz }); planterBox(px, pz) }
+    deco({ kind: 'teaKettle', x: -132, z: -186, ry: 0.6 }); kettleBox(-132, -186)
+    landmarks.push({ name: 'Vrindavan Garden', x: -148, z: -183 })
+    for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: -152 + i * 7 + rnd2() * 4, z: -178 - rnd2() * 10, ry: rnd2() * 6.28, variant: (i + 2) % 6, sign: rnd2() < 0.4 ? SIGNS[(i * 3 + 1) % SIGNS.length] : undefined })
+
+    // ---- WEST JUNGLE RING (x -196..-176, z -84..-568) — Vanodyan proper ----
+    // v66.1 — trees/boulders keep off the extended cross roads (±halfW+2.5) so the
+    // full-map traffic lanes stay clear (route-check verified)
+    const onCrossRoad = (z: number) => CROSS_ROADS.some(cr => Math.abs(z - cr.z) < cr.halfW + 2.5)
+    // v66.1 — carve jungle clearings along the free-roam cow trails so the route
+    // checker's collider clears hold and the cows walk a visible path
+    const nearSeg = (px: number, pz: number, ax: number, az: number, bx: number, bz: number, r: number) => {
+      const vx = bx - ax, vz = bz - az
+      const t = Math.max(0, Math.min(1, ((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz)))
+      return Math.hypot(px - (ax + vx * t), pz - (az + vz * t)) < r
     }
 
-    // ---- Kabristan graveyard — tombstones + dead trees in the deep wild (v69) ----
-    for (let i = 0; i < 48; i++) {
-      const gx = GRAVE_X + (rnd2() - 0.5) * 168, gz = GRAVE_Z + (rnd2() - 0.5) * 116
-      deco({ kind: 'grave', x: gx, z: gz, s: 0.85 + rnd2() * 0.5, ry: (rnd2() - 0.5) * 0.9, variant: Math.floor(rnd2() * 3) })
-      box(gx - 0.5, 0, gz - 0.28, gx + 0.5, 1.15, gz + 0.28)
+    // ---- v68 VANODYAN DEEP — shared placement data (rings + deep south keep clear) ----
+    // River: E-W water strip across the deep jungle, rendered in world.ts (z 678..696).
+    const RIVER_Z = -687
+    const inRiver = (z: number, pad = 13) => Math.abs(z - RIVER_Z) < pad
+    // Dirt trail: arena south gate → Bhayanak bridge (x 66) → the lost camp clearing.
+    const TRAIL: Array<[number, number]> = [[0, -576], [10, -602], [30, -632], [52, -662], [66, -687], [66, -722], [58, -748]]
+    const onTrail = (x: number, z: number, r = 5) => {
+      for (let i = 0; i < TRAIL.length - 1; i++) {
+        if (nearSeg(x, z, TRAIL[i][0], TRAIL[i][1], TRAIL[i + 1][0], TRAIL[i + 1][1], r)) return true
+      }
+      return false
     }
-    for (let i = 0; i < 14; i++) {
-      const gx = GRAVE_X + (rnd2() - 0.5) * 210, gz = GRAVE_Z + (rnd2() - 0.5) * 150
-      deco({ kind: 'deadTree', x: gx, z: gz, s: 1.1 + rnd2() * 0.7, ry: rnd2() * 6.28 })
-      box(gx - 0.35, 0, gz - 0.35, gx + 0.35, 4, gz + 0.35)
+    // South ridge mountains + two mid-field spires (colliders box the cone base).
+    const MOUNTAINS: Array<[number, number, number, number]> = [
+      [-170, -764, 26, 46], [-126, -780, 30, 54], [-80, -756, 22, 38], [-36, -782, 28, 50],
+      [10, -764, 24, 42], [58, -784, 30, 54], [106, -758, 22, 40], [152, -778, 26, 48], [186, -762, 12, 26],
+      [-120, -640, 9, 20], [142, -714, 11, 24],
+    ]
+    const nearMountain = (x: number, z: number, pad = 5) =>
+      MOUNTAINS.some(([mx, mz, ms]) => Math.hypot(x - mx, z - mz) < ms + pad)
+    const nearRim = (x: number, z: number, pad = 6) =>
+      VANODYAN_RIM.some(([mx, mz, ms]) => Math.hypot(x - mx, z - mz) < ms + pad)
+    const nearHills = (x: number, z: number, pad = 5) =>
+      VANODYAN_HILLS.some(([mx, mz, ms]) => Math.hypot(x - mx, z - mz) < ms + pad)
+    // Wild respawn points (server mirrors these) + trail camp — trees keep clear.
+    const WILD_CLEAR: Array<[number, number]> = [[66, -706], [-60, -620], [12, -560], [-166, -240], [166, -360], [140, -500], [-84, -670], [0, -640], [-240, -240]] // v69 — +west-wing wild release
+    const nearWildClear = (x: number, z: number, r = 4.5) => WILD_CLEAR.some(([cx, cz]) => Math.hypot(x - cx, z - cz) < r)
+    const deepSkip = (x: number, z: number) =>
+      inRiver(z) || onTrail(x, z) || nearMountain(x, z) || nearRim(x, z) || nearHills(x, z) || nearWildClear(x, z) ||
+      onLane(z, 3.2) ||
+      nearSeg(x, z, 8, -606, 24, -634, 3) || nearSeg(x, z, 58, -716, 72, -738, 3) // deep cows
+    // v71 — ZONE B band: distance OUTSIDE the city rectangle (|x|<170, z -578..44).
+    // 0 inside, growing outward; the countryside fringe lives at 2..~96 where the
+    // wild thins into fields and farms before the deep jungle takes over.
+    const distOut = (x: number, z: number) => {
+      const dx = Math.max(Math.abs(x) - 170, 0)
+      const dz = Math.max(z - 44, 0) + Math.max(-578 - z, 0)
+      return Math.hypot(dx, dz)
+    }
+    // v71 — deterministic position hash for density thinning WITHOUT consuming the
+    // rnd2() stream (keeps every downstream placement — graveyard, graves, crypts —
+    // byte-identical to v69/v70).
+    const posHash = (x: number, z: number) => {
+      const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453
+      return s - Math.floor(s)
+    }
+    // v71 — countryside tracks keep-clear (vegetation/props stay off the paths)
+    const onTrack = (x: number, z: number, r = 6) => {
+      for (const track of COUNTRYSIDE_TRACKS) {
+        for (let i = 0; i < track.length - 1; i++) {
+          if (nearSeg(x, z, track[i][0], track[i][1], track[i + 1][0], track[i + 1][1], r)) return true
+        }
+      }
+      return false
+    }
+    // v68 — full-map vehicle lanes that cross the jungle rings (bus2 crosser + the
+    // far-lane autos). Cross streets themselves are already handled by onCrossRoad.
+    const LANES = [-75.5, -195.5, -452]
+    const onLane = (z: number, r: number) => LANES.some(lz => Math.abs(z - lz) < r)
+    for (let i = 0; i < 84; i++) {
+      const x = -194 + rnd2() * 18
+      const z = -86 - rnd2() * 706
+      if (onCrossRoad(z) || onLane(z, 2.5)) continue
+      if (nearSeg(x, z, -191, -120, -185, -158, 3)) continue // west cow trail clearing
+      if (deepSkip(x, z)) continue // v68 — river / trail / mountains / wild clearings
+      jtree(x, z, rnd2())
+    }
+    for (let i = 0; i < 20; i++) { const bx = -193 + rnd2() * 15, bz = -90 - rnd2() * 700; if (!deepSkip(bx, bz) && !onCrossRoad(bz) && !onLane(bz, 3.2)) boulder(bx, bz, 0.9 + rnd2() * 0.8) }
+    for (let i = 0; i < 5; i++) { const bx = -190 + rnd2() * 8, bz = -150 - i * 70; deco({ kind: 'bench', x: bx, z: bz, ry: rnd2() * 3 }); benchBox(bx, bz) } // trail rest stops
+
+    // ---- EAST EXTENSION (x 124..158) — GRAND MALL DISTRICT ----
+    // (the east ring road occupies x 158..174; the district fits between it and the city)
+    // VoteChor Grand Mall — the biggest glass box in the city, facing the Plaza Cross Road
+    deco({ kind: 'building', x: 141, z: -122, w: 26, d: 26, h: 17, color: '#7e9bb0', variant: 2, sign: 'VOTECHOR GRAND MALL' })
+    box(128, 0, -135, 154, 17, -109)
+    landmarks.push({ name: 'VoteChor Grand Mall', x: 141, z: -122 })
+    // mall plaza: food court + planters + benches + lamps + shoppers
+    for (let i = 0; i < 3; i++) {
+      const sx = 130 + i * 5.4, sz = -103
+      deco({ kind: stallKinds[i % 3], x: sx, z: sz, ry: Math.PI, variant: (i + 3) % 6, sign: SHOPS[(i + 2) % SHOPS.length], collider: true })
+      solidBox(sx, sz, 2.6, 2.6, 2.4)
+    }
+    for (let i = 0; i < 4; i++) { const px = 128 + (i % 2) * 26, pz = -92 - Math.floor(i / 2) * 8; deco({ kind: 'planter', x: px, z: pz }); planterBox(px, pz) }
+    for (let i = 0; i < 3; i++) { const bx = 132 + i * 7; deco({ kind: 'bench', x: bx, z: -99, ry: Math.PI }); benchBox(bx, -99) }
+    deco({ kind: 'lamp', x: 127, z: -96 }); deco({ kind: 'lamp', x: 153, z: -96 })
+    // parking lot — scooter rows + a delivery cart, east face of the mall
+    for (let i = 0; i < 6; i++) { deco({ kind: 'scooter', x: 130 + (i % 3) * 3.2, z: -140 - Math.floor(i / 3) * 3.4, ry: Math.PI / 2 + rnd2() * 0.2 }); scooterBox(130 + (i % 3) * 3.2, -140 - Math.floor(i / 3) * 3.4) }
+    for (let i = 0; i < 6; i++) deco({ kind: 'crowd', x: 128 + i * 4.5 + rnd2() * 3, z: -96 - rnd2() * 10, ry: rnd2() * 6.28, variant: (i + 1) % 6, sign: rnd2() < 0.35 ? SIGNS[(i * 2 + 5) % SIGNS.length] : undefined })
+    // Committee Square Mall — smaller, across the bazaar lane to the south
+    deco({ kind: 'building', x: 141, z: -178, w: 24, d: 22, h: 14, color: '#a3b18a', variant: 1, sign: 'COMMITTEE SQUARE MALL' })
+    box(129, 0, -189, 153, 14, -167)
+    landmarks.push({ name: 'Committee Square Mall', x: 141, z: -178 })
+    for (let i = 0; i < 4; i++) { const px = 131 + (i % 2) * 20, pz = -160 - (i % 2) * 4; deco({ kind: 'planter', x: px, z: pz }); planterBox(px, pz) }
+    for (let i = 0; i < 3; i++) deco({ kind: 'crowd', x: 130 + i * 7 + rnd2() * 3, z: -158 - rnd2() * 6, ry: rnd2() * 6.28, variant: (i + 4) % 6 })
+
+    // ---- EAST EXTENSION (x 124..158, z -290..-447) — JAN KALYAN COLONY ----
+    landmarks.push({ name: 'Jan Kalyan Colony', x: 140, z: -360 })
+    for (let r = 0; r < 5; r++) {
+      const zRow = -310 - r * 15
+      for (let k = 0; k < 4; k++) {
+        if (k === 2) continue
+        home(128 + k * 7.4 + rnd2(), zRow, 5.8 + rnd2() * 1.4, 6, 3.1 + rnd2() * 1.5, (r + k) % 3, k % 2 ? Math.PI : 0)
+      }
+      if (r % 2 === 1) clothesline(146, zRow + 4.6, 7)
+    }
+    // colony market lane: two stalls + kettle
+    for (let i = 0; i < 2; i++) {
+      const sx = 136 + i * 6, sz = -330 - i * 26
+      deco({ kind: i % 2 ? 'cart' : 'stall', x: sx, z: sz, ry: -Math.PI / 2, variant: (i + 1) % 6, sign: SHOPS[(i + 11) % SHOPS.length], collider: true })
+      solidBox(sx, sz, 2.6, 2.6, 2.4)
+    }
+    deco({ kind: 'teaKettle', x: 150, z: -368, ry: Math.PI }); kettleBox(150, -368)
+    deco({ kind: 'lamp', x: 140, z: -300, ry: Math.PI / 2 })
+    deco({ kind: 'lamp', x: 140, z: -390, ry: -Math.PI / 2 })
+    for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: 130 + i * 6.5 + rnd2() * 4, z: -320 - rnd2() * 60, ry: rnd2() * 6.28, variant: (i + 3) % 6 })
+
+    // ---- EAST EXTENSION (z -457..-545) — AAM BAGICHA mango grove ----
+    landmarks.push({ name: 'Aam Bagicha', x: 140, z: -500 })
+    for (let r = 0; r < 4; r++) {
+      for (let k = 0; k < 4; k++) {
+        const x = 130 + k * 7 + (r % 2) * 2, z = -466 - r * 18
+        deco({ kind: 'tree', x, z, s: 1.2 + rnd2() * 0.5, variant: (r + k) % 2 })
+        box(x - 0.35, 0, z - 0.35, x + 0.35, 3, z + 0.35)
+      }
+    }
+    for (let i = 0; i < 3; i++) { const bx = 132 + i * 8; deco({ kind: 'bench', x: bx, z: -474, ry: 0 }); benchBox(bx, -474) }
+    deco({ kind: 'teaKettle', x: 150, z: -470, ry: -0.5 }); kettleBox(150, -470)
+
+    // ---- EAST JUNGLE RING (x 176..196, z -84..-792) ----
+    for (let i = 0; i < 84; i++) {
+      const x = 178 + rnd2() * 16
+      const z = -86 - rnd2() * 706
+      if (onCrossRoad(z) || onLane(z, 2.5)) continue
+      if (nearSeg(x, z, 191, -320, 186, -360, 3)) continue // east cow trail clearing
+      if (deepSkip(x, z)) continue // v68 — river / trail / mountains / wild clearings
+      jtree(x, z, rnd2())
+    }
+    for (let i = 0; i < 20; i++) { const bx = 179 + rnd2() * 15, bz = -90 - rnd2() * 700; if (!deepSkip(bx, bz) && !onCrossRoad(bz) && !onLane(bz, 3.2)) boulder(bx, bz, 0.9 + rnd2() * 0.8) }
+    // jungle pockets inside the checkpoint corridor (enclosed by the extended fences)
+    for (let i = 0; i < 10; i++) jtree(-192 + rnd2() * 14, -214 - rnd2() * 52, rnd2())
+    for (let i = 0; i < 10; i++) jtree(180 + rnd2() * 14, -214 - rnd2() * 52, rnd2())
+
+    // ---- v68 VANODYAN DEEP (z -600..-795) — the wild south ----
+    // Dense forest across the full width past the parliament arena, carved by the
+    // dirt trail, the river band, the mountain ridge and the wild clearings.
+    // v68b — user asked for a BIGGER, DEEPER jungle: canopy doubled (120→250),
+    // undergrowth shrubs added (walk-through, no colliders), more boulders.
+    for (let i = 0; i < 250; i++) {
+      const x = -192 + rnd2() * 384
+      const z = -600 - rnd2() * 194
+      if (deepSkip(x, z)) continue
+      jtree(x, z, rnd2())
+    }
+    for (let i = 0; i < 80; i++) {
+      const x = -192 + rnd2() * 384
+      const z = -600 - rnd2() * 194
+      if (deepSkip(x, z)) continue
+      deco({ kind: 'shrub', x, z, s: 0.55 + rnd2() * 0.75, ry: rnd2() * 6.28 })
+    }
+    for (let i = 0; i < 34; i++) {
+      const x = -190 + rnd2() * 380
+      const z = -600 - rnd2() * 190
+      if (deepSkip(x, z)) continue
+      boulder(x, z, 0.9 + rnd2() * 0.9)
+    }
+    // mountain ridge + spires — cones with base colliders (the wall is behind them)
+    for (const [mx, mz, ms, mh] of MOUNTAINS) {
+      deco({ kind: 'mountain', x: mx, z: mz, s: ms, h: mh, ry: rnd2() * 6.28 })
+      box(mx - ms * 0.72, 0, mz - ms * 0.72, mx + ms * 0.72, mh * 0.5, mz + ms * 0.72)
+    }
+    // v70 — the Vanodyan Rim ring: 360° skyline behind the jungle. Darker granite
+    // (v60b — the pale tint rendered invisible against the hazy horizon), fog
+    // immune + cull exempt, base colliders; narrow passes between peaks stay walkable.
+    // v71 — VARIED SILHOUETTES (the user's "not a row of identical cones"): the
+    // foothill row mixes broad domes, elongated ridge masses and a few sharp
+    // peaks; the high row is sharp spikes + jagged multi-summit clusters. Tints
+    // jitter per-peak via the index hash (no shared PRNG state).
+    let rimIdx = 0
+    for (const [mx, mz, ms, mh] of VANODYAN_RIM) {
+      const vh = rimHash(rimIdx * 17 + 5)
+      const high = rimIdx >= 44 // first 44 = foothill ridge, then the snowcap row
+      const variant = high ? (vh < 0.55 ? 2 : 0) : (vh < 0.38 ? 1 : vh < 0.74 ? 3 : 0)
+      const tint = ['#565e4e', '#4e5748', '#5c6350', '#515a49'][Math.floor(vh * 4)]
+      deco({ kind: 'mountain', x: mx, z: mz, s: ms, h: mh, ry: rnd2() * 6.28, color: tint, variant, cw: 0 })
+      box(mx - ms * 0.72, 0, mz - ms * 0.72, mx + ms * 0.72, mh * 0.5, mz + ms * 0.72)
+      rimIdx++
+    }
+    // v60b — the green foothill hills ring between the jungle and the rim
+    // (v71 — rounded dome silhouettes + tint jitter so the range breathes)
+    let hillIdx = 0
+    for (const [mx, mz, ms, mh] of VANODYAN_HILLS) {
+      const vh = rimHash(hillIdx * 23 + 91)
+      deco({ kind: 'mountain', x: mx, z: mz, s: ms, h: mh, ry: rnd2() * 6.28, color: ['#46593c', '#40543a', '#4d5f41'][Math.floor(vh * 3)], variant: vh < 0.72 ? 1 : 0, cw: 1 })
+      box(mx - ms * 0.72, 0, mz - ms * 0.72, mx + ms * 0.72, mh * 0.5, mz + ms * 0.72)
+      hillIdx++
+    }
+    // the lost camp — crates + a bench at the trail's river-bend clearing
+    deco({ kind: 'crate', x: 61.5, z: -704, ry: 0.4, collider: true }); crateBoxS(61.5, -704, 1)
+    deco({ kind: 'crate', x: 70, z: -704, ry: 1.2, collider: true }); crateBoxS(70, -704, 1)
+    deco({ kind: 'bench', x: 66, z: -701, ry: 0 }); benchBox(66, -701)
+    // bridge posts (world.ts renders the decks; colliders keep players on the planks)
+    for (const bx of [-84, 66]) {
+      for (const pz of [-695, -687, -679]) {
+        for (const px of [bx - 2.15, bx + 2.15]) box(px - 0.17, 0, pz - 0.17, px + 0.17, 2.6, pz + 0.17)
+      }
+    }
+    // riverbank boulders (small, decorative — no collider so fording stays open)
+    for (let i = 0; i < 6; i++) deco({ kind: 'rock', x: -150 + i * 60 + rnd2() * 20, z: (i % 2 ? -673 : -701) + rnd2() * 2, s: 0.5 + rnd2() * 0.4, ry: rnd2() * 6.28 })
+    landmarks.push({ name: 'Vanodyan Deep', x: 0, z: -640 })
+    landmarks.push({ name: 'Bhayanak Nadi (River)', x: -84, z: -687 })
+    landmarks.push({ name: 'Dakshin Parvat Ridge', x: 0, z: -770 })
+
+    // ---- new-area loot (exploration rewards; tokens are bonus spawns beyond the 12 needed)
+    items.push(
+      { id: 'X_tok_1', type: 'token', x: -186, y: 1, z: -140 },   // deep west jungle
+      { id: 'X_tok_2', type: 'token', x: 186, y: 1, z: -420 },    // deep east jungle
+      { id: 'X_chai_1', type: 'chai', x: 26, y: 1, z: 30 },       // north jungle edge
+      { id: 'X_bot_1', type: 'bottle', x: -140, y: 1, z: -184 },  // Vrindavan Garden
+      { id: 'X_snack_1', type: 'snack', x: 144, y: 1, z: -97 },   // mall food court
+      { id: 'X_aid_1', type: 'firstaid', x: 156, y: 1, z: -352 }, // Jan Kalyan Colony
+      { id: 'X_aid_2', type: 'firstaid', x: -182, y: 1, z: -300 },// west jungle trail
+      { id: 'X_chai_2', type: 'chai', x: 150, y: 1, z: -474 },    // Aam Bagicha
+      { id: 'X_joke_1', type: 'joke', x: 152, y: 1, z: -540 },    // grove depths
+      // v68 — Vanodyan Deep loot (exploration rewards in the wild south)
+      { id: 'Y_tok_1', type: 'token', x: -150, y: 1, z: -640 },   // deep west jungle
+      { id: 'Y_tok_2', type: 'token', x: 120, y: 1, z: -730 },    // mountain shadow east
+      { id: 'Y_aid_1', type: 'firstaid', x: 66, y: 1, z: -712 },  // lost camp
+      { id: 'Y_bottle_1', type: 'bottle', x: -84, y: 1, z: -672 },// river north bank
+      { id: 'Y_joke_1', type: 'joke', x: 46, y: 1, z: -750 },     // ridge overlook
+      // v69 — the round wild: graveyard + ring-jungle exploration loot
+      { id: 'G_tok_1', type: 'token', x: -257, y: 1, z: -318 },   // among the Kabristan graves
+      { id: 'G_aid_1', type: 'firstaid', x: -275, y: 1, z: -336 },
+      { id: 'G_bot_1', type: 'bottle', x: -239, y: 1, z: -304 },  // by the crypt
+      { id: 'R_tok_1', type: 'token', x: 300, y: 1, z: -379 },    // east wing heart
+      { id: 'R_tok_2', type: 'token', x: -360, y: 1, z: -180 },   // west wing deep
+      { id: 'R_chai_1', type: 'chai', x: -330, y: 1, z: -100 },   // NW forgotten graves
+      { id: 'R_aid_1', type: 'firstaid', x: 30, y: 1, z: 62 },    // far north wild
+      { id: 'R_bot_1', type: 'bottle', x: 300, y: 1, z: -620 },   // SE forgotten graves
+    )
+    // ---- v69 ROUND WORLD — the jungle that SURROUNDS the city ----
+    // Everything inside the world disc that is not city, road, river, trail,
+    // mountains, clearing or graveyard becomes one continuous wild annulus:
+    // big canopy trees, a few ancient giants, small grass tufts and boulders.
+    {
+      const inCity = (x: number, z: number) => Math.abs(x) < 170 && z < 44 && z > -578
+      const inOldStrip = (x: number, z: number) => Math.abs(x) > 173 && Math.abs(x) < 199 && z < -83 && z > -795
+      const nearRingRoad = (x: number, z: number, r = 9) => Math.abs(Math.abs(x) - 166) < r && z < 44 && z > -795
+      const nearGrave = (x: number, z: number, r = 0) => Math.hypot(x - GRAVEYARD.x, z - GRAVEYARD.z) < GRAVEYARD.r + r
+      const MINI_GRAVES: Array<[number, number]> = [[300, -620], [-30, 62], [-330, -100]]
+      const nearMini = (x: number, z: number, r = 0) => MINI_GRAVES.some(([cx, cz]) => Math.hypot(x - cx, z - cz) < 26 + r)
+      const discReject = (x: number, z: number) =>
+        inCity(x, z) || inOldStrip(x, z) || nearRingRoad(x, z) ||
+        onCrossRoad(z) || onLane(z, 2.5) || deepSkip(x, z) ||
+        onTrack(x, z, 5.5) || // v71 — countryside dirt tracks stay walkable
+        nearGrave(x, z, 2) || nearMini(x, z, 2)
+      // v71 — ZONE B/C/D DENSITY GRADIENT (no rnd2 consumption — position hash):
+      // countryside fringe (2..96m outside the city) thins the canopy into
+      // farmland; above r>430 from the disc center the jungle sparsens into the
+      // green hills so slopes read as open high ground (v72 — hills now at 470+).
+      const thinBand = (x: number, z: number, strength: number) => {
+        const bo = distOut(x, z)
+        if (bo < 96 && posHash(x, z) < strength * (1 - bo / 100)) return true
+        const dcen = Math.hypot(x - WORLD_DISC.cx, z - WORLD_DISC.cz)
+        if (dcen > 430 && posHash(x + 53.7, z - 71.3) < 0.5) return true
+        return false
+      }
+      // canopy — sqrt-distributed polar sampling over the whole disc
+      // v72 — the disc doubled in area: attempts 1750 → 2600 keep the wild
+      // corridor (96..430 m out) as dense as v61 while the outer band thins.
+      for (let i = 0; i < 2600; i++) {
+        const a = rnd2() * Math.PI * 2
+        const rr = Math.sqrt(rnd2()) * (WORLD_DISC.r - 6)
+        const x = WORLD_DISC.cx + Math.cos(a) * rr
+        const z = WORLD_DISC.cz + Math.sin(a) * rr
+        if (discReject(x, z)) continue
+        if (thinBand(x, z, 0.78)) continue
+        jtree(x, z, 0.4 + rnd2() * 1.3) // 1.55..2.85 — visibly bigger wild trees
+      }
+      // ancient giants — massive canopy elders scattered through the ring
+      // (v71 — none in the countryside fringe; elders belong to the deep wild)
+      let giants = 0
+      for (let i = 0; i < 520 && giants < 46; i++) {
+        const a = rnd2() * Math.PI * 2
+        const rr = Math.sqrt(rnd2()) * (WORLD_DISC.r - 30)
+        const x = WORLD_DISC.cx + Math.cos(a) * rr
+        const z = WORLD_DISC.cz + Math.sin(a) * rr
+        if (discReject(x, z)) continue
+        if (distOut(x, z) < 64) continue
+        jtree(x, z, 1.5 + rnd2() * 0.7) // 2.65..3.35
+        giants++
+      }
+      // small grass + undergrowth tufts everywhere in the wild (v72 — scaled up
+      // for the bigger disc)
+      for (let i = 0; i < 1900; i++) {
+        const a = rnd2() * Math.PI * 2
+        const rr = Math.sqrt(rnd2()) * (WORLD_DISC.r - 4)
+        const x = WORLD_DISC.cx + Math.cos(a) * rr
+        const z = WORLD_DISC.cz + Math.sin(a) * rr
+        if (discReject(x, z)) continue
+        deco({ kind: 'shrub', x, z, s: 0.3 + rnd2() * 0.5, ry: rnd2() * 6.28 })
+      }
+      // scattered boulders (v71 — thinned in the farmland fringe, thick in the wild)
+      for (let i = 0; i < 1150; i++) {
+        const a = rnd2() * Math.PI * 2
+        const rr = Math.sqrt(rnd2()) * (WORLD_DISC.r - 8)
+        const x = WORLD_DISC.cx + Math.cos(a) * rr
+        const z = WORLD_DISC.cz + Math.sin(a) * rr
+        if (discReject(x, z)) continue
+        if (distOut(x, z) < 60 && posHash(x - 31.4, z + 17.9) < 0.55) continue
+        boulder(x, z, 0.8 + rnd2() * 1.1)
+      }
+      // ---- VANODYAN KABRISTAN — the graveyard in the west jungle ----
+      const gx = GRAVEYARD.x, gz = GRAVEYARD.z
+      landmarks.push({ name: 'Vanodyan Kabristan (Graveyard)', x: gx, z: gz })
+      let gid = 0
+      for (let row = 0; row < 5; row++) {
+        for (let col = 0; col < 7; col++) {
+          if ((row * 7 + col) % 9 === 4) continue // broken rows — some graves missing
+          const x = gx - 18 + col * 6 + (rnd2() - 0.5) * 1.6
+          const z = gz - 20 + row * 9 + (rnd2() - 0.5) * 2.2
+          deco({ kind: 'grave', x, z, s: 0.9 + rnd2() * 0.5, ry: (rnd2() - 0.5) * 0.5, variant: (gid + row) % 3 })
+          gid++
+        }
+      }
+      // three brick crypts on the clearing edge
+      for (const [cx2, cz2, ry2] of [[gx - 24, gz + 26, 0.4], [gx + 22, gz - 28, -0.9], [gx + 14, gz + 30, 0.1]] as const) {
+        deco({ kind: 'crypt', x: cx2, z: cz2, ry: ry2 })
+        box(cx2 - 3, 0, cz2 - 2.4, cx2 + 3, 3.6, cz2 + 2.4)
+      }
+      // dead trees ringing the clearing — bare branches against the sky
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * 6.28 + rnd2() * 0.5
+        const x = gx + Math.cos(a) * (GRAVEYARD.r - 7)
+        const z = gz + Math.sin(a) * (GRAVEYARD.r - 7)
+        deco({ kind: 'deadTree', x, z, s: 1 + rnd2() * 0.7, ry: rnd2() * 6.28 })
+        box(x - 0.35, 0, z - 0.35, x + 0.35, 4.2, z + 0.35)
+      }
+      // forgotten grave clusters in the far wild (east wing, far north, NW wing)
+      for (const [mx2, mz2] of MINI_GRAVES) {
+        for (let k = 0; k < 8; k++) {
+          const a = (k / 8) * 6.28
+          const x = mx2 + Math.cos(a) * (7 + rnd2() * 5)
+          const z = mz2 + Math.sin(a) * (7 + rnd2() * 5)
+          deco({ kind: 'grave', x, z, s: 0.8 + rnd2() * 0.4, ry: rnd2() * 6.28, variant: k % 3 })
+        }
+        deco({ kind: 'deadTree', x: mx2, z: mz2, s: 1.2, ry: rnd2() * 6.28 })
+        box(mx2 - 0.35, 0, mz2 - 0.35, mx2 + 0.35, 4.5, mz2 + 0.35)
+        landmarks.push({ name: 'Forgotten Graves', x: mx2, z: mz2 })
+      }
     }
 
-    // ---- rocky approach to the hills: scree + slope-dead bands (Zone D fringe) ----
-    for (let i = 0; i < 90; i++) {
-      const a = rnd2() * Math.PI * 2, rr = 445 + rnd2() * 110
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      deco({ kind: 'boulder', x, z, s: 0.7 + rnd2() * 1.1, ry: rnd2() * 6.28 })
-    }
-    for (let i = 0; i < 40; i++) {
-      const a = rnd2() * Math.PI * 2, rr = 455 + rnd2() * 90
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      deco({ kind: 'deadTree', x, z, s: 0.9 + rnd2() * 0.6, ry: rnd2() * 6.28 })
-    }
+    // ================= v71 OPEN-WORLD GRADIENT =================
+    // ZONE B countryside farms + tracks · ZONE C jungle-floor variety ·
+    // ZONE D foothill scree · ZONE E the Far Range backdrop. All placement runs
+    // AFTER the v69 annulus so the existing rnd2() stream (and every graveyard /
+    // grave / crypt coordinate) stays byte-identical.
+    {
+      const MINI = [[300, -620], [-30, 62], [-330, -100]]
+      const nearMini71 = (x: number, z: number, r = 0) => MINI.some(([cx, cz]) => Math.hypot(x - cx, z - cz) < 30 + r)
+      const hillBase = (x: number, z: number) => VANODYAN_HILLS.some(([hx, hz, hs]) => Math.hypot(x - hx, z - hz) < hs * 0.75)
+      // --- ZONE B — THE COUNTRYSIDE: crop fields, farm huts, hay, fences, wells,
+      // scarecrows along the dirt tracks that continue the ring roads outward.
+      const ruralReject = (x: number, z: number, pad = 0) =>
+        distOut(x, z) < 3 || distOut(x, z) > 96 ||
+        Math.hypot(x - WORLD_DISC.cx, z - WORLD_DISC.cz) > WORLD_DISC.r - 24 ||
+        onCrossRoad(z) || onLane(z, 3.5) || onTrack(x, z, 6 + pad) ||
+        (Math.abs(Math.abs(x) - 166) < 12 && z < 44) || // ring roads
+        inRiver(z) || onTrail(x, z) || nearRim(x, z, 8) || nearHills(x, z, 8) ||
+        nearWildClear(x, z, 6) || nearMini71(x, z, 2) ||
+        Math.hypot(x - GRAVEYARD.x, z - GRAVEYARD.z) < GRAVEYARD.r + 14 ||
+        (Math.abs(x) < 46 && z < -564) // keep the arena exit + south trail head open
+      const FIELDS: Array<[number, number, number]> = []
+      for (let i = 0; i < 420 && FIELDS.length < 14; i++) {
+        const x = -250 + rnd2() * 500
+        const z = -640 + rnd2() * 750
+        if (ruralReject(x, z, 10)) continue
+        if (FIELDS.some(([fx, fz]) => Math.hypot(x - fx, z - fz) < 30)) continue
+        const s = 6 + rnd2() * 4
+        FIELDS.push([x, z, s])
+        deco({ kind: 'field', x, z, s, ry: rnd2() * 6.28, variant: Math.floor(rnd2() * 3) })
+      }
+      for (const [fx, fz, fs] of FIELDS) {
+        // farm hut on one field edge (30% derelict)
+        if (rnd2() < 0.55) {
+          const hx = fx + (rnd2() < 0.5 ? -1 : 1) * (fs + 6)
+          const hz = fz + (rnd2() - 0.5) * fs
+          if (!ruralReject(hx, hz, 4)) {
+            deco({ kind: 'hut', x: hx, z: hz, ry: Math.floor(rnd2() * 4) * 1.5708, variant: rnd2() < 0.3 ? 1 : 0 })
+            box(hx - 2.4, 0, hz - 2, hx + 2.4, 2.6, hz + 2)
+          }
+        }
+        // hay bales
+        for (let k = 0; k < 2; k++) {
+          if (rnd2() < 0.5) continue
+          const bx = fx + (rnd2() - 0.5) * (fs + 8)
+          const bz = fz + (rnd2() - 0.5) * (fs + 8)
+          if (ruralReject(bx, bz, 2)) continue
+          deco({ kind: 'hay', x: bx, z: bz, ry: rnd2() * 6.28, s: 0.85 + rnd2() * 0.4 })
+        }
+        // fence runs on two opposite field edges
+        const fen = Math.floor(rnd2() * 4)
+        for (const side of [0, 2]) {
+          const ang = (fen + side) * 1.5708
+          const px = fx + Math.cos(ang) * (fs + 2.5)
+          const pz = fz + Math.sin(ang) * (fs + 2.5)
+          if (ruralReject(px, pz, 2)) continue
+          deco({ kind: 'fence', x: px, z: pz, ry: ang + 1.5708, w: fs * 1.6 })
+        }
+        // scarecrow in 40% of the fields
+        if (rnd2() < 0.4) {
+          const sx2 = fx + (rnd2() - 0.5) * fs
+          const sz2 = fz + (rnd2() - 0.5) * fs
+          if (!ruralReject(sx2, sz2, 2)) deco({ kind: 'scarecrow', x: sx2, z: sz2, ry: rnd2() * 6.28 })
+        }
+      }
+      // three standalone wells on the fringe
+      let wells = 0
+      for (let i = 0; i < 120 && wells < 3; i++) {
+        const x = -240 + rnd2() * 480
+        const z = -630 + rnd2() * 740
+        if (ruralReject(x, z, 6)) continue
+        if (FIELDS.some(([fx, fz]) => Math.hypot(x - fx, z - fz) < 16)) continue
+        deco({ kind: 'well', x, z, ry: rnd2() * 6.28 })
+        box(x - 1, 0, z - 1, x + 1, 1.1, z + 1)
+        wells++
+      }
+      landmarks.push({ name: 'Vanodyan Countryside', x: FIELDS[0]?.[0] ?? 190, z: FIELDS[0]?.[1] ?? -379 })
 
-    // ---- the mountain rim — hills, snowcap rim, hazy far range ----
-    // NO base box colliders: the analytic heightfield (mountain-field.ts) is the
-    // collision surface — exactly the geometry the renderer draws.
-    const mountain = (x: number, z: number, h: number, base: number, cw: number) =>
-      deco({ kind: 'mountain', x, z, h, base, cw, seed: Math.floor(mHash(x, z) * 8), variant: Math.floor(rnd2() * 4), ry: rnd2() * 6.28 })
-    for (let i = 0; i < 52; i++) { // green hills — first uplift beyond the jungle
-      const a = rnd2() * Math.PI * 2, rr = 470 + rnd2() * 75
-      const x = CX + Math.cos(a) * rr, z = CZ + Math.sin(a) * rr
-      if (cityClear(x, z, 30)) continue
-      mountain(x, z, 18 + rnd2() * 20, 22 + rnd2() * 14, 1)
-    }
-    for (let i = 0; i < 44; i++) { // Vanodyan Rim foothill row
-      const a = rnd2() * Math.PI * 2, rr = 587 + rnd2() * 24
-      mountain(CX + Math.cos(a) * rr, CZ + Math.sin(a) * rr, 60 + rnd2() * 50, 30 + rnd2() * 16, 0)
-    }
-    for (let i = 0; i < 38; i++) { // snowcap row — the big skyline
-      const a = rnd2() * Math.PI * 2, rr = 629 + rnd2() * 18
-      mountain(CX + Math.cos(a) * rr, CZ + Math.sin(a) * rr, 100 + rnd2() * 75, 34 + rnd2() * 20, 0)
-    }
-    for (let i = 0; i < 34; i++) { // Far Range — hazy giants concealing the edge
-      const a = rnd2() * Math.PI * 2, rr = 690 + rnd2() * 80
-      mountain(CX + Math.cos(a) * rr, CZ + Math.sin(a) * rr, 150 + rnd2() * 110, 50 + rnd2() * 40, 2)
-    }
+      // --- ZONE C — JUNGLE-FLOOR VARIETY: ferns, fallen logs, cut stumps.
+      const jungleSpot = (x: number, z: number) =>
+        distOut(x, z) > 40 &&
+        Math.hypot(x - WORLD_DISC.cx, z - WORLD_DISC.cz) < WORLD_DISC.r - 40 &&
+        !deepSkip(x, z) && !onCrossRoad(z) && !onLane(z, 3.2) && !onTrack(x, z, 6)
+      let ferns = 0
+      for (let i = 0; i < 1100 && ferns < 200; i++) {
+        const x = -430 + rnd2() * 860
+        const z = -780 + rnd2() * 950
+        if (!jungleSpot(x, z)) continue
+        deco({ kind: 'fern', x, z, s: 0.7 + rnd2() * 0.8, ry: rnd2() * 6.28 })
+        ferns++
+      }
+      let logs = 0
+      for (let i = 0; i < 460 && logs < 30; i++) {
+        const x = -420 + rnd2() * 840
+        const z = -770 + rnd2() * 930
+        if (!jungleSpot(x, z)) continue
+        const len = 2.6 + rnd2() * 2.2
+        deco({ kind: 'log', x, z, w: len, ry: rnd2() * 6.28 })
+        box(x - len * 0.45, 0, z - 0.6, x + len * 0.45, 0.95, z + 0.6) // low solid deadfall
+        logs++
+      }
+      let stumps = 0
+      for (let i = 0; i < 460 && stumps < 38; i++) {
+        const x = -430 + rnd2() * 860
+        const z = -780 + rnd2() * 950
+        if (!jungleSpot(x, z)) continue
+        deco({ kind: 'stump', x, z, s: 0.8 + rnd2() * 0.6, ry: rnd2() * 6.28 })
+        stumps++
+      }
 
-    // ---- wild loot: 8 bonus tokens hidden in the jungle (single-use like city tokens) ----
-    const wildSpots: Array<[number, number]> = [[-220, -140], [210, -170], [-260, -420], [250, -450], [-120, -620], [140, -640], [60, -300], [-60, -200]]
-    for (let i = 0; i < wildSpots.length; i++) {
-      const [wx, wz] = wildSpots[i]
-      if (cityClear(wx, wz, -4)) continue
-      items.push({ id: `W_tok_${i + 1}`, type: 'token', x: wx, y: 1, z: wz })
+      // --- ZONE D — FOOTHILL SCREE: exposed rock and slope dead trees around the
+      // green hills' feet (the jungle floor turns rocky as it climbs).
+      // v72 — the band follows the hills out to r 445..555.
+      let scree = 0
+      for (let i = 0; i < 500 && scree < 64; i++) {
+        const a = rnd2() * Math.PI * 2
+        const rr = 445 + rnd2() * 110
+        const x = WORLD_DISC.cx + Math.cos(a) * rr
+        const z = WORLD_DISC.cz + Math.sin(a) * rr
+        if (inRiver(z) || onTrail(x, z) || nearRim(x, z, 6) || hillBase(x, z)) continue
+        if (nearWildClear(x, z, 6) || onTrack(x, z, 6) || onCrossRoad(z) || onLane(z, 3.5)) continue
+        if (Math.abs(Math.abs(x) - 166) < 14 || distOut(x, z) < 6) continue
+        if (Math.hypot(x - GRAVEYARD.x, z - GRAVEYARD.z) < GRAVEYARD.r + 12) continue
+        boulder(x, z, 0.7 + rnd2() * 1.2)
+        scree++
+      }
+      let slopeDead = 0
+      for (let i = 0; i < 300 && slopeDead < 18; i++) {
+        const a = rnd2() * Math.PI * 2
+        const rr = 455 + rnd2() * 90
+        const x = WORLD_DISC.cx + Math.cos(a) * rr
+        const z = WORLD_DISC.cz + Math.sin(a) * rr
+        if (inRiver(z) || onTrail(x, z) || nearRim(x, z, 6) || hillBase(x, z)) continue
+        if (nearWildClear(x, z, 6) || onTrack(x, z, 6) || onCrossRoad(z) || onLane(z, 3.5)) continue
+        if (Math.abs(Math.abs(x) - 166) < 14 || distOut(x, z) < 6) continue
+        if (Math.hypot(x - GRAVEYARD.x, z - GRAVEYARD.z) < GRAVEYARD.r + 12) continue
+        deco({ kind: 'deadTree', x, z, s: 0.8 + rnd2() * 0.6, ry: rnd2() * 6.28 })
+        box(x - 0.35, 0, z - 0.35, x + 0.35, 4, z + 0.35)
+        slopeDead++
+      }
+
+      // --- ZONE E — THE FAR RANGE: hazy mega-peaks beyond the Rim. Non-playable
+      // (outside the disc leash), NO colliders — pure skyline depth. Light tint
+      // (v71b — measured: '#7e8994' shaded to near-black under the sun angle and
+      // merged visually with the rim; lighter haze keeps the layers distinct).
+      for (const [fx, fz, fs, fh] of VANODYAN_FAR) {
+        deco({ kind: 'mountain', x: fx, z: fz, s: fs, h: fh, ry: rnd2() * 6.28, color: '#a7b0ba', variant: rnd2() < 0.5 ? 2 : 0, cw: 2 })
+      }
     }
+    npcs.push(
+      { id: 'npcX1', type: 'police', x: -152, z: -96, patrol: [[-152, -96], [-130, -98], [-130, -150], [-152, -148]], zone: 1 },
+      { id: 'npcX2', type: 'police', x: 128, z: -86, patrol: [[128, -86], [152, -88], [152, -104], [128, -102]], zone: 1 },
+      { id: 'npcX3', type: 'police', x: 132, z: -300, patrol: [[132, -300], [152, -302], [152, -350], [132, -348]], zone: 3 },
+    )
   }
-
 
   // ================= v43 LEVEL-MAP EXTRAS — appended strictly AFTER the skeleton =====
   // Variant-only props: palettes/signage above already differ; these add the
@@ -935,15 +1475,19 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   }
 
   return {
-    bounds: { minX: WORLD_BOUNDS.minX, maxX: WORLD_BOUNDS.maxX, minZ: WORLD_BOUNDS.minZ, maxZ: WORLD_BOUNDS.maxZ },
+    // v68 — greater city + Vanodyan Deep: 400m wide, z 42..-800 (228m of deep
+    // jungle south of the parliament); the protest spine (z 12..-576) is untouched.
+    // v69 — the ROUND world: bounds are the disc's bounding square (the true
+    // playfield is WORLD_DISC — walls, leash, minimap masks all follow it)
+    bounds: { minX: -658, maxX: 658, minZ: -998, maxZ: 318 },
     spawn: { x: 0, z: -8 },
     zones: [
       { name: 'Protest Plaza', hint: 'Practice here. The cross road south leads to the old galis.', zStart: 4, zEnd: -80 },
       { name: 'Chowk Market', hint: 'Dense stalls. Purani Gali west + Naya Bazaar east hide loot.', zStart: -80, zEnd: -200 },
-      { name: 'Security Checkpoint', hint: 'Fences span the whole city now. No walking around.', zStart: -200, zEnd: -280 },
+      { name: 'Security Checkpoint', hint: 'Fences guard the avenue. The jungle goes around — the wild has its own guards.', zStart: -200, zEnd: -280 },
       { name: 'Grand Avenue', hint: 'Mind the traffic! Neem Park west, City Depot east.', zStart: -280, zEnd: -420 },
       { name: 'Government District', hint: 'The Vote Collector awaits beyond the gate.', zStart: -420, zEnd: -572 },
-      { name: 'Vanodyan Jungle', hint: 'The wild rings the city. Zombies hunt out here — watch your back.', zStart: -572, zEnd: -998 },
+      { name: 'Vanodyan Deep', hint: 'The wild south. River, the Rim mountains… and things that hunt. Keep moving.', zStart: -572, zEnd: -998 },
     ],
     crossRoads: CROSS_ROADS,
     colliders, decorations, items, npcs, checkpoints: [

@@ -19,10 +19,17 @@ export type DecoKind =
   | 'home' | 'wall' | 'clothesline'
   // v43 level-map landmarks — variant-only props appended by buildWorldDef(mapId)
   | 'stringLights' | 'archGate' | 'ferrisWheel' | 'crane'
-  // v64 wild round world — jungle ring, graveyard, countryside, mountain rim
-  | 'jtree' | 'palm' | 'shrub' | 'grass' | 'fern' | 'log' | 'stump'
-  | 'boulder' | 'deadTree' | 'grave' | 'track' | 'hut' | 'hay'
+  // v66 — greater-city expansion: jungle boulders (jungle trees/bushes reuse 'tree')
+  | 'rock'
+  // v68 — Vanodyan Deep: low-poly mountain cones (south ridge skyline)
   | 'mountain'
+  // v68b — Vanodyan Deep undergrowth: walk-through jungle ground cover
+  | 'shrub'
+  // v69 — round wild: graveyard + bare trees (Vanodyan Kabristan)
+  | 'grave' | 'crypt' | 'deadTree'
+  // v71 — open-world gradient: countryside farms (Zone B), jungle variety (Zone C)
+  | 'field' | 'hut' | 'hay' | 'fence' | 'well' | 'scarecrow'
+  | 'log' | 'fern' | 'stump'
 
 export interface Deco {
   kind: DecoKind
@@ -35,11 +42,9 @@ export interface Deco {
   s?: number  // generic scale
   variant?: number
   color?: string
+  cw?: number // v62 mountain colorway: 0 granite rim · 1 green hills · 2 hazy far range
   sign?: string   // text on signs/billboards
   collider?: boolean // register a static AABB
-  cw?: number     // mountain colorway: 0 granite rim/ridge · 1 green hills · 2 hazy far
-  seed?: number   // mountain shape seed (8 buckets, deterministic)
-  base?: number   // mountain base radius (m)
 }
 
 export type ItemType = 'bottle' | 'sign' | 'chai' | 'firstaid' | 'snack' | 'token' | 'foam' | 'joke'

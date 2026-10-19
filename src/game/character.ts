@@ -106,20 +106,6 @@ const G = {
   medalBar: new THREE.BoxGeometry(0.1, 0.032, 0.018),
   beltStrip: new THREE.BoxGeometry(0.445, 0.055, 0.26),
   vestStripeThin: new THREE.BoxGeometry(0.3, 0.035, 0.02),
-  // ---- round 26: vice-city realism pass (tailoring, aviators, hair volume) ----
-  aviatorLens: new THREE.SphereGeometry(0.05, 10, 8),
-  aviatorRim: new THREE.TorusGeometry(0.05, 0.0075, 6, 14),
-  aviatorBridge: new THREE.BoxGeometry(0.034, 0.011, 0.014),
-  aviatorArm: new THREE.BoxGeometry(0.011, 0.011, 0.15),
-  spike: new THREE.ConeGeometry(0.042, 0.115, 5),
-  sideburn: new THREE.BoxGeometry(0.03, 0.09, 0.05),
-  lapel: new THREE.BoxGeometry(0.078, 0.17, 0.014),
-  hemFlare: new THREE.CylinderGeometry(0.175, 0.205, 0.15, 12),
-  skirtCone: new THREE.CylinderGeometry(0.185, 0.25, 0.38, 12),
-  tankStrap: new THREE.BoxGeometry(0.055, 0.15, 0.022),
-  button: new THREE.SphereGeometry(0.013, 6, 5),
-  thumb: new THREE.SphereGeometry(0.026, 6, 5),
-  flower: new THREE.SphereGeometry(0.03, 6, 5),
 }
 
 export interface RigOptions {
@@ -312,198 +298,22 @@ function bodyProfile(female: boolean, build: BodyBuild): BodyProfile {
   return p
 }
 
-/** Ribcage + waist taper + deltoid caps merged (shirt material, torsoPivot space).
- *  v50: adds trapezius slopes + (male) pectoral definition. The `sleeveless` variant
- *  (tank/dress outfits) drops the shirt-colored shoulder mass — it renders separately
- *  in skin via deltoidGeometry so bare shoulders read correctly. */
-function torsoGeometry(female: boolean, build: BodyBuild, sleeveless = false): THREE.BufferGeometry {
+/** Ribcage + waist taper + deltoid caps merged (shirt material, torsoPivot space). */
+function torsoGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
   const p = bodyProfile(female, build)
-  return cachedMerged(`torso|${female ? 'f' : 'm'}|${build}|${sleeveless ? 'tank' : 'full'}`, () => {
+  return cachedMerged(`torso|${female ? 'f' : 'm'}|${build}`, () => {
     const parts = [
       xg(new THREE.CylinderGeometry(p.shoulder, p.chest, 0.3, 12), 0, 0.33, 0, 1, 1, 0.58), // ribcage
       xg(new THREE.CylinderGeometry(p.chest - 0.008, p.waist, 0.2, 12), 0, 0.08, 0, 1, 1, 0.58), // waist
     ]
-    if (!sleeveless) {
-      for (const s of [1, -1]) {
-        parts.push(xg(new THREE.SphereGeometry(0.07, 8, 6), s * (p.shoulder - 0.038), 0.435, 0, 1, 0.85, 0.92)) // deltoids
-        parts.push(xg(new THREE.SphereGeometry(0.062, 8, 6), s * 0.075, 0.487, -0.012, 1.15, 0.6, 0.95)) // trapezius slope
-      }
-      if (!female) {
-        // subtle pectoral definition — reads at chest height, pokes ~6mm proud
-        for (const s of [1, -1]) {
-          parts.push(xg(new THREE.SphereGeometry(0.072, 8, 6), s * 0.056, 0.36, 0.09, 1.12, 0.7, 0.52))
-        }
-      }
+    for (const s of [1, -1]) {
+      parts.push(xg(new THREE.SphereGeometry(0.07, 8, 6), s * (p.shoulder - 0.038), 0.435, 0, 1, 0.85, 0.92)) // deltoids
     }
     if (female) {
       parts.push(xg(new THREE.SphereGeometry(0.08, 8, 6), 0, 0.335, 0.058, 1.45, 0.6, 0.6)) // subtle chest form
     }
     return parts
   })
-}
-
-/** Deltoid caps + trapezius slope in SKIN tone — shoulder mass for sleeveless outfits. */
-function deltoidGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
-  const p = bodyProfile(female, build)
-  return cachedMerged(`delt|${female ? 'f' : 'm'}|${build}`, () => {
-    const parts: THREE.BufferGeometry[] = []
-    for (const s of [1, -1]) {
-      parts.push(xg(new THREE.SphereGeometry(0.07, 8, 6), s * (p.shoulder - 0.038), 0.435, 0, 1, 0.85, 0.92))
-      parts.push(xg(new THREE.SphereGeometry(0.062, 8, 6), s * 0.075, 0.487, -0.012, 1.15, 0.6, 0.95))
-    }
-    return parts
-  })
-}
-
-/** Sculpted head (v50): skull + jawline + chin + cheek fullness merged — ONE mesh.
- *  Built in head-local space (mesh still sits at headPivot y 0.1); the face feature
- *  cluster keeps its original placements because the front surface in the eye band
- *  stays on the old 0.155 sphere. Female variant narrows the lower face. */
-function headGeometry(female: boolean): THREE.BufferGeometry {
-  return cachedMerged(`head|${female ? 'f' : 'm'}`, () => {
-    const jw = female ? 0.9 : 1
-    const parts = [
-      xg(new THREE.SphereGeometry(0.155, 20, 16), 0, 0, 0, 0.95, 1.05, 1), // skull
-      xg(new THREE.CylinderGeometry(0.1 * jw, 0.066 * jw, 0.1, 14), 0, -0.118, 0.012, 1, 1, 0.82), // jaw
-      xg(new THREE.SphereGeometry(0.046, 8, 6), 0, -0.162, 0.055, female ? 1.0 : 1.12, 0.72, 0.92), // chin
-    ]
-    for (const s of [1, -1]) {
-      parts.push(xg(new THREE.SphereGeometry(0.05, 8, 6), s * 0.09, -0.048, 0.086, 0.6, 0.52, 0.56)) // cheeks
-    }
-    return parts
-  })
-}
-
-/** Hair dome (v50) — sphere cap swept OPEN across the face wedge (±0.875 rad around
- *  +Z) so fringe, brows and forehead read; crown/back/sides stay covered. Replaces
- *  the old full-ring cap that swallowed the whole forehead like a swim cap. */
-function hairDome(): THREE.BufferGeometry {
-  return cachedMerged('hairDome', () => [
-    xg(new THREE.SphereGeometry(0.163, 12, 8, Math.PI / 2 + 0.875, Math.PI * 2 - 1.75, 0, Math.PI / 1.9), 0, 0, 0),
-  ])
-}
-
-/** Mullet nape — party in the back (hair material, headPivot space). */
-function mulletNapeGeometry(): THREE.BufferGeometry {
-  return cachedMerged('mulletNape', () => [
-    xg(G.hairBack, 0, 0, -0.085, 0.98, 1.25, 0.5),
-    xg(G.sideburn, 0.1, -0.02, -0.12, 1.4, 1.6, 1),
-    xg(G.sideburn, -0.1, -0.02, -0.12, 1.4, 1.6, 1),
-  ])
-}
-
-/** Spiked crown — cone cluster riding the dome (hair material, headPivot space). */
-function spikyTopGeometry(): THREE.BufferGeometry {
-  return cachedMerged('spikyTop', () => {
-    const parts = [xg(G.spike, 0, 0.26, 0.01)]
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2 + 0.3
-      parts.push(xg(G.spike, Math.cos(a) * 0.095, 0.235, Math.sin(a) * 0.095, 0.9, 0.9, 0.9, Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5))
-    }
-    return parts
-  })
-}
-
-/** Mega afro — crown puff + hairline puff + edge curls (hair material, headPivot space). */
-function afroTopGeometry(): THREE.BufferGeometry {
-  return cachedMerged('afroTop', () => {
-    const parts = [
-      xg(G.hairBack, 0, 0.15, -0.05, 1.38, 1.28, 1.1),
-      xg(G.curl, 0, 0.185, 0.09, 1.25, 1.1, 0.9), // hairline puff over the forehead
-    ]
-    const offs: [number, number, number][] = [
-      [0.13, 0.19, 0.05], [-0.13, 0.19, 0.05], [0.12, 0.17, -0.1], [-0.12, 0.17, -0.1], [0, 0.22, -0.13],
-    ]
-    for (const [x, y, z] of offs) parts.push(xg(G.curl, x, y, z))
-    return parts
-  })
-}
-
-/** Aviator sunglasses (v50) — gold rims + dark lenses + bridge + temple arms,
- *  merged into ONE vertex-colored mesh (shared face material). */
-function aviatorGeometry(): THREE.BufferGeometry {
-  return cachedMerged('aviator', () => {
-    const gold = '#c9a86a', lens = '#232a31'
-    const parts: THREE.BufferGeometry[] = []
-    const add = (geo: THREE.BufferGeometry, color: string, px: number, py: number, pz: number, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) =>
-      parts.push(xg(tintedClone(geo, color), px, py, pz, sx, sy, sz, rx, ry, rz))
-    for (const s of [1, -1]) {
-      add(G.aviatorRim, gold, s * 0.058, 0.112, 0.152)
-      add(G.aviatorLens, lens, s * 0.058, 0.112, 0.15, 1, 0.88, 0.22)
-      add(G.aviatorArm, gold, s * 0.096, 0.116, 0.062, 1, 1, 1, 0, s * -0.22, 0)
-    }
-    add(G.aviatorBridge, gold, 0, 0.121, 0.156)
-    return parts
-  })
-}
-
-/** Rally Hawaiian detail set (v50) — open collar, placket + buttons, chest pockets,
- *  untucked hem and a scattered flower print. ONE vertex-colored mesh. */
-function hawaiianExtras(shirtHex: string, accentHex: string): THREE.BufferGeometry {
-  return cachedMerged(`hx|hawaiian|${shirtHex}|${accentHex}`, () => {
-    const parts: THREE.BufferGeometry[] = []
-    const add = (geo: THREE.BufferGeometry, color: string, px: number, py: number, pz: number, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) =>
-      parts.push(xg(tintedClone(geo, color), px, py, pz, sx, sy, sz, rx, ry, rz))
-    const collar = shade(shirtHex, 30), seam = shade(shirtHex, -18)
-    add(G.lapel, collar, 0.052, 0.49, 0.128, 0.6, 0.62, 1, -0.3, 0, -0.5)
-    add(G.lapel, collar, -0.052, 0.49, 0.128, 0.6, 0.62, 1, -0.3, 0, 0.5)
-    add(G.lapel, seam, 0, 0.26, 0.112, 0.42, 1.75, 1, -0.05) // button placket
-    add(G.button, '#f5efdc', 0, 0.36, 0.121)
-    add(G.button, '#f5efdc', 0, 0.27, 0.116)
-    add(G.button, '#f5efdc', 0, 0.18, 0.109)
-    add(G.pocket, seam, 0.1, 0.35, 0.112, 0.5, 0.72, 0.36, 0, 0, -0.05)
-    add(G.pocket, seam, -0.1, 0.35, 0.112, 0.5, 0.72, 0.36, 0, 0, 0.05)
-    add(G.hemFlare, shirtHex, 0, -0.05, 0, 1, 1, 0.62) // untucked hem over the pants
-    const petals = [accentHex, shade(accentHex, 40), '#f5efdc']
-    const spots: [number, number, number, number][] = [
-      [0.055, 0.41, 0.122, 0], [-0.075, 0.3, 0.116, 1], [0.085, 0.2, 0.107, 2],
-      [-0.045, 0.12, 0.098, 1], [0.03, 0.34, -0.119, 2], [0.07, 0.16, -0.103, 0],
-    ]
-    spots.forEach(([x, y, z, ci], i) => add(G.flower, petals[ci % 3], x, y, z, 1, 0.85, 0.45, 0, 0, i * 0.7))
-    return parts
-  })
-}
-
-/** Pastel blazer detail set (v50) — cream lapels + collar, accent tie, jacket buttons
- *  and a hanging jacket skirt. ONE vertex-colored mesh. */
-function suitExtras(accentHex: string, shirtHex: string): THREE.BufferGeometry {
-  return cachedMerged(`hx|suit|${accentHex}|${shirtHex}`, () => {
-    const parts: THREE.BufferGeometry[] = []
-    const add = (geo: THREE.BufferGeometry, color: string, px: number, py: number, pz: number, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) =>
-      parts.push(xg(tintedClone(geo, color), px, py, pz, sx, sy, sz, rx, ry, rz))
-    add(G.lapel, '#f5efdc', 0.05, 0.42, 0.119, 1, 1, 1, -0.12, 0, -0.38)
-    add(G.lapel, '#f5efdc', -0.05, 0.42, 0.119, 1, 1, 1, -0.12, 0, 0.38)
-    add(G.lapel, '#f5efdc', 0, 0.51, 0.108, 1.5, 0.32, 1, -0.2) // shirt collar band
-    add(G.tie, accentHex, 0, 0.32, 0.122, 0.85, 0.9, 1)
-    add(G.button, accentHex, 0, 0.465, 0.128, 1.7, 1.5, 1.2) // tie knot
-    add(G.button, shade(shirtHex, -46), 0, 0.3, 0.121, 1.3, 1.2, 1)
-    add(G.button, shade(shirtHex, -46), 0, 0.2, 0.112, 1.3, 1.2, 1)
-    add(G.hemFlare, shirtHex, 0, -0.06, 0, 1.06, 1.15, 0.6) // jacket skirt
-    return parts
-  })
-}
-
-/** Tank-top straps (shirt material, torsoPivot space) — coverage over the bare deltoid gap. */
-function tankShellGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
-  return cachedMerged(`tankShell|${female ? 'f' : 'm'}|${build}`, () => [
-    xg(G.tankStrap, 0.078, 0.49, -0.005, 1, 1, 2.3, -0.06, 0, -0.12),
-    xg(G.tankStrap, -0.078, 0.49, -0.005, 1, 1, 2.3, -0.06, 0, 0.12),
-  ])
-}
-
-/** March-dress skirt — waist-to-mid-thigh cone (shirt material, torsoPivot space). */
-function dressSkirtGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
-  return cachedMerged(`skirt|${female ? 'f' : 'm'}|${build}`, () => [
-    xg(G.skirtCone, 0, -0.12, 0, 1, 1, 0.68),
-  ])
-}
-
-/** Dress belt + hem detail (vertex-colored, torsoPivot space). */
-function dressExtras(accentHex: string): THREE.BufferGeometry {
-  return cachedMerged(`dx|${accentHex}`, () => [
-    xg(tintedClone(G.beltStrip, shade(accentHex, -24)), 0, -0.005, 0, 0.85, 1, 0.45),
-    xg(tintedClone(G.kurtaHem, accentHex), 0, -0.298, 0, 1.16, 1, 0.75),
-  ])
 }
 
 /** Pelvis/hips bridging torso bottom to the leg pivots (pants material, torsoPivot space). */
@@ -536,7 +346,6 @@ function forearmGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometr
   return cachedMerged(`forearm|${female ? 'f' : 'm'}|${build}`, () => [
     xg(new THREE.CylinderGeometry(0.047 * p.armW, 0.038 * p.armW, 0.21, 10), 0, -0.345, 0),
     xg(G.hand, 0, -0.46, 0, 1.05, 0.9, 1.05),
-    xg(G.thumb, 0, -0.445, 0.055, 0.85, 1.1, 0.85), // v50: thumb bump — a fist, not a mitten
   ])
 }
 
@@ -647,19 +456,10 @@ export class CharacterRig {
     this.group.add(this.torsoPivot)
     this.torsoPivot.position.y = 0.98
 
-    // outfit slot resolved early — the torso build (sleeveless variant), sash and
-    // arm sleeve material all depend on it (v50 vice-city tailoring)
-    const outfitSlot = opts.outfit ?? 'classic'
-    const sleeveless = outfitSlot === 'tank' || outfitSlot === 'dress'
-
-    // shaped torso: ribcage + waist (+ shoulder mass unless sleeveless) in ONE mesh
-    const torso = new THREE.Mesh(torsoGeometry(isFemale, build, sleeveless), shirt)
+    // shaped torso: ribcage + waist + deltoids merged into ONE mesh (was a plain box)
+    const torso = new THREE.Mesh(torsoGeometry(isFemale, build), shirt)
     torso.castShadow = true
     this.torsoPivot.add(torso)
-    if (sleeveless) {
-      // bare-shoulder mass in skin so tank/dress read sleeveless
-      this.torsoPivot.add(new THREE.Mesh(deltoidGeometry(isFemale, build), skin))
-    }
 
     // pelvis (pants) bridges the torso bottom to the leg pivots — kills the old
     // gap between shirt hem and trouser tops
@@ -668,15 +468,12 @@ export class CharacterRig {
     // neck (skin) — no more floating-head look under the hairline
     this.torsoPivot.add(new THREE.Mesh(neckGeometry(), skin))
 
-    // accent stripe (protest sash) — skipped for tailored looks with their own
-    // front detail (blazer lapels, march dress)
-    if (outfitSlot !== 'suit' && outfitSlot !== 'dress') {
-      const sash = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.22), mat(colors.accent))
-      sash.position.set(0.06, 0.26, 0.02)
-      sash.rotation.z = 0.4
-      if (isFemale) sash.scale.x = 0.9
-      this.torsoPivot.add(sash)
-    }
+    // accent stripe (protest sash)
+    const sash = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.22), mat(colors.accent))
+    sash.position.set(0.06, 0.26, 0.02)
+    sash.rotation.z = 0.4
+    if (isFemale) sash.scale.x = 0.9
+    this.torsoPivot.add(sash)
 
     // police department extras — badge on every officer, kit per uniform
     if (opts.npcType === 'police') {
@@ -733,62 +530,32 @@ export class CharacterRig {
     // head
     this.headPivot.position.y = 0.62
     this.torsoPivot.add(this.headPivot)
-    const head = new THREE.Mesh(headGeometry(isFemale), skinHead)
+    const head = new THREE.Mesh(G.head, skinHead)
     head.position.y = 0.1
     head.castShadow = true
     this.headPivot.add(head)
 
-    // ---- hair styles (v50): open-front swept dome + real hairline pieces ----
-    // v58: default is BALD — the High-Fi model's baked hair was removed, so an
-    // unstyled head shows clean skin and every selected style fits onto it
-    const hairSlot = opts.hair ?? 'bald'
+    // ---- hair styles (round 24) — 'bald' skips the cap entirely ----
+    // default is gender-aware: female rigs wear a ponytail, male rigs the classic cut
+    const hairSlot = opts.hair ?? (isFemale ? 'ponytail' : 'default')
     if (hairSlot !== 'bald') {
-      // dome covers crown/back/sides; the face wedge stays open so brows +
-      // fringe read (the old full-ring dome swallowed the forehead like a cap)
-      const cap = new THREE.Mesh(hairDome(), hair)
-      cap.position.y = 0.13
-      // short fringe strip just above the brows (fills the dome's open front)
-      const addFringe = (sx: number) => {
-        const fringe = new THREE.Mesh(G.fringe, hair)
-        fringe.position.set(0, 0.171, 0.116)
-        fringe.rotation.x = -0.5
-        fringe.scale.set(sx, 0.9, 0.75)
-        this.headPivot.add(fringe)
-      }
-      const addSideburns = () => {
-        for (const side of [1, -1]) {
-          const sb = new THREE.Mesh(G.sideburn, hair)
-          sb.position.set(side * 0.137, 0.078, 0.04)
-          sb.rotation.z = side * -0.08
-          this.headPivot.add(sb)
-        }
-      }
+      const cap = new THREE.Mesh(G.hair, hair)
       if (hairSlot === 'buzz') {
         cap.scale.set(1.005, 0.62, 1.005)
         cap.position.y = 0.128
-      } else if (hairSlot === 'mullet') {
-        addFringe(1.2)
-        addSideburns()
-        const nape = new THREE.Mesh(mulletNapeGeometry(), hair)
-        nape.castShadow = true
-        this.headPivot.add(nape)
-      } else if (hairSlot === 'spiky') {
-        cap.scale.set(1.01, 0.82, 1.01)
-        cap.position.y = 0.14
-        this.headPivot.add(new THREE.Mesh(spikyTopGeometry(), hair))
-      } else if (hairSlot === 'afro') {
-        const puff = new THREE.Mesh(afroTopGeometry(), hair)
-        puff.castShadow = true
-        this.headPivot.add(puff)
-      } else if (hairSlot === 'curly') {
-        addFringe(1.15)
-        addSideburns()
       } else {
-        // feminine gathered styles + classic cut: swept bangs; classic also gets sideburns
-        addFringe(isFemale ? 0.9 : 1.3)
-        if (!isFemale) addSideburns()
+        cap.position.y = 0.13
       }
-      if (hairSlot !== 'afro') this.headPivot.add(cap)
+      this.headPivot.add(cap)
+      // swept fringe for the feminine gathered styles (bun / ponytail / long / braid)
+      const femaleStyle = hairSlot === 'bun' || hairSlot === 'ponytail' || hairSlot === 'long' || hairSlot === 'braid'
+      if (femaleStyle) {
+        const fringe = new THREE.Mesh(G.fringe, hair)
+        fringe.position.set(0, 0.122, 0.132)
+        fringe.rotation.x = 0.62
+        fringe.scale.set(0.95, 0.9, 0.8)
+        this.headPivot.add(fringe)
+      }
       if (hairSlot === 'bun') {
         const bun = new THREE.Mesh(G.bun, hair)
         bun.position.set(0, 0.24, -0.12)
@@ -989,18 +756,16 @@ export class CharacterRig {
       this.torsoPivot.add(malaBack)
     }
     if (opts.glasses) {
-      // v50 aviators — gold rims, dark lenses, bridge + temple arms (one merged mesh)
-      this.headPivot.add(new THREE.Mesh(aviatorGeometry(), faceMaterialShared()))
+      const gl = new THREE.Mesh(G.glasses, mat('#222', false))
+      gl.position.set(0, 0.11, 0.15)
+      this.headPivot.add(gl)
     }
 
     // ---- face slot (archetype uncle keeps his iconic beard even on 'clean') ----
     const faceSlot = opts.face ?? (opts.archetype === 'uncle' ? 'beard' : 'clean')
     if (faceSlot === 'beard') {
       const beard = new THREE.Mesh(G.beard, hair)
-      // v50: grown down over the sculpted jaw + chin (the old placement floated
-      // above the new lower-face geometry)
-      beard.position.set(0, 0.02, 0.015)
-      beard.scale.set(1.08, 1.35, 1.1)
+      beard.position.set(0, 0.06, 0.03)
       this.headPivot.add(beard)
     } else if (faceSlot === 'moustache') {
       const mo = new THREE.Mesh(G.moustache, hair)
@@ -1021,7 +786,8 @@ export class CharacterRig {
       this.headPivot.add(sc)
     }
 
-    // ---- outfit slot (resolved at the top; extras render over the base torso) ----
+    // ---- outfit slot (worn over the archetype colors) ----
+    const outfitSlot = opts.outfit ?? 'classic'
     if (outfitSlot === 'kurta') {
       const skirt = new THREE.Mesh(G.kurtaSkirt, shirt)
       skirt.position.y = 0.02
@@ -1050,26 +816,13 @@ export class CharacterRig {
         stripe.position.y = y
         this.torsoPivot.add(stripe)
       }
-    } else if (outfitSlot === 'hawaiian') {
-      // v50 vice-city tailoring — every detail set is ONE merged vertex-colored mesh
-      this.torsoPivot.add(new THREE.Mesh(hawaiianExtras(colors.shirt, colors.accent), faceMaterialShared()))
-    } else if (outfitSlot === 'suit') {
-      this.torsoPivot.add(new THREE.Mesh(suitExtras(colors.accent, colors.shirt), faceMaterialShared()))
-    } else if (outfitSlot === 'tank') {
-      this.torsoPivot.add(new THREE.Mesh(tankShellGeometry(isFemale, build), shirt))
-    } else if (outfitSlot === 'dress') {
-      const skirt = new THREE.Mesh(dressSkirtGeometry(isFemale, build), shirt)
-      skirt.castShadow = true
-      this.torsoPivot.add(skirt)
-      this.torsoPivot.add(new THREE.Mesh(dressExtras(colors.accent), faceMaterialShared()))
     }
 
     // arms — pivot at shoulder; sleeve (shirt) + forearm+fist (skin), both merged
     this.armL.position.set(0.265, 0.46, 0)
     this.armR.position.set(-0.265, 0.46, 0)
     for (const arm of [this.armL, this.armR]) {
-      // sleeveless outfits bare the arms (skin sleeve) — v50 tank/dress
-      const sleeve = new THREE.Mesh(sleeveGeometry(isFemale, build), sleeveless ? skin : shirt)
+      const sleeve = new THREE.Mesh(sleeveGeometry(isFemale, build), shirt)
       sleeve.castShadow = true
       arm.add(sleeve)
       arm.add(new THREE.Mesh(forearmGeometry(isFemale, build), skin))

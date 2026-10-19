@@ -18,7 +18,7 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['G'], action: 'Emote Wheel', note: '4 unlocked by default — level up & earn medals for the rest' },
   { keys: ['T'], action: 'Quick Messages' },
   { keys: ['M'], action: 'Big Map', note: 'Also sets your minimap zoom — slider + live preview on the map' },
-  { keys: ['TAB'], action: 'Squad Panel', note: 'Create a protest cell, share the 4-letter code, RALLY to cellmates' },
+  { keys: ['TAB'], action: 'Squad Panel', note: 'Frees the mouse — create a cell, share the 4-letter code, INVITE / GIFT / RALLY. Tab again to march on.' },
   { keys: ['1–8'], action: 'Use Inventory Item', note: 'Right-click a slot to drop it' },
   { keys: ['P'], action: 'Photo Mode', note: 'O cycles filters · wheel zooms · K saves a snapshot PNG' },
   { keys: ['ESC'], action: 'Pause', note: 'The police do not pause. Ever.' },

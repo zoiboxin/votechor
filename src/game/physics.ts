@@ -8,7 +8,7 @@ export class PhysicsWorld {
   private cell = 12
   /** Moving colliders (vehicles) — NOT in the static grid; linear-scanned each move. */
   private dynamic: AABB[] = []
-  /** v64 analytic terrain heightfield (mountains) — see mountain-field.ts. */
+  /** v77 analytic terrain heightfield (mountains) — see mountain-field.ts. */
   private terrain: ((x: number, z: number) => number) | null = null
 
   /** Wire the mountain heightfield so groundHeight includes solid terrain. */
@@ -60,7 +60,7 @@ export class PhysicsWorld {
   /** Highest solid top under (x,z) at or below maxY. Returns 0 (street) if none. */
   groundHeight(x: number, z: number, maxY: number): number {
     let h = 0
-    // v64 terrain (mountains) — capped by maxY so nothing is teleported ONTO a
+    // v77 terrain (mountains) — capped by maxY so nothing is teleported ONTO a
     // peak that looms above the query point
     if (this.terrain) {
       const t = this.terrain(x, z)
@@ -106,10 +106,9 @@ export class PhysicsWorld {
   ): { grounded: boolean; hitWall: boolean; groundY: number; landed: boolean; vaulted: boolean } {
     let hitWall = false
     let vaulted = false
-    // v64 terrain rise gate — the heightfield is a WALL when the climb is too
+    // v77 terrain rise gate — the heightfield is a WALL when the climb is too
     // steep for the movement mode: grounded frames may climb ≤0.9 m per step
-    // (≈74° world slope), airborne frames ≤0.6 m. Jump arcs still mount ~1.9 m
-    // ledges (the vertical phase lifts the actor onto the surface next frames).
+    // (≈74° world slope), airborne frames ≤0.6 m. Jump arcs still mount ledges.
     const startGrounded = this.groundHeight(pos.x, pos.z, pos.y + 0.35) >= pos.y - 0.05
     const riseCap = startGrounded ? 0.9 : 0.6
     // --- horizontal X (substepped) ---
@@ -182,9 +181,9 @@ export class PhysicsWorld {
       grounded = true
     } else {
       grounded = pos.y - groundY < 0.06
-      // v64 downhill ground-snap — walking down MOUNTAIN slopes stays grounded
-      // (≤0.85 m per frame); real cliffs still fall normally. Gated on terrain
-      // being wired: the plain AABB world keeps its exact pre-v64 behavior.
+      // v77 downhill ground-snap — walking down MOUNTAIN slopes stays grounded
+      // (≤0.85 m per frame); real cliffs still fall. Gated on terrain: the plain
+      // AABB world keeps its exact pre-v77 behavior.
       if (this.terrain && startGrounded && vel.y <= 0 && pos.y - groundY <= 0.85) {
         pos.y = groundY
         vel.y = 0
