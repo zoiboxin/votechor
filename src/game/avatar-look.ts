@@ -67,6 +67,9 @@ const OUTFIT_TINTS: Record<string, { shirt?: string; pants?: string; accent?: st
   // task 82 gender-book outfits (the GLB path is kill-switched off, tables kept in sync)
   jacket: { shirt: '#4a5f78', pants: '#3a3f46', accent: '#c9a06a' },
   anarkali: { shirt: '#8c1f28', pants: '#8c1f28', accent: '#f2c14e' },
+  // task 83 additions
+  tracksuit: { shirt: '#2f4438', pants: '#3a4046', accent: '#e8e6df' },
+  saree: { shirt: '#8c1f28', pants: '#5c2430', accent: '#f2c14e' },
 }
 
 const FOOTWEAR_TINTS: Record<string, string> = {
@@ -75,6 +78,7 @@ const FOOTWEAR_TINTS: Record<string, string> = {
   chappal: '#9a6a3e',
   glow: '#2a3038',
   heels: '#8c3a4e', // task 82 female book
+  juttis: '#b48a4e', // task 83 female book
 }
 
 type LooseCosmetics = unknown
@@ -512,8 +516,16 @@ export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook) {
   // 1. tint (normalized multiply on the textured family, solid replace on the rigged one)
   tintGroup(group, look.palette)
 
-  // 2. body build scale (visual only — collision untouched)
-  const bs = look.build === 'slim' ? [0.94, 1, 0.94] : look.build === 'sturdy' ? [1.06, 1.02, 1.06] : [1, 1, 1]
+  // 2. body build scale (visual only — collision untouched). task 83: athletic/curvy
+  const bs = look.build === 'slim'
+    ? [0.94, 1, 0.94]
+    : look.build === 'sturdy'
+      ? [1.06, 1.02, 1.06]
+      : look.build === 'athletic'
+        ? [1.05, 1, 0.97]
+        : look.build === 'curvy'
+          ? [1.02, 1, 1.08]
+          : [1, 1, 1]
   group.scale.set(bs[0], bs[1], bs[2])
 
   // 3. female puppet's own static hair meshes: hidden unless the style is 'default'

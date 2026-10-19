@@ -224,8 +224,8 @@ export function emoteIsUnlocked(emote: string | undefined | null, level: number,
 
 export type CosmeticKind = 'hat' | 'hair' | 'face' | 'build' | 'outfit' | 'footwear' | 'gear' | 'held' | 'policeOutfit' | 'policeHat'
 
-/** Body shape preset — drives the rig's torso/limb proportions (v32). */
-export type BodyBuild = 'regular' | 'slim' | 'sturdy'
+/** Body shape preset — drives the rig's torso/limb proportions (v32, expanded v85). */
+export type BodyBuild = 'regular' | 'slim' | 'sturdy' | 'athletic' | 'curvy'
 
 export const BUILD_CATALOG: CosmeticItem[] = [
   {
@@ -250,6 +250,22 @@ export const BUILD_CATALOG: CosmeticItem[] = [
     label: 'Sturdy Build',
     emoji: '🛡️',
     desc: 'Built for holding the front line all monsoon.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'athletic',
+    kind: 'build',
+    label: 'Athletic Build',
+    emoji: '🏋️',
+    desc: 'Trained by dodging water cannons. Broad, deeply tapered.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'curvy',
+    kind: 'build',
+    label: 'Curvy Build',
+    emoji: '💃',
+    desc: 'Hips that lead the parade, waist that stops traffic.',
     unlock: { type: 'free' },
   },
 ]
@@ -300,8 +316,11 @@ export const OUTFIT_CATALOG: CosmeticItem[] = [
   { id: 'hoodie', kind: 'outfit', label: 'Revolution Hoodie', emoji: '🧥', desc: 'Hood up, committee down.', unlock: { type: 'level', level: 6 }, gender: 'male' },
   { id: 'jacket', kind: 'outfit', label: 'Denim Jacket', emoji: '🧢', desc: 'Collar up. Zip stuck at 70% on principle.', unlock: { type: 'level', level: 3 }, gender: 'male' },
   // female-exclusive
-  { id: 'dress', kind: 'outfit', label: 'March Dress', emoji: '👗', desc: 'A-line liberty with an accent belt.', unlock: { type: 'free' }, gender: 'female' },
+  { id: 'dress', kind: 'outfit', label: 'March Dress', emoji: '👗', desc: 'Pleated A-line liberty with an accent belt.', unlock: { type: 'free' }, gender: 'female' },
+  { id: 'saree', kind: 'outfit', label: 'Saree Salute', emoji: '🥻', desc: 'Pallu draped, pleats sharp, committee worried.', unlock: { type: 'level', level: 5 }, gender: 'female' },
   { id: 'anarkali', kind: 'outfit', label: 'Anarkali Flair', emoji: '🌅', desc: 'Full-skirted grace for long marches.', unlock: { type: 'level', level: 6 }, gender: 'female' },
+  // male-exclusive
+  { id: 'tracksuit', kind: 'outfit', label: 'March Tracksuit', emoji: '🎽', desc: 'Striped track pants, zip collar. Sprint-ready dissent.', unlock: { type: 'level', level: 4 }, gender: 'male' },
 ]
 
 export const FOOTWEAR_CATALOG: CosmeticItem[] = [
@@ -311,6 +330,7 @@ export const FOOTWEAR_CATALOG: CosmeticItem[] = [
   // male-exclusive
   { id: 'boots', kind: 'footwear', label: 'Marching Boots', emoji: '🥾', desc: 'Stomp approved by three aunties.', unlock: { type: 'free' }, gender: 'male' },
   // female-exclusive
+  { id: 'juttis', kind: 'footwear', label: 'Punjabi Juttis', emoji: '🥿', desc: 'Hand-stitched flair for the front line.', unlock: { type: 'level', level: 3 }, gender: 'female' },
   { id: 'heels', kind: 'footwear', label: 'March Heels', emoji: '👠', desc: 'Clicks louder than the lathi charge.', unlock: { type: 'free' }, gender: 'female' },
 ]
 
@@ -527,7 +547,7 @@ export function resolveRigCosmetics(c: Record<string, unknown> | undefined | nul
 } {
   const gender = c?.gender === 'female' ? 'female' as const : 'male' as const
   const rawBuild = typeof c?.build === 'string' ? c.build : 'regular'
-  const build: BodyBuild = rawBuild === 'slim' || rawBuild === 'sturdy' ? rawBuild : 'regular'
+  const build: BodyBuild = rawBuild === 'slim' || rawBuild === 'sturdy' || rawBuild === 'athletic' || rawBuild === 'curvy' ? (rawBuild as BodyBuild) : 'regular'
   return {
     hat: typeof c?.hat === 'string' ? c.hat : 'none',
     hair: typeof c?.hair === 'string' ? c.hair : (gender === 'female' ? 'ponytail' : 'default'),

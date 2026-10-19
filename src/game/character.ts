@@ -137,11 +137,11 @@ export interface RigOptions {
   // hair default: female rigs get a ponytail, male rigs the classic cut
   // ---- wardrobe expansion slots (default when omitted) ----
   face?: string     // 'clean' | 'beard' | 'moustache' | 'warpaint' | 'scar'
-  outfit?: string   // 'classic' | 'kurta' | 'highvis' · male: 'hoodie' | 'jacket' · female: 'dress' | 'anarkali'
-  footwear?: string // 'shoes' | 'chappal' | 'glow' · male: 'boots' · female: 'heels'
+  outfit?: string   // 'classic' | 'kurta' | 'highvis' · male: 'hoodie' | 'jacket' | 'tracksuit' · female: 'dress' | 'anarkali' | 'saree'
+  footwear?: string // 'shoes' | 'chappal' | 'glow' · male: 'boots' · female: 'heels' | 'juttis'
   gear?: string     // 'none' | 'backpack' | 'jhola' | 'bannerroll' | 'dhol' | 'umbrella'
   held?: string     // 'none' | 'sign' | 'banner' | 'flag' | 'bat' | 'lathi' | 'shoppingbag' | 'megaphone'
-  build?: string // 'regular' | 'slim' | 'sturdy' — body shape (normalized inside the rig)
+  build?: string // 'regular' | 'slim' | 'sturdy' | 'athletic' | 'curvy' — body shape (normalized inside the rig)
 }
 
 function mat(color: string, flat = true): THREE.MeshStandardMaterial {
@@ -303,6 +303,21 @@ function bodyProfile(female: boolean, build: BodyBuild): BodyProfile {
     p.shoulder = Math.max(p.shoulder * 1.08, 0.235)
     p.chest *= 1.14; p.waist *= 1.2
     p.hipTop *= 1.1; p.hipBottom *= 1.08; p.armW *= 1.12; p.legW *= 1.12
+  } else if (build === 'athletic') {
+    // task 83: trained V — the broadest shoulders, the deepest waist pinch,
+    // thicker arms. Reads 'gym regular' on both frames.
+    p.shoulder = Math.max(p.shoulder * 1.1, 0.23)
+    p.chest *= 1.08
+    p.waist *= 0.88
+    p.hipTop *= 0.98
+    p.armW *= 1.14
+    p.legW *= 1.04
+  } else if (build === 'curvy') {
+    // task 83: pronounced hourglass — cinched waist, wide hips, fuller thighs
+    p.waist *= 1.02
+    p.hipTop *= 1.14
+    p.hipBottom *= 1.18
+    p.legW *= 1.1
   }
   return p
 }
@@ -358,13 +373,87 @@ function forearmGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometr
   ])
 }
 
-/** Thigh + calf merged (pants material, leg-pivot space; spans y 0 → -0.84). */
-function legGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
+/**
+ * Leg build styles (task 83) — the pants now follow the OUTFIT instead of every
+ * character wearing the same cylinders:
+ *  trouser — classic full-length pant with an ankle cuff + knee fold ridge
+ *  pajama  — loose kurta pajama: balloon thigh/calf cinched by a tight cuff
+ *  bare    — bare legs for dresses/sarees (skin material, slimmer ankle)
+ *  track   — march tracksuit: vertex-colored pant with a white side seam stripe
+ *            (side-aware so the stripe runs down the OUTER seam of both legs)
+ */
+type LegStyle = 'trouser' | 'pajama' | 'bare' | 'track'
+
+function legStyleFor(outfit: string | undefined): LegStyle {
+  if (outfit === 'kurta') return 'pajama'
+  if (outfit === 'dress' || outfit === 'anarkali' || outfit === 'saree') return 'bare'
+  if (outfit === 'tracksuit') return 'track'
+  return 'trouser'
+}
+
+/**
+ * Thigh + calf merged (leg-pivot space; spans y 0 → -0.84). Non-track styles use
+ * the caller's single-color material; track legs bake vertex colors (pant color +
+ * stripe) into the merged geometry so it stays ONE mesh with the shared material.
+ */
+function legGeometry(
+  female: boolean, build: BodyBuild, style: LegStyle,
+  side: 'L' | 'R' = 'L', pantsColor = '#3a4438',
+): THREE.BufferGeometry {
   const p = bodyProfile(female, build)
-  return cachedMerged(`leg|${female ? 'f' : 'm'}|${build}`, () => [
-    xg(new THREE.CylinderGeometry(0.088 * p.legW, 0.07 * p.legW, 0.44, 10), 0, -0.22, 0), // thigh
-    xg(new THREE.CylinderGeometry(0.064 * p.legW, 0.05 * p.legW, 0.4, 10), 0, -0.64, 0), // calf
-  ])
+  const key = `leg|${female ? 'f' : 'm'}|${build}|${style}|${style === 'track' ? `${side}|${pantsColor}` : ''}`
+  return cachedMerged(key, () => {
+    if (style === 'track') {
+      // task 83: tracksuit pant — white seam stripe on the OUTER edge only
+      const parts = [
+        xg(tintedClone(new THREE.CylinderGeometry(0.092 * p.legW, 0.072 * p.legW, 0.44, 10), pantsColor), 0, -0.22, 0),
+        xg(tintedClone(new THREE.CylinderGeometry(0.068 * p.legW, 0.052 * p.legW, 0.4, 10), pantsColor), 0, -0.64, 0),
+      ]
+      const sx = side === 'L' ? 1 : -1
+      parts.push(xg(tintedClone(new THREE.BoxGeometry(0.014, 0.6, 0.03), '#f2ecdc'), sx * 0.086 * p.legW, -0.31, 0))
+      parts.push(xg(tintedClone(new THREE.TorusGeometry(0.055 * p.legW, 0.013, 6, 12), pantsColor), 0, -0.795, 0, 1, 1, 1, Math.PI / 2))
+      return parts
+    }
+    if (style === 'pajama') {
+      // kurta pajama: loose balloon legs cinched at the ankle
+      return [
+        xg(new THREE.CylinderGeometry(0.102 * p.legW, 0.084 * p.legW, 0.44, 10), 0, -0.22, 0),
+        xg(new THREE.CylinderGeometry(0.084 * p.legW, 0.05 * p.legW, 0.4, 10), 0, -0.64, 0),
+        xg(new THREE.TorusGeometry(0.052 * p.legW, 0.018, 6, 12), 0, -0.795, 0, 1, 1, 1, Math.PI / 2),
+      ]
+    }
+    if (style === 'bare') {
+      // bare legs under dresses/sarees: slimmer limb + knee hint, no cuff
+      return [
+        xg(new THREE.CylinderGeometry(0.08 * p.legW, 0.062 * p.legW, 0.44, 10), 0, -0.22, 0),
+        xg(new THREE.CylinderGeometry(0.058 * p.legW, 0.042 * p.legW, 0.4, 10), 0, -0.64, 0),
+        xg(new THREE.SphereGeometry(0.052 * p.legW, 8, 6), 0, -0.435, 0.004, 1, 0.7, 0.9),
+      ]
+    }
+    // trouser (default): existing taper + ankle cuff ring + knee fold ridge
+    return [
+      xg(new THREE.CylinderGeometry(0.088 * p.legW, 0.07 * p.legW, 0.44, 10), 0, -0.22, 0),
+      xg(new THREE.CylinderGeometry(0.064 * p.legW, 0.05 * p.legW, 0.4, 10), 0, -0.64, 0),
+      xg(new THREE.TorusGeometry(0.053 * p.legW, 0.012, 6, 12), 0, -0.795, 0, 1, 1, 1, Math.PI / 2),
+      xg(new THREE.TorusGeometry(0.06 * p.legW, 0.007, 6, 12), 0, -0.44, 0, 1, 1, 1, Math.PI / 2),
+    ]
+  })
+}
+
+/**
+ * Raised pleat shells for skirts (task 83) — 12 open-ended arc segments floating
+ * just proud (+0.008) of the skirt cone, hugging the same taper exactly. Vertex-
+ * colored with the caller's tint; renders with the shared vertex-color material.
+ */
+function skirtPleats(topR: number, botR: number, h: number, yMid: number, tint: string): THREE.BufferGeometry {
+  return cachedMerged(`skirtPleats|${topR}|${botR}|${h}|${tint}`, () => {
+    const parts: THREE.BufferGeometry[] = []
+    for (let i = 0; i < 12; i++) {
+      const th = (i / 12) * Math.PI * 2
+      parts.push(xg(tintedClone(new THREE.CylinderGeometry(topR + 0.008, botR + 0.008, h, 4, 1, true, th, Math.PI / 12 * 0.55), tint), 0, yMid, 0))
+    }
+    return parts
+  })
 }
 
 /**
@@ -388,8 +477,21 @@ function shoeGeometry(footwear: string, accent: string): THREE.BufferGeometry {
       add(G.hand, '#5c4632', 0, -0.635, 0, 1.62, 0.6, 1.42)    // folded cuff
       add(G.hand, '#3a2a1c', 0, -0.858, 0.05, 1.32, 0.85, 2.2) // foot body
       add(G.foot, '#241b12', 0, -0.882, 0.05, 1.13, 0.5, 1.2)  // lug sole
+      add(G.hand, '#241b12', 0, -0.848, 0.17, 1.18, 0.72, 0.72) // task 83 toe cap
       add(G.moustache, accent, 0, -0.7, 0, 1.35, 0.95, 3.9)    // buckle strap
       add(G.moustache, accent, 0, -0.8, 0, 1.35, 0.95, 3.9)    // buckle strap 2
+      for (let i = 0; i < 3; i++) {                            // task 83 front lacing
+        add(G.moustache, '#2a2018', 0, -0.685 - i * 0.048, 0.072, 0.9, 0.42, 0.6)
+      }
+    } else if (footwear === 'juttis') {
+      // task 83 (female book): embroidered flats — soft upturned toe curl,
+      // gold tip + instep band, dipped heel, accent upper
+      add(G.foot, '#8a4a30', 0, -0.882, 0.05, 1.04, 0.48, 1.12)  // flat leather sole
+      add(G.hand, accent, 0, -0.842, 0.08, 1.16, 0.8, 1.3)       // soft upper
+      add(G.hand, accent, 0, -0.838, 0.185, 0.74, 0.62, 0.62)    // upturned toe curl
+      add(G.spec, '#f2c14e', 0, -0.83, 0.222, 1.1, 1.1, 1.1)     // gold toe tip
+      add(G.moustache, '#f2c14e', 0, -0.812, 0.05, 1.22, 0.5, 1.35) // embroidered band
+      add(G.moustache, shade(accent, -26), 0, -0.79, -0.06, 1.08, 0.5, 0.9) // heel dip
     } else if (footwear === 'chappal') {
       add(G.chappal, '#7a4a2c', 0, -0.878, 0.05)               // leather sole
       add(G.hand, '#7a4a2c', 0, -0.878, 0.135, 1.2, 0.55, 1.5) // rounded toe
@@ -417,6 +519,8 @@ function shoeGeometry(footwear: string, accent: string): THREE.BufferGeometry {
       add(G.foot, upper, 0, -0.812, -0.005, 1.0, 0.95, 0.85)           // upper
       add(G.hand, glow ? '#2a3038' : cream, 0, -0.822, 0.1, 1.28, 0.62, 1.5) // toe cap
       add(G.hand, glow ? '#181c24' : shade(accent, -34), 0, -0.762, -0.075, 1.3, 0.72, 1.15) // heel collar
+      add(G.hand, glow ? '#39424e' : shade(accent, -22), 0, -0.772, 0.052, 1.05, 0.72, 1.05) // task 83 tongue
+      add(G.moustache, glow ? '#20242c' : shade(accent, -40), 0, -0.788, -0.118, 1.15, 0.85, 0.7) // task 83 heel counter
       add(G.moustache, white, 0, -0.728, -0.112, 0.4, 1.5, 0.9)        // heel pull tab
       for (let i = 0; i < 3; i++) {
         add(G.moustache, laceC, 0, -0.757, 0.005 + i * 0.038, 0.72, 0.55, 1.0) // lace rows
@@ -468,7 +572,7 @@ export class CharacterRig {
     // smooth hair with a slight sheen (flat caps read like plastic helmets)
     const hair = new THREE.MeshStandardMaterial({ color: colors.hair, roughness: 0.55, metalness: 0.05 })
     const isFemale = opts.gender === 'female'
-    const build: BodyBuild = opts.build === 'slim' || opts.build === 'sturdy' ? opts.build : 'regular'
+    const build: BodyBuild = opts.build === 'slim' || opts.build === 'sturdy' || opts.build === 'athletic' || opts.build === 'curvy' ? opts.build : 'regular'
 
     // hierarchy: group -> torsoPivot (contains torso, head, arms) ; legs on group
     this.group.add(this.torsoPivot)
@@ -486,12 +590,14 @@ export class CharacterRig {
     // neck (skin) — no more floating-head look under the hairline
     this.torsoPivot.add(new THREE.Mesh(neckGeometry(), skin))
 
-    // accent stripe (protest sash)
-    const sash = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.22), mat(colors.accent))
-    sash.position.set(0.06, 0.26, 0.02)
-    sash.rotation.z = 0.4
-    if (isFemale) sash.scale.x = 0.9
-    this.torsoPivot.add(sash)
+    // accent stripe (protest sash) — skipped for the saree (its pallu IS the drape)
+    if (opts.outfit !== 'saree') {
+      const sash = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.54, 0.22), mat(colors.accent))
+      sash.position.set(0.06, 0.26, 0.02)
+      sash.rotation.z = 0.4
+      if (isFemale) sash.scale.x = 0.9
+      this.torsoPivot.add(sash)
+    }
 
     // police department extras — badge on every officer, kit per uniform
     if (opts.npcType === 'police') {
@@ -952,27 +1058,123 @@ export class CharacterRig {
       yoke.scale.set(1.45, 1.15, 1.35)
       this.torsoPivot.add(yoke)
     } else if (outfitSlot === 'dress' || outfitSlot === 'anarkali') {
-      // task 82 (female book): A-line skirt from the waist + accent belt + hem
+      // task 83 (female book): two-segment A-line (hip-hug top + flared lower
+      // panel reads as a CUT, not a cone) + raised pleat shells + accent belt/hem.
+      // Dress hem sits just above the knee; anarkali falls to mid-shin.
       const long = outfitSlot === 'anarkali'
-      const skirt = new THREE.Mesh(G.dressSkirt, shirt)
-      skirt.position.y = long ? -0.33 : -0.27
-      skirt.scale.set(1, long ? 1.35 : 1, 1)
+      const skirt = new THREE.Mesh(cachedMerged(`skirtA|${long ? 'l' : 's'}`, () => long
+        ? [
+            xg(new THREE.CylinderGeometry(0.19, 0.226, 0.2, 14), 0, -0.1, 0),
+            xg(new THREE.CylinderGeometry(0.226, 0.335, 0.5, 14), 0, -0.45, 0),
+          ]
+        : [
+            xg(new THREE.CylinderGeometry(0.19, 0.222, 0.18, 14), 0, -0.09, 0),
+            xg(new THREE.CylinderGeometry(0.222, 0.3, 0.26, 14), 0, -0.31, 0),
+          ]), shirt)
       skirt.castShadow = true
       this.torsoPivot.add(skirt)
+      const pleats = new THREE.Mesh(
+        skirtPleats(long ? 0.196 : 0.198, long ? 0.341 : 0.306, long ? 0.7 : 0.44, long ? -0.35 : -0.22, shade(colors.shirt, -16)),
+        faceMaterialShared(),
+      )
+      this.torsoPivot.add(pleats)
       const hem = new THREE.Mesh(G.dressHem, mat(colors.accent))
       hem.rotation.x = Math.PI / 2
-      hem.position.y = long ? -0.665 : -0.52
+      hem.position.y = long ? -0.69 : -0.435
       hem.scale.setScalar(long ? 1.12 : 1)
       this.torsoPivot.add(hem)
+      if (long) {
+        // anarkali: gold band around the flare
+        const band = new THREE.Mesh(new THREE.TorusGeometry(0.279, 0.011, 6, 16), mat('#f2c14e'))
+        band.rotation.x = Math.PI / 2
+        band.position.y = -0.44
+        this.torsoPivot.add(band)
+      }
       const belt = new THREE.Mesh(G.waistBelt, mat(colors.accent))
       belt.rotation.x = Math.PI / 2
       belt.position.y = -0.03
       this.torsoPivot.add(belt)
+    } else if (outfitSlot === 'saree') {
+      // task 83 (female book): contrast skirt + front pallu pleats in the accent
+      // + diagonal pallu band with gold edge + shoulder drape + back tail.
+      // (the default protest sash is skipped for this outfit)
+      const skirtC = shade(colors.shirt, -34)
+      const skirt = new THREE.Mesh(cachedMerged('skirtS', () => [
+        xg(new THREE.CylinderGeometry(0.19, 0.222, 0.18, 14), 0, -0.09, 0),
+        xg(new THREE.CylinderGeometry(0.222, 0.315, 0.4, 14), 0, -0.38, 0),
+      ]), mat(skirtC))
+      skirt.castShadow = true
+      this.torsoPivot.add(skirt)
+      const dark = shade(skirtC, -18)
+      const pleatParts: THREE.BufferGeometry[] = []
+      for (let i = 0; i < 12; i++) {
+        const th = (i / 12) * Math.PI * 2
+        // front-most pleats carry the accent — the pallu's fall over the skirt
+        const front = i === 0 || i === 1 || i === 11
+        pleatParts.push(xg(tintedClone(new THREE.CylinderGeometry(0.198, 0.321, 0.58, 4, 1, true, th, Math.PI / 12 * 0.55), front ? colors.accent : dark), 0, -0.29, 0))
+      }
+      const pleats = new THREE.Mesh(mergeGeometries(pleatParts, false) ?? new THREE.BufferGeometry(), faceMaterialShared())
+      sharedGeo.add(pleats.geometry)
+      for (const p of pleatParts) p.dispose()
+      this.torsoPivot.add(pleats)
+      const hem = new THREE.Mesh(G.dressHem, mat('#f2c14e'))
+      hem.rotation.x = Math.PI / 2
+      hem.position.y = -0.575
+      hem.scale.setScalar(1.05)
+      this.torsoPivot.add(hem)
+      // pallu: diagonal band over the left shoulder + gold edge
+      const pallu = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.6, 0.026), mat(colors.accent))
+      pallu.position.set(-0.075, 0.27, 0.132)
+      pallu.rotation.z = 0.52
+      this.torsoPivot.add(pallu)
+      const palluEdge = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.6, 0.028), mat('#f2c14e'))
+      palluEdge.position.set(-0.128, 0.27, 0.132)
+      palluEdge.rotation.z = 0.52
+      this.torsoPivot.add(palluEdge)
+      const shoulderDrape = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.09, 0.15), mat(colors.accent))
+      shoulderDrape.position.set(-0.11, 0.48, 0.005)
+      this.torsoPivot.add(shoulderDrape)
+      const backTail = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.36, 0.02), mat(colors.accent))
+      backTail.position.set(-0.09, 0.24, -0.15)
+      this.torsoPivot.add(backTail)
+      const tailEdge = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.035, 0.022), mat('#f2c14e'))
+      tailEdge.position.set(-0.09, 0.075, -0.152)
+      this.torsoPivot.add(tailEdge)
+    } else if (outfitSlot === 'tracksuit') {
+      // task 83 (male book): stand collar + half-zip + twin chest stripes.
+      // (the matching striped track pants come from the leg style)
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.02, 6, 14), mat(shade(colors.shirt, -20)))
+      collar.rotation.x = Math.PI / 2
+      collar.position.y = 0.505
+      this.torsoPivot.add(collar)
+      const placket = new THREE.Mesh(G.tie, mat(shade(colors.shirt, -24)))
+      placket.position.set(0, 0.28, 0.13)
+      placket.scale.set(0.45, 0.8, 1)
+      this.torsoPivot.add(placket)
+      const zip = new THREE.Mesh(G.scar, mat('#9aa3ad', false))
+      zip.material.metalness = 0.5
+      zip.material.roughness = 0.4
+      zip.scale.set(0.8, 2.4, 0.8)
+      zip.position.set(0, 0.33, 0.142)
+      this.torsoPivot.add(zip)
+      const stripeA = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.02, 0.018), mat(colors.accent))
+      stripeA.position.set(0, 0.345, 0.138)
+      this.torsoPivot.add(stripeA)
+      const stripeB = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.02, 0.018), mat('#f5f0e6'))
+      stripeB.position.set(0, 0.315, 0.138)
+      this.torsoPivot.add(stripeB)
+      const logo = new THREE.Mesh(G.spec, mat('#f2c14e', false))
+      logo.material.metalness = 0.4
+      logo.position.set(0.11, 0.375, 0.14)
+      this.torsoPivot.add(logo)
     }
 
-    // arms — pivot at shoulder; sleeve (shirt) + forearm+fist (skin), both merged
-    this.armL.position.set(0.265, 0.46, 0)
-    this.armR.position.set(-0.265, 0.46, 0)
+    // arms — pivot at shoulder; sleeve (shirt) + forearm+fist (skin), both merged.
+    // task 83: arm attach width follows the shoulder profile (athletic hangs wider).
+    const bp = bodyProfile(isFemale, build)
+    const armX = 0.225 + bp.shoulder * 0.18
+    this.armL.position.set(armX, 0.46, 0)
+    this.armR.position.set(-armX, 0.46, 0)
     for (const arm of [this.armL, this.armR]) {
       const sleeve = new THREE.Mesh(sleeveGeometry(isFemale, build), shirt)
       sleeve.castShadow = true
@@ -982,7 +1184,8 @@ export class CharacterRig {
     }
 
     // legs — pivot at hip; FULL-LENGTH tapered limb (thigh+calf merged) reaching the
-    // shoe at y -0.9 == ground (the old rig's legs stopped 0.335 short → hover)
+    // shoe at y -0.9 == ground. task 83: leg style follows the outfit (trouser /
+    // pajama / bare / track) and stance width follows the hip profile.
     const footwearSlot = opts.footwear ?? 'shoes'
     const shoeMat = faceMaterialShared() // vertex-colored shoes, one shared material
     const buildFoot = (): THREE.Object3D => {
@@ -1004,11 +1207,15 @@ export class CharacterRig {
       if (isFemale) shoe.scale.set(0.92, 1, 0.92)
       return shoe
     }
-    this.legL.position.set(0.1, 0.9, 0)
-    this.legR.position.set(-0.1, 0.9, 0)
-    const legGeo = legGeometry(isFemale, build)
-    for (const leg of [this.legL, this.legR]) {
-      const limb = new THREE.Mesh(legGeo, pants)
+    const legStyle = legStyleFor(outfitSlot)
+    const legMat = legStyle === 'bare' ? skin : legStyle === 'track' ? shoeMat : pants
+    const legX = Math.min(0.13, Math.max(0.09, bp.hipBottom * (legStyle === 'bare' ? 0.57 : 0.62)))
+    this.legL.position.set(legX, 0.9, 0)
+    this.legR.position.set(-legX, 0.9, 0)
+    const legGeoL = legGeometry(isFemale, build, legStyle, 'L', colors.pants)
+    const legGeoR = legGeometry(isFemale, build, legStyle, 'R', colors.pants)
+    for (const [leg, geo] of [[this.legL, legGeoL], [this.legR, legGeoR]] as const) {
+      const limb = new THREE.Mesh(geo, legMat)
       limb.castShadow = true
       leg.add(limb)
       leg.add(buildFoot())
