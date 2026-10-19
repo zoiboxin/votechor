@@ -2088,3 +2088,21 @@ Stage Summary:
 - Food = instant energy: snack +60⚡, samosa +30⚡, chai full⚡, with visible popups + HUD-visible stamina gains (verified live: 10→70, 10→40).
 - All suites green, both servers healthy, pushed to GitHub: main 0d906be + tag v78 (dae675f..0d906be).
 - Next Task ID: 77 (queued: GLB wardrobe cosmetics, animation upgrade, profile save/load race, item persistence round-trip for online dropTaken UX, .env.example).
+
+---
+Task ID: 77
+Agent: Z.ai Code (main session)
+Task: User request — number keys 1–8 must USE the item in that hotbar slot while playing (they did nothing), and the dashboard/hotbar must update when items are used (it "remained same").
+
+Work Log:
+- Round-start checks: /api/version = v78 (no rollback), servers up, worklog ended at Task 76.
+- FORENSICS: input.ts had ZERO digit-key handling (keys never wired); hud hotbar (Hud.tsx InventorySlot) renders store hud.inventory and syncHud() already patches inventory — so both user symptoms shared one root cause: the digits did nothing at all.
+- FIX SHIPPED: src/game/input.ts — OneShot union extended with slot1..slot8; onKey down-branch maps /^(?:Digit|Numpad)([1-8])$/ → onOneShot('slotN') (fixed binding, not rebindable; typing surfaces already return early; auto-repeat already ignored). src/game/game.ts — handleOneShot cases slot1..slot8 → new useInventorySlot(index): guards detained/dazed/empty, then reuses useInventoryItem(uid) so consumables consume with all Task-76 energy effects and the dashboard refreshes through the existing syncHud path. Throwables in a slot fall through to the "use Q to throw" guidance (never wasted by a stray digit); empty slots stay silent. VC_BUILD v78 → v79 in the SAME commit (lesson from Task 76 applied).
+- CHECKS: tsc 0 project errors · lint clean. No server-side files touched → no game-server restart needed.
+- LIVE QA (agent-browser via :81, PLAY SOLO, real key presses): seeded slots → key 1 consumed the snack (+60⚡ live-measured, hud.inventory updated in the same check) → key 2 correctly showed throwable guidance because the inventory had SHIFTED (slot 2 was now the bottle — initial "failure" was a stale QA expectation, not a bug) → reshaped run: key 2 consumed the shifted-up snack, key 3 consumed chai → stamina 100/100 FULL, hud === game inventory at every checkpoint → key 8 on an empty slot: silent, no toast spam. Screenshot /tmp/task77-final-hotbar.png. Clean leaveMatch.
+- REPO HYGIENE: the commit had dragged in a stray tool-results/ artifact (restored lineage lost that ignore rule) — removed from the index, tool-results/ re-ignored, in a follow-up commit.
+
+Stage Summary:
+- Digits 1–8 (top row + numpad) now use the matching hotbar slot live in-game; the dashboard/hotbar updates instantly on every use (click, H, or digit — one shared path). Throwables guide to Q; empty slots silent.
+- Pushed to GitHub: main f484237 (v79) + tag v79, then hygiene commit on top. /api/version via :81 = v79.
+- Next Task ID: 78 (queued: GLB wardrobe cosmetics, 8-step animation upgrade, profile save/load race, online dropTaken UX, .env.example).
