@@ -1055,7 +1055,7 @@ export class Game {
     useGameStore.getState().patchHud({ hunted: false, rallyReadyAt: 0 })
     useGameStore.getState().setSquad(null)
     AudioManager.setTheme('menu')
-    AudioManager.setCrowdLevel(0.25)
+    AudioManager.setCrowdLevel(0) // v82 — quit-to-menu is SILENT now: the old 0.25 kept the crowd murmur (the "rain-ish" brown noise) looping behind the menu forever; music alone plays on the menu
     AudioManager.setRain(0) // v50 — a mid-storm quit used to keep the rain bed looping on the menu
     this.ambience.reset() // v80 — same contract for the jungle beds: quitting from the wild used to leave cicadas + wind looping on the menu forever
     this.weatherOverride = null // v52 — the menu obeys the settings panel again

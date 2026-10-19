@@ -304,17 +304,31 @@ class AudioManagerImpl {
         // octave and formant-band breath between bursts. 2–4 syllables, per-play
         // pitch jitter + statement contour (last syllable drops) so two bots
         // never sound like the same loop.
+        // v82 — the voices now pass through a shared "mouth": a lowpass shaving
+        // the buzzy saw edge plus a wandering formant band (0.9–1.3 kHz) that
+        // gives each bot its own head size — muffled speech, not a buzzer.
         const j = 0.9 + Math.random() * 0.2
         const f0 = (110 + Math.random() * 70) * j
         const syl = 2 + Math.floor(Math.random() * 3)
+        const mouth = this.ctx.createBiquadFilter()
+        mouth.type = 'lowpass'
+        mouth.frequency.value = 2400
+        mouth.Q.value = 0.6
+        const formant = this.ctx.createBiquadFilter()
+        formant.type = 'bandpass'
+        formant.frequency.value = 900 + Math.random() * 400
+        formant.Q.value = 0.8
+        const mg = this.ctx.createGain()
+        mg.gain.value = 1.5 // the mouth chain eats energy — compensate
+        mouth.connect(formant); formant.connect(mg); mg.connect(this.out())
         let tS = t
         for (let i = 0; i < syl; i++) {
           const dur = 0.09 + Math.random() * 0.13
           const last = i === syl - 1
           const pf = last ? f0 * 0.82 : f0 * (0.92 + Math.random() * 0.22)
-          this.osc('sawtooth', pf, tS, dur, 0.055 * v, pf * (0.8 + Math.random() * 0.3))
-          this.osc('square', pf * 0.5, tS, dur, 0.02 * v)
-          this.noise(dur * 0.7, tS, 0.028 * v, 900 + Math.random() * 900, 1.2)
+          this.osc('sawtooth', pf, tS, dur, 0.055 * v, pf * (0.8 + Math.random() * 0.3), mouth)
+          this.osc('square', pf * 0.5, tS, dur, 0.02 * v, undefined, mouth)
+          this.noise(dur * 0.7, tS, 0.028 * v, 900 + Math.random() * 900, 1.2, mouth)
           tS += dur + 0.03 + Math.random() * 0.07
         }
         break
@@ -426,6 +440,8 @@ class AudioManagerImpl {
       case 'moo': {
         // proper cow moo — slow attack (no click), saw voice gliding down with a
         // sub-octave chest layer and a breathy low band. Reads as a big animal.
+        // v82 — 2.4 Hz bellow tremolo on the chest: the throat flutter real cows
+        // have while lowing, instead of a perfectly steady synth tone.
         const j = 0.92 + Math.random() * 0.16
         const o = this.ctx.createOscillator()
         o.type = 'sawtooth'
@@ -436,6 +452,11 @@ class AudioManagerImpl {
         g.gain.exponentialRampToValueAtTime(0.15 * v, t + 0.13)
         g.gain.setValueAtTime(0.15 * v, t + 0.6)
         g.gain.exponentialRampToValueAtTime(0.0001, t + 0.95)
+        const trem = this.ctx.createOscillator()
+        trem.frequency.value = 2.4
+        const tremG = this.ctx.createGain()
+        tremG.gain.value = 0.035 * v
+        trem.connect(tremG); tremG.connect(g.gain)
         const sub = this.ctx.createOscillator()
         sub.type = 'sine'
         sub.frequency.setValueAtTime(86 * j, t)
@@ -448,6 +469,7 @@ class AudioManagerImpl {
         g.connect(this.out()); sg.connect(this.out())
         o.start(t); o.stop(t + 1)
         sub.start(t); sub.stop(t + 1)
+        trem.start(t); trem.stop(t + 1)
         this.noise(0.55, t + 0.1, 0.05 * v, 340, 0.6)
         break
       }
@@ -464,11 +486,31 @@ class AudioManagerImpl {
       }
       case 'meow': {
         // two-part mew: rising "mee" then falling "ow" with a slow vibrato
+        // v82 — a real 6 Hz pitch vibrato rides BOTH voices (cats warble, synths
+        // don't), plus a softer formant dip on the falling part so the "ow"
+        // darkens like a real mouth opening then closing.
         const j = 0.92 + Math.random() * 0.16
-        this.osc('sawtooth', 350 * j, t, 0.2, 0.08 * v, 640 * j)
-        this.osc('sine', 700 * j, t + 0.02, 0.18, 0.05 * v, 900 * j)
-        this.osc('sawtooth', 620 * j, t + 0.2, 0.3, 0.07 * v, 320 * j)
-        this.noise(0.34, t + 0.06, 0.025 * v, 1700, 0.8)
+        const vib = this.ctx.createOscillator()
+        vib.frequency.value = 6.1
+        const vibG = this.ctx.createGain()
+        vibG.gain.value = 13
+        vib.connect(vibG)
+        const mkVoice = (type: OscillatorType, f0: number, f1: number, t0: number, dur: number, peak: number) => {
+          const o = this.ctx!.createOscillator()
+          o.type = type
+          o.frequency.setValueAtTime(f0, t0)
+          o.frequency.exponentialRampToValueAtTime(Math.max(40, f1), t0 + dur)
+          vibG.connect(o.frequency)
+          const g = this.ctx!.createGain()
+          this.env(g, t0, 0.03, dur, peak)
+          o.connect(g); g.connect(this.out())
+          o.start(t0); o.stop(t0 + dur + 0.1)
+        }
+        vib.start(t); vib.stop(t + 0.75)
+        mkVoice('sawtooth', 350 * j, 640 * j, t, 0.2, 0.08 * v) // "mee" rises
+        mkVoice('sine', 700 * j, 900 * j, t + 0.02, 0.18, 0.05 * v) // overtone sheen
+        mkVoice('sawtooth', 620 * j, 320 * j, t + 0.2, 0.3, 0.07 * v) // "ow" falls
+        this.noise(0.34, t + 0.06, 0.025 * v, 1700, 0.8) // breath
         break
       }
       case 'chirp': {
