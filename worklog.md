@@ -2143,3 +2143,22 @@ Stage Summary:
 - Undead encounters now read as ONE dramatic scare per wave: a single sting + shake + toast, max one scent warning per 12s while roaming, packs collapse into the first detector, every match re-arms the intro toast, and strikes/kill flow are untouched (hp math verified live).
 - Pushed to GitHub: main 767750f + tag v81. /api/version = v81, on-screen badge V81.
 - Next Task ID: 80 (queued: GLB wardrobe cosmetics, 8-step animation upgrade, profile save/load race, online dropTaken UX, .env.example, animal polish, spawn-billboard polish).
+
+---
+Task ID: 80
+Agent: Z.ai Code (main session)
+Task: User request — (1) after ESC → quit to main menu, some background sound keeps playing — find and fix; (2) "cat dog cow make sure and bot use real sound we update this before" — verify the animal/bot voices are the upgraded realistic ones and improve them further.
+
+Work Log:
+- Round-start checks: /api/version = v81 (no rollback), worklog ended at Task 79, both servers up.
+- FORENSICS (menu leak): leaveMatch line 1058 explicitly called AudioManager.setCrowdLevel(0.25) on quit — a deliberate-looking legacy value that kept the crowd bed (brown noise lowpassed at 900 Hz, the exact "rain-ish" loop) MURMURING BEHIND THE MENU FOREVER: nothing drives setCrowdLevel once the match stops rendering, so the last per-frame level persisted (0.25 × 0.5 gain = clearly audible). Rain/jungle/wind beds were already retired on quit (v50/v78 fixes); the crowd bed was the last leaker.
+- FIX SHIPPED (leak): game.ts leaveMatch now calls setCrowdLevel(0) — quit-to-menu is silent; only the intended menu music plays (setTheme('menu') unchanged). finalizeMatch keeps its documented end-screen faint crowd (0.2) BY DESIGN — it dies when the player then enters the menu via leaveMatch(force).
+- FORENSICS (animal/bot voices): code audit confirmed the earlier upgrades are live and wired: animals.ts VOICE_SFX dog→'bark', cat→'meow', cow→'moo' (spatial playAt, 52m/26m ranges), fed→'crunch', sky birds→'chirp'; npcs.ts bots→'chatter'/'chant'/'order'/'whistleFar'/'shout' (v52 syllable-voiced). GAPS IMPROVED (v82, all in audio.ts): (a) moo gained a 2.4 Hz bellow TREMOLO on the chest gain — real cows' throat flutter instead of a steady synth tone; (b) meow gained a true 6.1 Hz pitch VIBRATO riding both voice oscillators (cats warble) via a shared LFO wired into frequency params; (c) bot chatter now passes through a shared "mouth" chain — lowpass 2400 Hz shaving the buzzy saw edge + a per-call wandering formant bandpass (0.9–1.3 kHz) so each bot has its own head size; peaks compensated ×1.5. bark/chirp already read real (dual woofs + jitter / down-chirp notes) — untouched.
+- CHECKS: tsc 0 project errors · lint clean · client-only (no game-server restart).
+- LIVE QA (agent-browser via :81): boot PLAY SOLO → crowd 0.493 alive, theme ambient → ESC → QUIT TO MENU → probed __vcAudio on the menu: crowd 0.0032 (→0; was 0.125 audible), rainSrc/jungleSrc/windSrc ALL false, theme 'menu'. Scenario 2: re-enter → teleport deep jungle (−84,−670) → cicada 0.0999 + wind 0.0548 live, crowd 0.0000 → ESC quit → ALL beds false, crowd 0.0000, menu music only. Sound graphs: all 5 upgraded voices fired DIRECT (play) and SPATIAL (playAt) — 10/10 OK, zero console errors. Badge V82, /api/version = v82. QA harness cleaned, distanceCulling restored true.
+
+Stage Summary:
+- ESC-quit to main menu is now fully silent except the intended menu music — the last residual loop (crowd murmur, the "rain-ish" sound) retires on quit.
+- Animal + bot voices verified as the realistic generation and pushed further: cow bellow flutter, cat vibrato + darkening "ow", bots speak through individualized formant "mouths" instead of buzzing.
+- Pushed to GitHub: main 5bfd0ca + tag v82. /api/version = v82, on-screen badge V82.
+- Next Task ID: 81 (queued: GLB wardrobe cosmetics, 8-step animation upgrade, profile save/load race, online dropTaken UX, .env.example, animal polish, spawn-billboard polish).
