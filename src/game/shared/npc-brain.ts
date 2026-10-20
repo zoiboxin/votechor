@@ -1,6 +1,6 @@
 // VoteChor NPC AI brain — pure deterministic FSM logic (no three.js/DOM).
 // Ticked server-side at NPC_TICK_HZ; clients interpolate rendered transforms.
-import { DETECT, POLICE_ATTACK } from './constants'
+import { DETECT, POLICE_ATTACK, POLICE_HIGH_GROUND_Y } from './constants'
 import type { AABB, NpcStateName, NpcType } from './types'
 
 export interface NpcBrainState {
@@ -221,6 +221,12 @@ export function tickNpc(
       const dx = target.x - n.x, dz = target.z - n.z
       const d = Math.hypot(dx, dz)
       n.ry = Math.atan2(dx, dz)
+      // v88 — HIGH-GROUND IMMUNITY: a target standing on a crate/cart/hay/stage
+      // top (feet ≥ POLICE_HIGH_GROUND_Y above the ground-level officer) can't be
+      // wind-up-struck, struck or captured from below. The chase itself continues
+      // (the officer hovers below — pressure stays), capture progress decays, and
+      // the moment the target hops down the normal rules resume.
+      const upHigh = (target.y ?? 0) >= POLICE_HIGH_GROUND_Y
       // --- Phase 5 police melee: resolve a pending wind-up before anything else ---
       if (n.attackTelegraphUntil > 0) {
         if (now < n.attackTelegraphUntil) {
@@ -233,9 +239,9 @@ export function tickNpc(
           }
           break
         }
-        // STRIKE: re-validate — target still in range (v51: elevation-aware), not dazed/detained/hidden, LOS not blocked
+        // STRIKE: re-validate — target still in range (v51: elevation-aware), not dazed/detained/hidden/up-high (v88), LOS not blocked
         n.attackTelegraphUntil = 0
-        const strikeOk = d <= reachXZ(POLICE_ATTACK.strikeRange, target.y) && !target.dazed && !target.detained && !target.hidden &&
+        const strikeOk = !upHigh && d <= reachXZ(POLICE_ATTACK.strikeRange, target.y) && !target.dazed && !target.detained && !target.hidden &&
           !segmentBlocked(n.x, n.z, target.x, target.z, colliders, true)
         if (strikeOk) {
           events.push({
@@ -251,7 +257,8 @@ export function tickNpc(
       }
       // start a wind-up when in range (attack preferred over capture inside that range)
       // v51 — elevation-aware: an officer at the base of a platform can start the swing
-      if (d <= reachXZ(POLICE_ATTACK.chaseAttackRange, target.y) && !target.hidden && now >= n.nextAttackAt) {
+      // v88 — never up at a high-ground target
+      if (!upHigh && d <= reachXZ(POLICE_ATTACK.chaseAttackRange, target.y) && !target.hidden && now >= n.nextAttackAt) {
         n.attackTelegraphUntil = now + POLICE_ATTACK.windupSec * 1000
         break
       }
@@ -263,7 +270,8 @@ export function tickNpc(
       // v86 — a graced (hidden) target can never be grabbed: the escape/release
       // grace is an anti-ambush window, but an officer already holding chase state
       // used to bypass it because only ACQUISITION checked `hidden`.
-      if (!target.hidden && d < reachXZ(DETECT.captureRadius, target.y)) { // v51 — can grab UP onto platforms
+      // v88 — nor can a high-ground target: no cuffing up at a crate/cart/stage top.
+      if (!upHigh && !target.hidden && d < reachXZ(DETECT.captureRadius, target.y)) { // v51 — can grab UP onto platforms
         // weakened targets (< weakenedHealth HP) get grabbed at the multiplied capture time
         const weakened = typeof target.health === 'number' && target.health < POLICE_ATTACK.weakenedHealth
         const captureTime = DETECT.captureTime * (weakened ? POLICE_ATTACK.weakenedCaptureMul : 1)

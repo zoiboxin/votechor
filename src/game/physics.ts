@@ -57,7 +57,14 @@ export class PhysicsWorld {
     return out
   }
 
-  /** Highest solid top under (x,z) at or below maxY. Returns 0 (street) if none. */
+  /** Highest solid top under (x,z) at or below maxY. Returns 0 (street) if none.
+   *  v88 — edge-support halo shrunk 0.42 → 0.14 m: the old halo (playerRadius)
+   *  kept the player "standing" on air up to 0.42 m PAST a box edge (the
+   *  floating-beside-the-box look) and could snap them up onto a low box top
+   *  from beside it. 0.14 m keeps natural edge-standing (feet still half on the
+   *  surface) without the invisible air-bridge. */
+  private static readonly EDGE_SUPPORT = 0.14
+
   groundHeight(x: number, z: number, maxY: number): number {
     let h = 0
     // v77 terrain (mountains) — capped by maxY so nothing is teleported ONTO a
@@ -66,13 +73,14 @@ export class PhysicsWorld {
       const t = this.terrain(x, z)
       if (t > h && t <= maxY + 0.02) h = t
     }
+    const edge = PhysicsWorld.EDGE_SUPPORT
     for (const c of this.nearby(x, z, 0.45)) {
-      if (x < c.minX - 0.42 || x > c.maxX + 0.42 || z < c.minZ - 0.42 || z > c.maxZ + 0.42) continue
+      if (x < c.minX - edge || x > c.maxX + edge || z < c.minZ - edge || z > c.maxZ + edge) continue
       if (c.maxY <= maxY + 0.02 && c.maxY > h) h = c.maxY
     }
     // dynamic colliders (vehicles) are standable too — small linear scan
     for (const c of this.dynamic) {
-      if (x < c.minX - 0.42 || x > c.maxX + 0.42 || z < c.minZ - 0.42 || z > c.maxZ + 0.42) continue
+      if (x < c.minX - edge || x > c.maxX + edge || z < c.minZ - edge || z > c.maxZ + edge) continue
       if (c.maxY <= maxY + 0.02 && c.maxY > h) h = c.maxY
     }
     return h
@@ -122,8 +130,12 @@ export class PhysicsWorld {
         if (c.walkable) continue // walkable platforms are ground, not walls
         if (this.hits(nx, pos.y, pos.z, r, h, c)) {
           // step-up?
+          // v88 — the step target is AT LEAST this collider's top: with the shrunk
+          // EDGE_SUPPORT halo the center can sit outside the footprint at first
+          // contact, where groundHeight() no longer sees the box — max() keeps the
+          // step-up honest (and stacked-tops still win via groundHeight).
           if (c.maxY - pos.y <= 0.62 && c.maxY - pos.y > -0.01) {
-            const g = this.groundHeight(nx, pos.z, c.maxY + 0.5)
+            const g = Math.max(this.groundHeight(nx, pos.z, c.maxY + 0.5), c.maxY)
             if (g <= c.maxY + 0.01) { pos.y = g; continue }
           }
           // sprint vault/mantle — extends the 0.62 step-up to 1.18m (walk speed untouched)
@@ -152,7 +164,8 @@ export class PhysicsWorld {
         if (c.walkable) continue
         if (this.hits(pos.x, pos.y, nz, r, h, c)) {
           if (c.maxY - pos.y <= 0.62 && c.maxY - pos.y > -0.01) {
-            const g = this.groundHeight(pos.x, nz, c.maxY + 0.5)
+            // v88 — see X-phase note: step target at least this collider's top
+            const g = Math.max(this.groundHeight(pos.x, nz, c.maxY + 0.5), c.maxY)
             if (g <= c.maxY + 0.01) { pos.y = g; continue }
           }
           if (this.tryVault(pos, vel, r, h, c, 'z')) { vaulted = true; break }

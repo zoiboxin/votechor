@@ -45,6 +45,7 @@ import {
   POLICE_ATTACK,
   POLICE_STRIKE,
   PLAYER_ROLE,
+  POLICE_HIGH_GROUND_Y,
   INVENTORY_MAX,
   ITEM_CONFIG,
 } from '../../src/game/shared/constants'
@@ -687,7 +688,12 @@ export class Room {
     // v47 — elevation-aware reach: officers can cuff UP onto objects (carts, the
     // stage, the fountain rim, containers) — horizontal range grows with the
     // target's height above the officer, mirroring the client's game.ts formula.
+    // v88 — HIGH-GROUND IMMUNITY: EXCEPT when the target's feet sit ≥
+    // POLICE_HIGH_GROUND_Y above the officer's — no detaining from the ground up
+    // at a crate/cart/hay/stage top. An officer standing on the SAME surface
+    // (dy ≈ 0) still cuffs normally.
     const dyUp = Math.max(0, (target.y ?? 0) - (officer.y ?? 0))
+    if (dyUp >= POLICE_HIGH_GROUND_Y) return false
     const reach = PLAYER_ROLE.arrestRange + Math.min(dyUp * 0.75, 2.2)
     if (dist2d(officer.x, officer.z, target.x, target.z) > reach ** 2) return false
     officer.lastArrestAt = now
@@ -718,7 +724,10 @@ export class Room {
     if (now < target.releaseGraceUntil) return false // v49 — post-release grace: no instant lathi at the respawn
     // v47 — elevation-aware lathi (mirrors the client's game.ts formula): the
     // reach grows with the target's height above the officer, capped at +2.2 m
+    // v88 — HIGH-GROUND IMMUNITY: no lathi from the ground up at a target ≥
+    // POLICE_HIGH_GROUND_Y above the officer (crate/cart/hay/stage tops).
     const dyUp = Math.max(0, (target.y ?? 0) - (officer.y ?? 0))
+    if (dyUp >= POLICE_HIGH_GROUND_Y) return false
     const reach = POLICE_STRIKE.range + Math.min(dyUp * 0.75, 2.2) + 0.6 // +0.6 latency grace (unchanged)
     if (dist2d(officer.x, officer.z, target.x, target.z) > reach ** 2) return false
     officer.lastStrikeAt = now

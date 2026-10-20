@@ -190,11 +190,21 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   const solidBox = (x: number, z: number, w: number, d: number, h: number, y = 0) => { const c = box(x - w / 2, y, z - d / 2, x + w / 2, y + h, z + d / 2); c.prop = true; return c }
   // ry-proof square footprints for rotated clutter (scooters park at any angle)
   const scooterBox = (x: number, z: number) => solidBox(x, z, 1.9, 1.9, 1.0)
-  // bench seat — low + standable (step-up height)
-  const benchBox = (x: number, z: number) => solidBox(x, z, 1.8, 0.9, 0.55)
+  // bench seat — low + standable (step-up height); v88 — 2.2 m matches the seat mesh
+  const benchBox = (x: number, z: number) => solidBox(x, z, 2.2, 0.9, 0.55)
   const kettleBox = (x: number, z: number) => solidBox(x, z, 1.1, 1.1, 1.4)
   const planterBox = (x: number, z: number) => solidBox(x, z, 1.5, 1.5, 1.0)
-  const crateBoxS = (x: number, z: number, s: number) => solidBox(x, z, 1.15 * s, 1.15 * s, 1.2 * s)
+  const crateBoxS = (x: number, z: number, s: number) => solidBox(x, z, 1.2 * s, 1.2 * s, 1.2 * s)
+  /** v88 — rotated-rect collider: exact axis-aligned bounds of a w×d footprint
+   *  spun by ry around its center (deco groups rotate `g.rotation.y = d.ry`, so
+   *  local +X maps to world (cos ry, −sin ry)). Fixes props whose colliders used
+   *  to ignore rotation — carts blocked 0.9 m of air on every side and floated
+   *  their standable top 0.4 m above the visible bed. */
+  const rotBox = (x: number, z: number, w: number, d: number, h: number, ry = 0, y = 0) => {
+    const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry))
+    const hx = (w * c + d * s) / 2, hz = (w * s + d * c) / 2
+    return solidBox(x, z, hx * 2, hz * 2, h, y)
+  }
 
   // east-west street band test — random props must not spawn on the asphalt
   const inCrossRoad = (z: number, pad = 1.6) => CROSS_ROADS.some(r => Math.abs(z - r.z) < r.halfW + pad)
@@ -339,7 +349,7 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   // Carts and scooters blocking lanes
   for (let i = 0; i < 8; i++) {
     const x = -4 + rnd() * 8, z = -92 - i * 13 - rnd() * 4
-    if (i % 3 === 0) { deco({ kind: 'cart', x, z, ry: rnd() * 3, collider: true }); box(x - 1.2, 0, z - 1.2, x + 1.2, 1.5, z + 1.2) }
+    if (i % 3 === 0) { const cry = rnd() * 3; deco({ kind: 'cart', x, z, ry: cry, collider: true }); rotBox(x, z, 1.7, 1.1, 1.1, cry) }
     else { const sx2 = x > 0 ? x + 3 : x - 3; deco({ kind: 'scooter', x: sx2, z, ry: rnd() * 6.28 }); scooterBox(sx2, z) }
   }
   for (let i = 0; i < 10; i++) {
@@ -397,7 +407,7 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
     }
     for (let i = 0; i < 3; i++) { const bx = -96 + i * 14; deco({ kind: 'bench', x: bx, z: -46, ry: rnd() * 3 }); benchBox(bx, -46) }
     deco({ kind: 'teaKettle', x: -66, z: -58.6, ry: 0.8 }); kettleBox(-66, -58.6) // v47 — nudged clear of the cow route
-    deco({ kind: 'cart', x: -88, z: -60, ry: -0.4 }); solidBox(-88, -60, 2.4, 2.4, 1.5)
+    deco({ kind: 'cart', x: -88, z: -60, ry: -0.4 }); rotBox(-88, -60, 1.7, 1.1, 1.1, -0.4)
     for (let i = 0; i < 4; i++) { const sx = -106 + i * 15, sz = -64 - rnd() * 3; deco({ kind: 'scooter', x: sx, z: sz, ry: rnd() * 6.28 }); scooterBox(sx, sz) }
     for (let i = 0; i < 4; i++) deco({ kind: 'crowd', x: -100 + i * 16 + rnd() * 5, z: -36 - rnd() * 24, ry: rnd() * 6.28, variant: i % 6 })
     // low wall with a gate gap facing the plaza margin
@@ -424,7 +434,7 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
       if (r % 2 === 1) clothesline(-75.5, zRow + rowPitch / 2 - 3.25, 7)
       if (r % 3 === 1) { deco({ kind: 'crate', x: -49, z: zRow + 4.8, ry: rnd(), s: 0.8 }); box(-50, 0, zRow + 3.8, -48, 1.3, zRow + 5.8) }
       if (r % 4 === 2) { deco({ kind: 'scooter', x: -66.5, z: zRow + rowPitch / 2, ry: rnd() * 6.28 }); scooterBox(-66.5, zRow + rowPitch / 2) }
-      if (r === 5) { deco({ kind: 'cart', x: -89.5, z: zRow + rowPitch / 2, ry: 1.2, collider: true }); box(-90.7, 0, zRow + 3.6, -88.3, 1.5, zRow + 6) }
+      if (r === 5) { deco({ kind: 'cart', x: -89.5, z: zRow + rowPitch / 2, ry: 1.2, collider: true }); rotBox(-89.5, zRow + rowPitch / 2, 1.7, 1.1, 1.1, 1.2) }
     }
     // courtyard compound mid-block: walls with a narrow entrance
     wall(-96, -115.8, -80, -115.8); wall(-96, -115.8, -96, -128.6); wall(-80, -115.8, -80, -123)
@@ -545,7 +555,7 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   // outer corridor hiding spots (west + east dead-end pockets between fence lines)
   for (let i = 0; i < 3; i++) { const x = -84 - i * 14; const z = -216 + i * 16; deco({ kind: 'crate', x, z, ry: rnd(), s: 1.1 }); box(x - 1, 0, z - 1, x + 1, 2, z + 1) }
   for (let i = 0; i < 3; i++) { const x = 76 + i * 14; const z = -220 + i * 15; deco({ kind: 'crate', x, z, ry: rnd(), s: 1.2 }); box(x - 1.1, 0, z - 1.1, x + 1.1, 2.2, z + 1.1) }
-  deco({ kind: 'cart', x: -56, z: -262, ry: 0.7, collider: true }); box(-57.2, 0, -263.2, -54.8, 1.5, -260.8)
+  deco({ kind: 'cart', x: -56, z: -262, ry: 0.7, collider: true }); rotBox(-56, -262, 1.7, 1.1, 1.1, 0.7)
   for (let i = 0; i < 3; i++) deco({ kind: 'crowd', x: -90 + i * 70, z: -230 - i * 14, ry: rnd() * 6.28, variant: i % 6 })
 
   items.push(
@@ -926,7 +936,7 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
       }
       if (r % 2 === 0) clothesline(-138, zRow + 4.6, 6)
       if (r % 3 === 1) { deco({ kind: 'scooter', x: -151, z: zRow + 7, ry: rnd2() * 6.28 }); scooterBox(-151, zRow + 7) }
-      if (r === 4) { deco({ kind: 'cart', x: -144, z: zRow + 7, ry: 1.1, collider: true }); box(-145.2, 0, zRow + 5.6, -142.8, 1.5, zRow + 8.4) }
+      if (r === 4) { deco({ kind: 'cart', x: -144, z: zRow + 7, ry: 1.1, collider: true }); rotBox(-144, zRow + 7, 1.7, 1.1, 1.1, 1.1) }
     }
     deco({ kind: 'lamp', x: -140, z: -100, ry: Math.PI / 2 })
     deco({ kind: 'lamp', x: -140, z: -170, ry: -Math.PI / 2 })
@@ -1538,6 +1548,78 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
   }
 
   // ================= v43 LEVEL-MAP EXTRAS — appended strictly AFTER the skeleton =====
+  // v88 — SOLID-PROP SAFETY NET (skeleton only, runs BEFORE map extras so the
+  // maps-test extras slice stays aligned): every rendered skeleton prop of a
+  // solid kind MUST have a collider covering it. Hand-placed pairs missed a
+  // handful (hay bales, stumps, scarecrows, graves, fence runs and a couple of
+  // crates all used to be walk-through ghosts — the user literally walked INTO
+  // them). Deterministic: no rng calls, so the seeded placement stream is
+  // untouched. Each candidate collider is validated before it is kept:
+  //   • no overlap with an existing collider (graves in tight rows stay porous)
+  //   • vehicle-route clearance mirroring tests/world-integrity (center ≥
+  //     1.35 + half-extent) and tests/route-check (samples ≥ 0.9 m from the box)
+  // Candidates that would clip a route stay decorative, exactly as before.
+  const segDist = (px: number, pz: number, ax: number, az: number, bx: number, bz: number) => {
+    const dx = bx - ax, dz = bz - az
+    const len2 = dx * dx + dz * dz || 1e-9
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / len2))
+    return Math.hypot(px - (ax + dx * t), pz - (az + dz * t))
+  }
+  const routeClear = (minX: number, minZ: number, maxX: number, maxZ: number) => {
+    const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2
+    const half = Math.max(maxX - minX, maxZ - minZ) / 2
+    for (const v of vehicles) {
+      for (let i = 0; i < v.path.length - 1; i++) {
+        const [ax, az] = v.path[i], [bx, bz] = v.path[i + 1]
+        if (segDist(cx, cz, ax, az, bx, bz) < 1.35 + half) return false
+        const len = Math.hypot(bx - ax, bz - az)
+        for (let s = 0; s <= len; s += 1) {
+          const t = s / (len || 1)
+          const px = ax + (bx - ax) * t, pz = az + (bz - az) * t
+          const dx = Math.max(minX - px, 0, px - maxX)
+          const dz = Math.max(minZ - pz, 0, pz - maxZ)
+          if (Math.hypot(dx, dz) < 0.9) return false
+        }
+      }
+    }
+    return true
+  }
+  const keepIfClean = (before: number) => {
+    const c = colliders[before]
+    const overlaps = colliders.some((o, i) => i !== before &&
+      c.minX < o.maxX + 0.05 && c.maxX > o.minX - 0.05 && c.minZ < o.maxZ + 0.05 && c.maxZ > o.minZ - 0.05)
+    if (overlaps || !routeClear(c.minX, c.minZ, c.maxX, c.maxZ)) colliders.length = before
+  }
+  const solidSweep: Record<string, (d: Deco) => void> = {
+    crate: (d) => crateBoxS(d.x, d.z, d.s ?? 1),
+    hay: (d) => solidBox(d.x, d.z, 1.5 * (d.s ?? 1), 1.5 * (d.s ?? 1), 1.4 * (d.s ?? 1)),
+    stump: (d) => solidBox(d.x, d.z, 0.76 * (d.s ?? 1), 0.76 * (d.s ?? 1), 0.55 * (d.s ?? 1)),
+    scarecrow: (d) => solidBox(d.x, d.z, 0.5, 0.5, 2.1),
+    grave: (d) => rotBox(d.x, d.z, 0.95 * (d.s ?? 1), 0.5 * (d.s ?? 1), 1.15 * (d.s ?? 1), d.ry ?? 0),
+    fence: (d) => rotBox(d.x, d.z, d.w ?? 6, 0.3, 1.15, d.ry ?? 0),
+  }
+  for (const d of decorations) {
+    if (d.kind === 'hoarding') {
+      // posts sit 1.6 m off-center — test the POST spots, not the deco center
+      const c = Math.cos(d.ry ?? 0), s = Math.sin(d.ry ?? 0)
+      const postCovered = (px: number, pz: number) => colliders.some(c2 =>
+        px >= c2.minX - 0.6 && px <= c2.maxX + 0.6 && pz >= c2.minZ - 0.6 && pz <= c2.maxZ + 0.6)
+      const p1x = d.x + 1.6 * c, p1z = d.z - 1.6 * s
+      const p2x = d.x - 1.6 * c, p2z = d.z + 1.6 * s
+      if (!postCovered(p1x, p1z)) { const b = colliders.length; rotBox(p1x, p1z, 0.4, 0.4, 4, d.ry ?? 0); keepIfClean(b) }
+      if (!postCovered(p2x, p2z)) { const b = colliders.length; rotBox(p2x, p2z, 0.4, 0.4, 4, d.ry ?? 0); keepIfClean(b) }
+      continue
+    }
+    const sweep = solidSweep[d.kind]
+    if (!sweep) continue
+    const covered = colliders.some(c =>
+      d.x >= c.minX - 0.8 && d.x <= c.maxX + 0.8 && d.z >= c.minZ - 0.8 && d.z <= c.maxZ + 0.8)
+    if (covered) continue
+    const b = colliders.length
+    sweep(d)
+    keepIfClean(b)
+  }
+
   // Variant-only props: palettes/signage above already differ; these add the
   // district's landmarks + navigation hazards. Ground colliders here are CLIENT
   // physics only (the server never validates static collisions), but placements

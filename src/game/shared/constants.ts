@@ -79,6 +79,15 @@ export const DETECT = {
   packChaseRadius: 16,
 }
 
+/** v88 — HIGH-GROUND IMMUNITY: a protester whose feet sit this high above the
+ *  officer's (crate/cart/hay/stage tops — anything taller than a bench) cannot be
+ *  detained, wind-up-struck or lathi-hit from below. Officers who climb up to the
+ *  SAME surface (dy ≈ 0) can still make the cuff — high ground protects from the
+ *  ground, not from an officer standing beside you. Bench tops (0.55 m) stay
+ *  detainable by design. Mirrored in npc-brain (NPC officers) and room.ts
+ *  (human police arrest/strike validation). */
+export const POLICE_HIGH_GROUND_Y = 0.9
+
 // ---------- Police melee combat (Phase 5) — shared by server FSM + client telegraphs ----------
 export const POLICE_ATTACK = {
   windupSec: 0.55,          // visible telegraph before the strike lands (dodge window)

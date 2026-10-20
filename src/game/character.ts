@@ -1771,6 +1771,17 @@ export class CharacterRig {
       }
     }
 
+    // v88 — residual head-pose scrub: one-shot states PIN the head (dazed writes
+    // rotation.z = sin·0.25, detained/heal pin rotation.x) and no locomotion state
+    // ever reset them — after any hit or detention the head stayed FROZEN at the
+    // last written angle (the user-visible permanently-tilted head). Every state
+    // that does not itself pose the head now eases both axes back to neutral.
+    if (anim !== 'dazed' && anim !== 'down' && anim !== 'fall' && anim !== 'detained' && anim !== 'heal') {
+      const headEase = Math.min(1, dt * 10)
+      if (anim !== 'idle') this.headPivot.rotation.x += (0 - this.headPivot.rotation.x) * headEase
+      this.headPivot.rotation.z += (0 - this.headPivot.rotation.z) * headEase
+    }
+
     // cloth life: flag ripples, banner sways with the stride
     if (this.flagClothRef) {
       this.flagClothRef.rotation.y = Math.sin(p * 1.4) * 0.35 + 0.12

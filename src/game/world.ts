@@ -1329,12 +1329,17 @@ export class WorldRenderer {
         break
       }
       case 'crate': {
+        // v88 — visual shrunk 1.6s → 1.2s cube to EXACTLY match crateBoxS
+        // (1.2s tall): the old visual top sat 0.4s ABOVE the collider so anyone
+        // standing "on" a crate sank knee-deep into the wood, and the 1.6s-wide
+        // visual poked 0.22s past the collider on every side (clipping through
+        // crate corners while walking beside them).
         const s = d.s ?? 1
-        const crate = new THREE.Mesh(new THREE.BoxGeometry(1.6 * s, 1.6 * s, 1.6 * s), new THREE.MeshStandardMaterial({ color: '#9c8058', flatShading: true }))
-        crate.position.y = 0.8 * s
+        const crate = new THREE.Mesh(new THREE.BoxGeometry(1.2 * s, 1.2 * s, 1.2 * s), new THREE.MeshStandardMaterial({ color: '#9c8058', flatShading: true }))
+        crate.position.y = 0.6 * s
         crate.castShadow = true
-        const edge = new THREE.Mesh(new THREE.BoxGeometry(1.65 * s, 0.12, 1.65 * s), new THREE.MeshStandardMaterial({ color: '#6b5236' }))
-        edge.position.y = 1.55 * s
+        const edge = new THREE.Mesh(new THREE.BoxGeometry(1.25 * s, 0.1, 1.25 * s), new THREE.MeshStandardMaterial({ color: '#6b5236' }))
+        edge.position.y = 1.15 * s
         g.add(crate, edge)
         break
       }
