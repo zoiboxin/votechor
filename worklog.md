@@ -2248,3 +2248,22 @@ Stage Summary:
 - v86's police escape/detain fix is now documented in the worklog (was shipped silently).
 - Pushed to GitHub: main 0f89a48 + tag v87. /api/version = v87, on-screen badge V87.
 - Next Task ID: 85 (queued: profile save/load race — GameRoot bootstrap refresh can clobber fresher wardrobe saves; online dropTaken UX / item persistence round-trip; spawn-billboard composition polish; walk-clip stride calibration for the GLB return).
+
+---
+Task ID: 85
+Agent: Z.ai Code (main session)
+Task: User request — "check the game it looks revert 2 days back pull from git latest update from yesterday pull latest and update."
+
+Work Log:
+- ROUND-START ROLLBACK DETECTED (6th platform rollback): local working tree was regressed to v63 (commit 1d01532, Task 74/75 era) with VC_BUILD='v63'; local git diff showed 0 insertions/0 deletions (mode/mtime-only noise, safe to discard). Remote origin/main was intact at v87 (818683a) with tags v77..v87 present.
+- ROOT CAUSE FOUND THIS TIME: the 15-min cron job (then job 468045) was DISABLED — "exec limits exceeded" — so no rounds ran to notice/repair the sandbox regression and the platform rolled the project directory back to an old snapshot. Between Task 79's v81 and this round, background cron rounds had shipped Tasks 80-84 (v82 menu-sound leak fix; v81/hiFi GLB wardrobe pipeline parked as GLB_CHARACTERS_ENABLED=false; Task 82 double-eyebrow fix + gender style books; v85 body shapes/dress/pants/shoes; v86 police escape/detain fix; v87 shared wild server-authoritative zombies+animals).
+- RECOVERY: git fetch origin && git reset --hard origin/main → HEAD 818683a, VC_BUILD='v87', worklog ends at Task 84 (next ID 85). Killed stale pids (next-server 1080, game-server bun 1189) which were still serving v63-era code, then subshell-respawned both: (bun run dev >> dev.log) and (game-server bun run dev >> gs-dev.log). Game server now reports the v87 world ("33 npcs, 112 items"); /api/version = v87.
+- CRON REBUILT: deleted disabled job 468045, created job 468678 (15-min webDevReview, Asia/Qatar) with refreshed v87 context (rollback recovery now includes "hard-restart BOTH servers after reset — they keep running the old rolled-back code").
+- CHECKS: tsc 0 project errors · lint clean · route-check ALL 32 ROUTES OK · world-integrity 24/24 · maps ALL PASS · physics 4/4 · drop-test 10/10.
+- LIVE QA (agent-browser via :81): landing loads, PLAY SOLO boots in ~16 s → running:true, badge V87, zombie system live, player at server spawn (0,-8); agent-browser errors + console filtered: zero unexpected errors.
+
+Stage Summary:
+- Platform rollback fully recovered without data loss: the game is back to v87 (shared wild, body shapes, wardrobe, police fix, menu-sound fix — everything shipped through Task 84) and both servers run the current code. GitHub repo (origin/main 818683a) once again proved to be the single source of truth for recovery.
+- The cron watchdog is restored (job 468678) so future rollbacks should be caught within 15 minutes instead of days.
+- No client/gameplay changes this round (worklog-only commit) → VC_BUILD stays v87, no new tag.
+- Next Task ID: 86 (queued: profile save/load race; online dropTaken UX / item persistence round-trip; spawn-billboard composition polish; walk-clip stride calibration for the GLB return; wild polish — minimap zombie blips, pet-owner nameplate, fed crumbs visible to all).
