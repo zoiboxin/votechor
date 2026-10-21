@@ -322,6 +322,18 @@ export class Game {
     this.engine.onContextLost = () => {
       markGl('lost', 'WebGL context lost')
       this.store.notify('Graphics context lost — reloading…', 'warning')
+      // v89 — RE-ARMING recovery. The old one-shot 4.5 s retry could be permanently
+      // silenced by guardedReload's 30 s window (a watchdog reload moments earlier),
+      // and a lost context makes renderer.render() a silent no-op — no exception, so
+      // lastError/errStreak never fire either. Net result: a frozen last frame with a
+      // live HUD until a manual refresh — the measured "world gone, game still running"
+      // report. Retry every 4 s while the context stays lost; guardedReload still
+      // rate-limits the actual navigation to one per 30 s window, so a flaky device
+      // cannot loop faster than that, and the page now ALWAYS recovers.
+      const retry = window.setInterval(() => {
+        if (!this.engine.contextLost) { window.clearInterval(retry); return }
+        guardedReload('webgl context lost')
+      }, 4000)
       window.setTimeout(() => { if (this.engine.contextLost) guardedReload('webgl context lost') }, 4500)
     }
     this.engine.onContextRestored = () => {
@@ -990,6 +1002,14 @@ export class Game {
       ? 'Officer on duty — detain rowdy protesters! Walk close and press E.'
       : 'The votes are missing. The protest is on. Everybody run!', 'info')
     this.maybeOnboard()
+    // v89 — boot render self-test: ~2.5 s into EVERY match, probe the framebuffer for
+    // a dozen frames. The first match start is the heaviest GPU moment (full world
+    // build, shader compiles, shadow pass) — the exact window where weak iGPU drivers
+    // silently stop rasterizing while still accepting every draw call ("blue world,
+    // HUD alive"). The 1 Hz watchdog below evaluates the probes once they land.
+    window.setTimeout(() => {
+      if (this.running && !this.engine.contextLost) this.engine.armSelfTest(12)
+    }, 2500)
   }
 
   /** One-time contextual onboarding hints for brand-new protesters. */
@@ -3225,6 +3245,45 @@ export class Game {
           }
         } else {
           this.worldDrawStreak = 0
+        }
+        // ---- v89 boot render self-test (1 Hz evaluation): the engine's framebuffer
+        // probes are in. ALL 5 probe pixels nearly IDENTICAL while the culler reports
+        // 15+ meshes visible near the player and the world group is populated = the
+        // GPU is accepting the whole city and rasterizing NOTHING (the driver-class
+        // fault whose submission counters all look healthy: draw calls high, triangles
+        // high — invisible to every earlier watchdog). Signature needs no color-space
+        // math: a void frame is UNIFORM sky; a healthy spawn frame always contrasts
+        // ground underfoot against the sky (fog.near keeps close ground un-fogged by
+        // design). Run the v54-proven recovery immediately: restore visibility in
+        // place, persist no-culling for the next boot, reload through the guarded path.
+        const samples = this.engine.lastFrameSamples
+        if (samples && samples.length === 20) {
+          this.engine.lastFrameSamples = null // consume — each arming is evaluated once
+          let maxDiff = 0
+          for (let i = 0; i < 5; i++) {
+            for (let j = i + 1; j < 5; j++) {
+              const d = Math.max(
+                Math.abs(samples[i * 4] - samples[j * 4]),
+                Math.abs(samples[i * 4 + 1] - samples[j * 4 + 1]),
+                Math.abs(samples[i * 4 + 2] - samples[j * 4 + 2]),
+              )
+              if (d > maxDiff) maxDiff = d
+            }
+          }
+          const near = this.culler?.visibleNear ?? 0
+          const children = this.worldRenderer?.group.children.length ?? 0
+          if (maxDiff < 20 && children >= 100 && near >= 15) {
+            console.warn(`[VoteChor] render self-test FAILED — all 5 framebuffer probes uniform (maxDiff ${maxDiff}) with ${near} meshes visible; GPU is not rasterizing the world`, {
+              mode: this.mode, offline: this.offline, worldId: this.worldId, t: new Date().toISOString(),
+            })
+            const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+            ;(w.__vcDiag ??= []).push({ kind: 'renderSelfTestFailed', t: Date.now(), maxDiff, visibleNear: near, children, at: { x: focus.x, z: focus.z } })
+            this.store.notify('Graphics fault detected — restoring the world…', 'warning')
+            this.culler.showAll()
+            this.engine.renderEnabled = true
+            this.persistCullingOff('render self-test')
+            this.guardedReload('render self-test failed')
+          }
         }
       } else {
         this.lowDcStreak = 0

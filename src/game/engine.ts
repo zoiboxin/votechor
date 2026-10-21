@@ -76,6 +76,15 @@ export class Engine {
   // ---- render-fault telemetry (device-specific GL failures must surface, not vanish) ----
   /** Last frame-phase exception (fixed step / render JS / GL draw) — surfaced on the HUD + diagnostics. */
   lastError: { phase: 'fixed' | 'render' | 'draw'; message: string; at: number } | null = null
+  // ---- v89 boot render self-test: prove the GPU actually RASTERIZES world pixels ----
+  // Some weak-iGPU drivers accept the full submission (draw calls + triangle counts
+  // look healthy) yet draw nothing — the "blue world, HUD alive" fault that no
+  // submission counter can see. armSelfTest() samples 5 probe pixels per frame for a
+  // dozen frames; the game layer reads lastFrameSamples once and compares probes
+  // against each other (uniform sky-colored screen = void).
+  private selfTestFramesLeft = 0
+  /** Probe readback from the most recent self-test frame: 5 px × RGBA, null when unarmed/consumed. */
+  lastFrameSamples: Uint8Array | null = null
   /** True between a webglcontextlost event and a successful restore. */
   contextLost = false
   /** Game-layer hooks: show a visible recovery banner / record diagnostics. */
@@ -278,6 +287,13 @@ export class Engine {
     this.fill.intensity = Math.min(0.55, this.sun.intensity * 0.11 + this.hemi.intensity * 0.14)
   }
 
+  /** v89 — arm N frames of 5-pixel framebuffer probes (center, flanks, low ground, sky).
+   *  Cheap (5×1×1 readbacks), armed once ~2.5 s into each match by the game layer. */
+  armSelfTest(frames = 12) {
+    this.selfTestFramesLeft = frames
+    this.lastFrameSamples = null
+  }
+
   start() {
     if (this.running) return
     this.running = true
@@ -336,6 +352,27 @@ export class Engine {
         // kill the frame silently — record + surface so the user sees a recovery path
         this.lastError = { phase: 'draw', message: String((err as Error)?.message ?? err), at: Date.now() }
         this.onError?.('draw', this.lastError.message)
+      }
+      // v89 self-test probes — 5×1×1 readPixels only while armed (readbacks can stall
+      // the pipeline; a dozen frames at match start is the entire cost). Skipped on
+      // the opaque-UI early return above, so samples only exist for rendered frames.
+      if (this.selfTestFramesLeft > 0 && !this.contextLost) {
+        this.selfTestFramesLeft--
+        try {
+          const gl = this.renderer.getContext()
+          const w = this.renderer.domElement.width
+          const h = this.renderer.domElement.height
+          // screen-space probes (x, y-from-top): center, left, right, low ground, sky
+          const probes: Array<[number, number]> = [[0.5, 0.55], [0.25, 0.55], [0.75, 0.55], [0.5, 0.8], [0.5, 0.3]]
+          const out = new Uint8Array(20)
+          for (let i = 0; i < probes.length; i++) {
+            const px = new Uint8Array(4)
+            // framebuffer y is bottom-up; probe v is top-down
+            gl.readPixels(Math.min(w - 1, Math.floor(w * probes[i][0])), Math.min(h - 1, Math.floor(h * (1 - probes[i][1]))), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px)
+            out.set(px, i * 4)
+          }
+          this.lastFrameSamples = out
+        } catch { this.lastFrameSamples = null }
       }
       const t3 = performance.now()
       // window accumulators (averaged into stats at the 0.5s fps sample)
