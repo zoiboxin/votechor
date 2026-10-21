@@ -15,7 +15,22 @@ jump-and-stand, steep rims block. Zombies never enter the city.
 
 - [Bun](https://bun.sh/) 1.0+ — that's it (SQLite via Prisma, no external services)
 
-## Quick start (pull and run)
+## Quick start
+
+### Windows (10 1803+ / 11) — one click
+
+```
+git clone https://github.com/zoiboxin/votechor.git
+cd votechor
+start-windows.bat
+```
+
+The batch file checks every prerequisite (offers to install Bun, prepares
+`.env.local` + the SQLite DB, installs dependencies, builds) and starts BOTH
+servers in their own windows, then opens http://localhost:3000 with bots and
+crowd live. See **WINDOWS-SETUP.md** for LAN play and troubleshooting.
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/zoiboxin/votechor.git
@@ -24,8 +39,7 @@ cd votechor
 bun install
 cd mini-services/game-server && bun install && cd ../..
 
-cp .env.example .env
-bun run db:push
+DATABASE_URL=file:../db/custom.db bun run db:push
 
 # Terminal A — web app (http://localhost:3000)
 bun run dev
@@ -34,9 +48,11 @@ bun run dev
 cd mini-services/game-server && bun run dev
 ```
 
-Open **http://localhost:3000** — PLAY SOLO works instantly (offline by design).
-For PLAY MULTIPLAYER locally, set `NEXT_PUBLIC_GAME_SERVER_URL=http://localhost:3002`
-in `.env` (the game server allows all CORS origins).
+Open **http://localhost:3000**. Since v90 the client auto-connects to the game
+server on localhost/LAN (port 3002) — bots, crowd and cars appear without any
+env var. For a game server on a DIFFERENT machine, set
+`NEXT_PUBLIC_GAME_SERVER_URL=http://<host>:3002` before building (the game
+server allows all CORS origins).
 
 ## Useful scripts
 

@@ -99,6 +99,44 @@ export type NetEvents = {
   onPing: (ms: number) => void
 }
 
+/**
+ * Resolve the socket.io game-server URL (rationale in connect()).
+ *
+ * Resolution order:
+ *  1. NEXT_PUBLIC_GAME_SERVER_URL — explicit override, baked at build time.
+ *     For dedicated/remote hosting, e.g. http://my-host:3002.
+ *  2. Local/one-PC deployments WITHOUT an override: connect DIRECTLY to the
+ *     game server on port 3002 when the page itself is opened on a local
+ *     address (localhost / 127.0.0.1 / a LAN private IP). The game server
+ *     listens on all interfaces and allows every CORS origin, so home/local
+ *     hosting needs no env var and no reverse proxy — this is what makes a
+ *     plain http://localhost:3000 work on a Windows PC (v90 fix: bots,
+ *     crowd and cars come ONLY from the game server, so without this the
+ *     local build fell back to the sandbox gateway path and stayed offline).
+ *  3. Fallback: the sandbox's relative Caddy-gateway form
+ *     (?XTransformPort=3002). Never put the port in the path.
+ *
+ * NOTE: socket.io-client derives the engine.io path from the URI itself
+ * ('/' here), which matches the server's `path: '/'` — the absolute form
+ * behaves exactly like the relative gateway form.
+ */
+function resolveGameServerUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_GAME_SERVER_URL
+  if (explicit) return explicit
+  if (typeof window !== 'undefined') {
+    const h = window.location.hostname
+    const proto = window.location.protocol
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]') {
+      return `${proto}//localhost:3002`
+    }
+    // LAN private ranges: another device reaching the host PC by its IP.
+    if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)) {
+      return `${proto}//${h}:3002`
+    }
+  }
+  return '/?XTransformPort=3002'
+}
+
 export class NetClient {
   socket: Socket | null = null
   connected = false
@@ -116,12 +154,9 @@ export class NetClient {
   connect(): Promise<boolean> {
     return new Promise((resolve) => {
       try {
-        // Game server URL. Default: relative gateway form (this sandbox's Caddy
-        // gateway routes ?XTransformPort=3002 → game server; never put the port
-        // in the path). Running locally WITHOUT the gateway? Set
-        // NEXT_PUBLIC_GAME_SERVER_URL=http://localhost:3002 in .env — the game
-        // server allows all CORS origins, so a direct connection just works.
-        const gameServerUrl = process.env.NEXT_PUBLIC_GAME_SERVER_URL || '/?XTransformPort=3002'
+        // Game server URL — resolution order documented on resolveGameServerUrl():
+        // explicit env override → direct localhost/LAN :3002 → sandbox gateway form.
+        const gameServerUrl = resolveGameServerUrl()
         const socket = io(gameServerUrl, {
           transports: ['websocket', 'polling'],
           forceNew: true,
