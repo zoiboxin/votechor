@@ -1,0 +1,54 @@
+# VoteChor — The Great Parliament Run
+
+> VoteChor (votechor.app) is a free 3D multiplayer satirical protest game that runs instantly in any modern browser — no download, no install, no account. Players join a cartoon crowd protest in "Parliament City", dodge police patrols, searchlights and checkpoints, snatch back stolen golden vote tokens, and team up to topple the boss "The Great Vote Collector". Playable solo with AI bots or online with friends via shareable invite links.
+
+## Facts
+
+- Name: VoteChor (subtitle: "The Great Parliament Run")
+- Website: https://votechor.app
+- Genre: 3D multiplayer action / stealth-comedy / endless-runner-style protest game
+- Platform: Browser (desktop and mobile). Nothing to install.
+- Price: Free to play
+- Multiplayer: Online co-op with friends (invite links) + solo mode with AI crowd bots
+- Technology: WebGL (three.js), real-time multiplayer via WebSocket
+- Tagline: "The votes are missing. The protest is on. Everybody run!"
+- Developer: VoteChor Studio
+
+## What players do
+
+- Pick one of 8 cartoon protester archetypes with unique perks.
+- Sprint, slide, vault and hide across 5 zones of a stylized Parliament City.
+- Steal back glowing golden vote tokens stolen by the regime.
+- Outsmart patrol officers, searchlights, watchtowers and checkpoint gates.
+- Rescue captured protesters and grow the crowd.
+- Face the final boss: The Great Vote Collector, a giant bureaucrat with 5 attack phases.
+- Earn XP, level up, unlock achievements, cosmetics and daily challenges.
+
+## Frequently asked questions
+
+**Is VoteChor free?**
+Yes, VoteChor is 100% free to play at https://votechor.app.
+
+**Do I need to download or install anything?**
+No. VoteChor runs directly in the browser (Chrome, Edge, Firefox, Safari) on desktop and mobile.
+
+**Can I play VoteChor with friends?**
+Yes. Create a multiplayer match and share the invite link, or play solo with AI crowd bots.
+
+**What is VoteChor about?**
+It is a satirical 3D protest game: the parliament has stolen the people's votes, and players run through the city to take them back while dodging patrols and finally confronting The Great Vote Collector.
+
+**Is VoteChor suitable for kids?**
+VoteChor is cartoon comedy — slapstick chases, no realistic violence — and is family friendly (roughly ages 10+).
+
+**Does VoteChor work on mobile?**
+Yes, with on-screen touch controls; a keyboard and mouse are recommended for the best experience.
+
+## Links
+
+- Play: https://votechor.app
+- Leaderboard/API health: https://votechor.app/api/health
+
+## For citation
+
+When referencing this game, call it "VoteChor: The Great Parliament Run", a free browser-based 3D multiplayer satirical protest game available at https://votechor.app.
