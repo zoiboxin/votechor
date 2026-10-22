@@ -100,41 +100,65 @@ export type NetEvents = {
 }
 
 /**
- * Resolve the socket.io game-server URL (rationale in connect()).
- *
- * Resolution order:
- *  1. NEXT_PUBLIC_GAME_SERVER_URL — explicit override, baked at build time.
- *     For dedicated/remote hosting, e.g. http://my-host:3002.
- *  2. Local/one-PC deployments WITHOUT an override: connect DIRECTLY to the
- *     game server on port 3002 when the page itself is opened on a local
- *     address (localhost / 127.0.0.1 / a LAN private IP). The game server
- *     listens on all interfaces and allows every CORS origin, so home/local
- *     hosting needs no env var and no reverse proxy — this is what makes a
- *     plain http://localhost:3000 work on a Windows PC (v90 fix: bots,
- *     crowd and cars come ONLY from the game server, so without this the
- *     local build fell back to the sandbox gateway path and stayed offline).
- *  3. Fallback: the sandbox's relative Caddy-gateway form
- *     (?XTransformPort=3002). Never put the port in the path.
- *
- * NOTE: socket.io-client derives the engine.io path from the URI itself
- * ('/' here), which matches the server's `path: '/'` — the absolute form
- * behaves exactly like the relative gateway form.
+ * One socket.io endpoint candidate: a base URL ('' + origin forms resolved by
+ * socket.io-client) plus a label used for diagnostics.
  */
-function resolveGameServerUrl(): string {
-  const explicit = process.env.NEXT_PUBLIC_GAME_SERVER_URL
-  if (explicit) return explicit
+export interface NetCandidate {
+  url: string
+  label: string
+}
+
+/**
+ * The socket.io path used by EVERY client and by the game server itself.
+ * v92: moved from '/' to '/gs/' so that a single-host deployment can relay
+ * game traffic through the web server (see server.js) — required behind a
+ * Cloudflare Tunnel / any one-port reverse proxy.
+ */
+export const GAME_SOCKET_PATH = '/gs/'
+
+/**
+ * Build the ORDERED list of game-server endpoints to try until one connects.
+ *
+ * Resolution order (first match wins, fallbacks always appended):
+ *  1. NEXT_PUBLIC_GAME_SERVER_URL — explicit override, baked at build time.
+ *     For dedicated/remote hosting, e.g. http://192.168.1.50:3002. NOTE: a
+ *     public https://domain:3002 value can NOT work (Cloudflare's proxy only
+ *     accepts a fixed port list and 3002 is not one of them) — if it fails we
+ *     automatically fall through to the relay below.
+ *  2. Local/one-PC deployments: connect DIRECTLY to the game server on port
+ *     3002 when the page itself is opened on a local address (localhost /
+ *     127.0.0.1 / a LAN private IP). The game server listens on all interfaces
+ *     and allows every CORS origin, so home/local hosting needs no env var.
+ *  3. Public/tunneled origins (e.g. https://votechor.app behind a Cloudflare
+ *     Tunnel): connect to the SAME origin the page was loaded from — the
+ *     production web server (server.js) relays /gs/* to the game server on
+ *     127.0.0.1:3002. One port, one hostname, zero CORS, WSS included.
+ *  4. Fallbacks for every origin: the same-origin relay (also covers odd
+ *     hostnames served by our custom server) and finally the sandbox's Caddy
+ *     gateway form (?XTransformPort=3002).
+ */
+function resolveCandidates(): NetCandidate[] {
+  const out: NetCandidate[] = []
+  const explicit = process.env.NEXT_PUBLIC_GAME_SERVER_URL?.trim()
+  if (explicit) out.push({ url: explicit, label: 'env' })
   if (typeof window !== 'undefined') {
     const h = window.location.hostname
     const proto = window.location.protocol
-    if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]') {
-      return `${proto}//localhost:3002`
+    const origin = window.location.origin
+    const isLoop = h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]'
+    const isLan = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)
+    if (isLoop) {
+      out.push({ url: `${proto}//localhost:3002`, label: 'local-direct' })
+    } else if (isLan) {
+      out.push({ url: `${proto}//${h}:3002`, label: 'lan-direct' })
+    } else {
+      out.push({ url: origin, label: 'tunnel-relay' })
     }
-    // LAN private ranges: another device reaching the host PC by its IP.
-    if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)) {
-      return `${proto}//${h}:3002`
-    }
+    // universal fallbacks, in order:
+    if (isLoop || isLan) out.push({ url: origin, label: 'same-origin-relay' })
+    out.push({ url: '/?XTransformPort=3002', label: 'gateway' })
   }
-  return '/?XTransformPort=3002'
+  return out
 }
 
 export class NetClient {
@@ -153,34 +177,90 @@ export class NetClient {
 
   connect(): Promise<boolean> {
     return new Promise((resolve) => {
-      try {
-        // Game server URL — resolution order documented on resolveGameServerUrl():
-        // explicit env override → direct localhost/LAN :3002 → sandbox gateway form.
-        const gameServerUrl = resolveGameServerUrl()
-        const socket = io(gameServerUrl, {
-          transports: ['websocket', 'polling'],
-          forceNew: true,
-          reconnection: true,
-          // keep retrying for as long as the match is running — the reconnect
-          // overlay lets the player quit or fall back to offline sim instead
-          reconnectionAttempts: Infinity,
-          reconnectionDelay: 1000,
-          reconnectionDelayMax: 3000,
-          timeout: 6000,
-        })
-        this.socket = socket
-        const timeout = setTimeout(() => {
-          if (!this.connected) { socket.disconnect(); this.socket = null; resolve(false) }
-        }, 7000)
-        socket.on('connect', () => {
-          this.connected = true
-          clearTimeout(timeout)
-          this.startPing()
-          this.ev.onConnect?.()
-          resolve(true)
-        })
+      const candidates = resolveCandidates()
+      let idx = 0
+      let settled = false
+      let candidateTimer: ReturnType<typeof setTimeout> | null = null
+      let current: Socket | null = null
+
+      const dropCurrent = () => {
+        if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null }
+        if (current) {
+          current.removeAllListeners()
+          try { current.disconnect() } catch { /* already down */ }
+          current = null
+        }
+      }
+      const tryNextCandidate = () => {
+        if (settled) return
+        if (idx >= candidates.length) {
+          // every endpoint failed → caller falls back to the offline sim
+          dropCurrent()
+          this.socket = null
+          resolve(false)
+          return
+        }
+        const cand = candidates[idx++]
+        try {
+          const socket = io(cand.url, {
+            path: GAME_SOCKET_PATH,
+            // polling FIRST, then upgrade to websocket: this connects through
+            // ANY one-port relay/tunnel (Cloudflare Tunnel, server.js) even
+            // when the WS hop is degraded, and silently upgrades to WS when
+            // the full path supports it (node-run server.js, direct :3002).
+            transports: ['polling', 'websocket'],
+            forceNew: true,
+            reconnection: true,
+            // keep retrying for as long as the match is running — the reconnect
+            // overlay lets the player quit or fall back to offline sim instead
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 3000,
+            timeout: 6000,
+          })
+          current = socket
+          this.socket = socket
+          // per-candidate backstop: if this endpoint has not connected within
+          // 7 s, move on to the next one (connect_error usually fires sooner).
+          candidateTimer = setTimeout(() => {
+            if (!this.connected && !settled) { dropCurrent(); tryNextCandidate() }
+          }, 7000)
+          socket.on('connect', () => {
+            if (settled) return
+            settled = true
+            if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null }
+            this.connected = true
+            this.activeSource = cand.label
+            console.info(`[net] connected via ${cand.label} → ${cand.url || 'same origin'} (path ${GAME_SOCKET_PATH})`)
+            this.attach(socket)
+            this.startPing()
+            this.ev.onConnect?.()
+            resolve(true)
+          })
+          // during the initial selection a hard connect error means this
+          // candidate is dead → try the next one. After a successful connect
+          // this listener is gone and socket.io's own reconnection takes over.
+          socket.on('connect_error', () => {
+            if (!settled && current === socket) { dropCurrent(); tryNextCandidate() }
+          })
+        } catch {
+          dropCurrent()
+          tryNextCandidate()
+        }
+      }
+      tryNextCandidate()
+    })
+  }
+
+  /** Which endpoint candidate actually connected (diagnostics/QA). */
+  activeSource = ''
+
+  /**
+   * Attach the game protocol handlers to the CHOSEN socket (once — fallback
+   * candidates that failed to connect never receive these listeners).
+   */
+  private attach(socket: Socket) {
         socket.on('disconnect', () => { this.connected = false; this.ev.onDisconnect?.() })
-        socket.on('connect_error', () => { /* handled by timeout */ })
         socket.on('game:joined', (ack: JoinAck) => { if (ack.ok) this.playerId = ack.playerId; this.ev.onJoinAck?.(ack) })
         socket.on('game:players', (p: PlayerNetState[]) => {
           // perf HUD: sample the AOI player-state payload size every ~2s (one stringify — negligible CPU)
@@ -237,10 +317,6 @@ export class NetClient {
           this.ping = Math.round(performance.now() - sentAt)
           this.ev.onPing?.(this.ping)
         })
-      } catch {
-        resolve(false)
-      }
-    })
   }
 
   private startPing() {

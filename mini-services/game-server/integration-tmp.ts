@@ -16,7 +16,7 @@ const ok = (cond: boolean, label: string) => {
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const connect = (): Promise<Socket> =>
   new Promise((res, rej) => {
-    const s = io(URL, { transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
+    const s = io(URL, { path: '/gs/', transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
     s.on('connect', () => res(s))
     s.on('connect_error', rej)
     setTimeout(() => rej(new Error('connect timeout')), 6000)

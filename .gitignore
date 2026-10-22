@@ -54,3 +54,4 @@ server.log
 /skills/
 # agent tool artifacts (local-only)
 tool-results/
+.next-qa

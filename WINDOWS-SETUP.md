@@ -10,6 +10,7 @@ plumbing needed — v90+ auto-connects to the game server on localhost/LAN.
 | --- | --- |
 | Windows 10 1803+ or Windows 11 | `curl.exe` ships with it (health checks) |
 | [Bun](https://bun.sh) 1.0+ | The launcher installs it for you if missing |
+| [Node.js](https://nodejs.org) 18+ (recommended) | Enables the WebSocket game relay; without it multiplayer falls back to polling (playable, slightly higher latency) |
 | ~1.5 GB free disk | Dependencies + build |
 | Any GPU that runs a browser | v89+ self-heals the "empty world" GPU fault |
 
@@ -43,6 +44,60 @@ start-windows.bat     → answer Y to "Rebuild anyway?"
    The launcher also tries to pre-open ports 3000 + 3002 (needs admin rights —
    right-click `start-windows.bat` → *Run as administrator* once to be sure).
 
+## Playing on your own domain (Cloudflare Tunnel, v92+)
+
+You can expose the game to the internet through your own domain (e.g.
+`votechor.app`) using a Cloudflare Tunnel — **no port forwarding, no firewall
+changes, TLS included**.
+
+> **The one rule: the tunnel must point at `http://localhost:3000` ONLY.**
+> Since v92 the web server (`server.js`) relays all game traffic (`/gs/*`,
+> HTTP polling + WebSocket) to the game server on 127.0.0.1:3002 itself.
+> Port 3002 can NEVER be published through Cloudflare — their edge proxy only
+> accepts a fixed port list (80, 8080, 8880, 2052, 2082, 2086, 2095,
+> 443, 2053, 2083, 2087, 2096, 8443) and 3002 is not one of them. Setting
+> `NEXT_PUBLIC_GAME_SERVER_URL=https://yourdomain:3002` always fails with an
+> offline red dot / 0 crowd — leave it **EMPTY**.
+
+### Setup
+
+1. Install cloudflared: `winget install Cloudflare.cloudflared` (or download
+   `cloudflared-windows-amd64.exe`).
+2. `cloudflared tunnel login` → pick your domain in the browser.
+3. `cloudflared tunnel create votechor`
+4. Create `C:\VoteChor\cloudflared\config.yml` (adjust the credentials path
+   shown by step 3):
+
+   ```yaml
+   tunnel: <TUNNEL-ID-from-step-3>
+   credentials-file: C:\Users\%USERNAME%\.cloudflared\<TUNNEL-ID>.json
+   ingress:
+     - hostname: votechor.app
+       service: http://localhost:3000
+     - service: http_status:404
+   ```
+
+5. Route DNS and run (or install as a service with `cloudflared service install`):
+
+   ```
+   cloudflared tunnel route dns votechor votechor.app
+   cloudflared tunnel run votechor
+   ```
+
+6. Start the game with `start-windows.bat` as usual, rebuild after updates, and
+   open `https://votechor.app`. The browser connects to multiplayer through the
+   same origin — WebSockets work through the tunnel automatically **as long as
+   Node.js is installed** (the web window then prints
+   `[OK] Node.js found - WebSocket relay enabled`). Without Node the game still
+   works in polling mode; the console shows `transport: "polling"` instead of
+   `"websocket"`.
+
+### Verify it is online
+
+- The HUD connection dot is green and the perf chip shows bots/crowd.
+- `https://votechor.app/api/version` returns the current build.
+- The console (F12) prints `[net] connected via tunnel-relay → https://votechor.app (path /gs/)`.
+
 ## Files this ships
 
 | File | Purpose |
@@ -57,6 +112,7 @@ start-windows.bat     → answer Y to "Rebuild anyway?"
 | Symptom | Fix |
 | --- | --- |
 | **No bots / no players / 0 CROWD · 0 CARS on the perf chip** | The game server (port 3002) is not reachable. Check the "VoteChor GAME SERVER" window is open and the launcher printed `[OK] game server is up`. If Windows Firewall asked, click Allow. Since v90 the game auto-connects on localhost/LAN — make sure you rebuilt (`git pull` → rebuild `Y`). |
+| **Works on localhost but OFFLINE through my domain/tunnel** | You set `NEXT_PUBLIC_GAME_SERVER_URL` to a domain with `:3002` — that can never work (Cloudflare does not proxy port 3002). Set it to **empty** in `.env.local` and rebuild (`git pull` → start-windows.bat → `Y`). v92+ falls back automatically after a few seconds, but the clean fix is the empty value. |
 | `bun` not found after auto-install | Close and reopen the window (PATH refresh), re-run `start-windows.bat`. |
 | Port already in use | Run `stop-windows.bat`, then start again. |
 | Web window shows errors after an update | Re-run `start-windows.bat` → rebuild `Y`. Worst case delete the `.next` folder and rebuild. |
@@ -88,8 +144,9 @@ bun run db:generate && bun run db:push
 set NEXT_PUBLIC_GAME_SERVER_URL=
 bun run build
 
-:: Terminal A
-set DATABASE_URL=file:../db/custom.db && bun .next\standalone\server.js
+:: Terminal A — web app + /gs relay in one process
+set DATABASE_URL=file:../db/custom.db && set NODE_ENV=production && node server.js
+::   (node runs the /gs WebSocket relay; bun server.js works in polling-only mode)
 :: Terminal B
 cd mini-services\game-server && set DATABASE_URL=file:../db/custom.db && bun run start
 ```
@@ -97,4 +154,5 @@ cd mini-services\game-server && set DATABASE_URL=file:../db/custom.db && bun run
 Since v90, `NEXT_PUBLIC_GAME_SERVER_URL` can stay empty for local play — the
 client auto-detects `localhost`/LAN and connects directly to port 3002. Set it
 explicitly (before `bun run build`) only when the game server runs on another
-machine, e.g. `set NEXT_PUBLIC_GAME_SERVER_URL=http://192.168.1.50:3002`.
+machine **by its LAN IP**, e.g. `set NEXT_PUBLIC_GAME_SERVER_URL=http://192.168.1.50:3002`.
+Never point it at a public domain + port 3002 (see the Cloudflare Tunnel section).

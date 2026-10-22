@@ -14,8 +14,8 @@ const ok = (cond: boolean, label: string) => {
 interface ShoutEv { id: string; x: number; z: number; whistle: boolean; line: string }
 
 async function main() {
-  const a = io(URL, { transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
-  const b = io(URL, { transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
+  const a = io(URL, { path: '/gs/', transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
+  const b = io(URL, { path: '/gs/', transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
 
   const connected = (sock: Socket) => new Promise<void>((res, rej) => {
     sock.once('connect', () => res())

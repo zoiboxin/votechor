@@ -8,7 +8,7 @@ const [room, name] = [process.argv[2] ?? 'INV10', process.argv[3] ?? 'GiftBuddy'
 
 const bootGuard = setTimeout(() => { console.error('timeout'); process.exit(1) }, 8000)
 
-const s: Socket = io(URL, { transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
+const s: Socket = io(URL, { path: '/gs/', transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
 s.on('connect', () => s.emit('game:join', { name, archetype: 'student', roomCode: room }))
 s.on('game:joined', (ack: { ok: boolean; playerId: string }) => {
   if (!ack.ok) { console.error('join failed'); process.exit(1) }

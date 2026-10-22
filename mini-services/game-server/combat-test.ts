@@ -302,7 +302,7 @@ async function main() {
 
 function connect(): Promise<Socket> {
   return new Promise((resolve, reject) => {
-    const s = io(URL, { transports: ['websocket'], forceNew: true, timeout: 5000 })
+    const s = io(URL, { path: '/gs/', transports: ['websocket'], forceNew: true, timeout: 5000 })
     s.on('connect', () => resolve(s))
     s.on('connect_error', (e: Error) => reject(e))
   })

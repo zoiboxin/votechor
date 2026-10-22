@@ -19,9 +19,16 @@ const ARCHETYPE_IDS = new Set(ARCHETYPES.map(a => a.id))
 
 const httpServer = createServer()
 
+// v92 — the socket.io path is now '/gs/'. Every client uses this path:
+//  - direct connections (http://localhost:3002 or LAN http://<ip>:3002),
+//  - the sandbox Caddy gateway (path passes through unchanged),
+//  - the production custom web server (server.js) which relays /gs/* to this
+//    port — that is what makes the game work behind a Cloudflare Tunnel
+//    (votechor.app etc.): Cloudflare's proxy cannot expose port 3002 at all,
+//    so the web server on :3000 forwards /gs/* (HTTP polling + WebSocket
+//    upgrades) to 127.0.0.1:3002. See docs/PROTOCOL.md.
 const io = new Server(httpServer, {
-  // DO NOT change the path, it is used by Caddy to forward the request to the correct port
-  path: '/',
+  path: '/gs/',
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],

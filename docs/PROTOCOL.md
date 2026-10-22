@@ -7,7 +7,10 @@ Authoritative socket.io server. It MUST import shared pure logic from `../../src
 - `boss-brain.ts` → `createBossBrain`, `tickBoss`, `grabBallot`, `depositBallot`, `registerBossHit`
 
 Use relative imports (`../../src/game/shared/constants`) — path aliases (@/) do NOT work in the mini-service.
-socket.io Server config: `{ path: '/', cors: { origin: '*', methods: ['GET','POST'] } }` (Caddy requirement).
+socket.io Server config: `{ path: '/gs/', cors: { origin: '*', methods: ['GET','POST'] } }` (v92).
+All clients pass `path: '/gs/'` too — direct :3002, the sandbox Caddy gateway (path passes
+through unchanged) and the production `server.js` relay (`/gs/*` → 127.0.0.1:3002, HTTP + WS)
+all speak the same path, which is what makes one-hostname Cloudflare Tunnel deployments work.
 
 ## Rooms
 - Public room per 20 players: id `pub_<n>`. Private rooms: join code (6 chars). Room capacity 20.

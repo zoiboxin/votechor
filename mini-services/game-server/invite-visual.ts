@@ -12,7 +12,7 @@ if (!room || !targetId) {
 
 const bootGuard = setTimeout(() => { console.error('timeout'); process.exit(1) }, 8000)
 
-const s = io(URL, { transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
+const s = io(URL, { path: '/gs/', transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
 s.on('connect', () => {
   s.emit('game:join', { name: 'FlyerCourier', archetype: 'student', roomCode: room })
 })

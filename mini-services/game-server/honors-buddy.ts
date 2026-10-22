@@ -8,7 +8,7 @@ const ROOM = process.argv[2] ?? 'HON11'
 const NAME = process.argv[3] ?? 'HonorsBuddy'
 const LIVE_MS = Number(process.argv[4] ?? 120000)
 
-const s: Socket = io(URL, { transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
+const s: Socket = io(URL, { path: '/gs/', transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
 let myId = ''
 let otherId = ''
 

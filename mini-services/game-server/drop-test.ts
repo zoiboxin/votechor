@@ -30,7 +30,7 @@ function onceAll<T>(sock: Socket, ev: string, ms = 4000): Promise<T[]> {
 }
 
 async function main() {
-  const mk = () => io(URL, { transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
+  const mk = () => io(URL, { path: '/gs/', transports: ['websocket', 'polling'], forceNew: true, timeout: 5000 })
   const a: Socket = mk()
   const b: Socket = mk()
   await Promise.all([once(a, 'connect'), once(b, 'connect')])
