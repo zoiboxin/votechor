@@ -1064,6 +1064,7 @@ export class Game {
     this.net.leave()
     this.running = false
     this.input.setEnabled(false)
+    this.input.releasePointer() // v91 — back on the menu the cursor must be free (was stuck until ESC)
     this.input.suppressed = false
     useGameStore.getState().toggleMap(false)
     useGameStore.getState().toggleSquad(false)
@@ -3883,6 +3884,7 @@ export class Game {
     const store = useGameStore.getState()
     this.exitPhotoMode(false)
     this.input.setEnabled(false)
+    this.input.releasePointer() // v91 — the end screen owns the pointer now: free the mouse immediately (was stuck until ESC)
     this.running = false
     const detentions = this.stats.detentions
     const stats = {

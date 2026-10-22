@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '@/lib/game-store'
 import { uiActions } from '@/lib/game-store'
 import { ARCHETYPES, archetypeById, xpForLevel, levelFromXp, RANDOM_NOTIFICATIONS } from '@/game/shared/constants'
@@ -57,7 +57,8 @@ function MenuButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`group relative flex w-full items-center gap-3 overflow-hidden rounded-2xl border-2 border-[#1c1a17]/80 px-4 py-3 text-left shadow-[4px_4px_0_#1c1a17] transition-all duration-150 hover:-translate-y-0.5 hover:translate-x-[-1px] hover:shadow-[6px_7px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:cursor-not-allowed disabled:opacity-50 ${tones[tone]}`}
+      data-mb=""
+      className={`group relative flex w-full items-center gap-3 overflow-hidden rounded-2xl border-2 border-[#1c1a17]/80 px-4 py-3 text-left shadow-[4px_4px_0_#1c1a17] transition-all duration-150 hover:-translate-y-0.5 hover:translate-x-[-1px] hover:shadow-[6px_7px_0_#1c1a17] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#1c1a17] disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-[#f2a541] focus-visible:border-[#f2a541] focus-visible:-translate-y-0.5 focus-visible:shadow-[6px_7px_0_#1c1a17] ${tones[tone]}`}
     >
       {/* shine sweep on hover */}
       <span className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -translate-x-[120%] bg-white/20 opacity-0 [skewX:-18deg] transition-opacity group-hover:opacity-100 group-hover:animate-[vc-shine_0.9s_ease-out]" />
@@ -490,8 +491,37 @@ export default function MainMenu() {
   const menuScreen = useGameStore((s) => s.menuScreen)
   const setMenuScreen = useGameStore((s) => s.setMenuScreen)
   const profileLoading = useGameStore((s) => s.profileLoading)
+  const uiMode = useGameStore((s) => s.uiMode)
 
   const back = () => setMenuScreen('main')
+
+  // v91 — keyboard menu navigation: ↑/↓/←/→ move the selection, Enter/Space opens
+  // it. Native DOM focus drives everything (buttons already activate on Enter/Space
+  // and show the focus ring via CSS), so mouse, Tab and arrow navigation all stay
+  // in sync with zero extra state. Skipped while typing in a text field, on any
+  // sub-screen, or whenever the menu is not the active surface (end screen, game).
+  const menuGridRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (menuScreen !== 'main' || uiMode !== 'menu') return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      const wrap = menuGridRef.current
+      if (!wrap) return
+      const btns = Array.from(wrap.querySelectorAll<HTMLButtonElement>('button[data-mb]')).filter((b) => !b.disabled)
+      if (!btns.length) return
+      e.preventDefault()
+      const cur = btns.indexOf(document.activeElement as HTMLButtonElement)
+      const forward = e.key === 'ArrowDown' || e.key === 'ArrowRight'
+      const next = cur === -1 ? (forward ? 0 : btns.length - 1) : (cur + (forward ? 1 : -1) + btns.length) % btns.length
+      const el = btns[next]
+      el.focus()
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menuScreen, uiMode])
 
   if (menuScreen === 'customize') return <CharacterSelect onBack={back} />
   if (menuScreen === 'play') return <PlayScreen onBack={back} />
@@ -571,7 +601,8 @@ export default function MainMenu() {
             transition={{ delay: 0.1 }}
             className="space-y-3"
           >
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div ref={menuGridRef} className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-2">
               <MenuButton
                 icon={Play}
                 label="Play Solo"
@@ -606,7 +637,12 @@ export default function MainMenu() {
               <MenuButton icon={Medal} label="Medals" onClick={() => setMenuScreen('achievements')} />
               <MenuButton icon={BarChart3} label="Stats" onClick={() => setMenuScreen('stats')} />
               <MenuButton icon={Settings} label="Options" onClick={() => setMenuScreen('settings')} />
+              </div>
             </div>
+            <p className="text-center text-[10px] font-bold uppercase tracking-wider text-[#1c1a17]/45 sm:text-[11px]">
+              <span className="mx-0.5 inline-block rounded border border-[#1c1a17]/40 bg-[#f5efdc] px-1.5 py-0.5 font-mono">↑↓←→</span> move ·
+              <span className="mx-0.5 inline-block rounded border border-[#1c1a17]/40 bg-[#f5efdc] px-1.5 py-0.5 font-mono">Enter</span> select — no mouse needed
+            </p>
 
             <div className="rounded-2xl border-2 border-dashed border-[#1c1a17]/40 bg-[#f2c14e]/30 p-3 text-[11px] font-semibold leading-relaxed text-[#1c1a17]/80 sm:text-xs">
               <span className="font-black uppercase text-[#8c1f28]">Tonight&apos;s mission: </span>

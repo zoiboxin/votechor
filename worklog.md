@@ -2342,3 +2342,25 @@ Stage Summary:
 - Sandbox behavior: :81 QA now exercises the direct-:3002 fallback (origin localhost) — netcode QA remains valid; the "direct :3000 = offline" QA assumption is retired by design (matches real deployments).
 - Pushed to GitHub: main + tag v90. /api/version = v90, badge V90.
 - Next Task ID: 89 (queued: profile save/load race; online dropTaken UX / item persistence round-trip; spawn-billboard composition polish; walk-clip stride calibration for the GLB return; wild polish — minimap zombie blips, pet-owner nameplate, fed crumbs visible to all).
+
+---
+Task ID: 89
+Agent: Z.ai Code (main session)
+Task: User request — "when level finish or game return to main screen mouse is not free, i have to press ESC to free mouse; also make keyboard keys working so on the main page/menu the user can use arrow keys and press Enter to enter the selected option."
+
+Work Log:
+- PLATFORM ROLLBACK #8 RECOVERED at round start: /api/version said v88, HEAD was a platform snapshot commit (9f36d02), tree dirty (README/db/jungle-ambience). Remote intact (origin/main 06b7fa9 = v90, tags v89+v90, PAT preserved). git reset --hard origin/main + hard-restart BOTH servers (old pids 1080/1191 killed; next + game-server respawned via subshells) → /api/version = v90.
+- BUG 1 FORENSICS: both match-end paths disabled input but never released pointer lock — finalizeMatch (game.ts, end screen) and leaveMatch (quit-to-menu from pause/reconnect/end-screen) only called input.setEnabled(false), which clears keys but does NOT exitPointerLock. The browser kept the lock until the native ESC. The 1.4 s re-lock helper (relockPointerWithRetry) is safe here: it only re-locks when uiMode === 'playing', and both paths flip to 'ended'/'menu'.
+- FIX 1 (v91): this.input.releasePointer() added right after setEnabled(false) in BOTH finalizeMatch and leaveMatch. releasePointer (input.ts) already exists (used by the map/overlays) and clears pauseOnUnlock first — no pause-menu side-effect, no double-release risk.
+- FIX 2 (v91) — MainMenu.tsx keyboard navigation: native-DOM-focus design (no extra state, mouse/Tab/arrows always in sync): MenuButton gains data-mb + focus-visible ring-4 ring-[#f2a541] + lift/shadow (keyboard focus clearly visible); the main screen's 8 menu buttons live under a menuGridRef wrapper; a window keydown handler (active ONLY when menuScreen==='main' && uiMode==='menu', skipped while typing in INPUT/TEXTAREA/contentEditable) maps ↑/↓/←/→ to next/prev enabled button with wrap-around (first press focuses Play Solo; ArrowUp from nothing focuses the last), focuses it, scrollIntoView-nearest, preventDefault stops page scroll. Enter/Space activate natively (buttons). New hint line under the grids: "↑↓←→ move · Enter select — no mouse needed". uiMode guard prevents arrow-focus under the EndScreen overlay (no hidden-button Enter accidents).
+- VC_BUILD → v91.
+- CHECKS: tsc 0 project errors · lint clean · route-check ALL 32 OK · world-integrity 24/24 · maps ALL PASS · physics 4/4 · drop-test 10/10.
+- LIVE QA (agent-browser via :81): (a) KEYBOARD NAV: ArrowDown → activeElement = "Play Solo" button; ArrowDown → "Play Multiplayer"; ArrowUp → back to "Play Solo"; Enter → solo match BOOTS (running:true, uiMode playing). (b) POINTER RELEASE / QUIT: boot → REAL canvas click establishes lock (measured locked:true — programmatic requestPointerLock is refused in headless without a gesture, so the CDP click was required) → leaveMatch() → uiMode menu + locked:false. (c) POINTER RELEASE / MATCH END: boot → click → locked:true → fired a synthetic game:matchend payload via __game.net.ev.onMatchEnd → release landed IMMEDIATELY (locked:false while the async XP POST was still in flight — releasePointer runs before the await) → after the throttled fetch completed: uiMode 'ended', matchSummary set, still unlocked. (d) zero unexpected console errors; QA storage reset.
+- NOTE for future QA: headless pointer-lock tests need a REAL agent-browser click on the canvas (trusted gesture) — eval'd requestPointerLock() alone returns locked:false.
+
+Stage Summary:
+- Match end and every quit-to-menu path (pause menu, reconnect overlay, end screen) now free the mouse cursor instantly — ESC is no longer needed; the re-lock helper cannot re-grab because uiMode has already left 'playing'.
+- The main menu is fully keyboard-playable: arrows move the selection (wrapping, both directions, visible amber focus ring + lift), Enter/Space opens, and it coexists with mouse hover, Tab, and text inputs (name editing unaffected). Hint line teaches the controls on the menu itself.
+- Platform rollback #8 recovered with zero data loss (origin/main was the source of truth again).
+- Pushed to GitHub: main + tag v91. /api/version = v91, badge V91.
+- Next Task ID: 90 (queued: profile save/load race; online dropTaken UX / item persistence round-trip; spawn-billboard composition polish; walk-clip stride calibration for the GLB return; wild polish — minimap zombie blips, pet-owner nameplate, fed crumbs visible to all).
