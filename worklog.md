@@ -2364,3 +2364,36 @@ Stage Summary:
 - Platform rollback #8 recovered with zero data loss (origin/main was the source of truth again).
 - Pushed to GitHub: main + tag v91. /api/version = v91, badge V91.
 - Next Task ID: 90 (queued: profile save/load race; online dropTaken UX / item persistence round-trip; spawn-billboard composition polish; walk-clip stride calibration for the GLB return; wild polish — minimap zombie blips, pet-owner nameplate, fed crumbs visible to all).
+
+---
+Task ID: 92
+Agent: Z.ai Code (main session)
+Task: User request — "check and update for SEO AIO GIO update, create icon and app logo and favicon make sure branding matching, also create a nice instagram post / social media post for advertisement, make a nice artwork similar subway surfer style"
+
+Work Log:
+- ASSET GENERATION (Task 92-a): 4 AI-generated masters via z-ai CLI (Subway-Surfers-style glossy 3D cartoon, brand palette amber #f2a541 / cream #f5efdc / ink #1c1a17 / red #8c1f28):
+  - _gen-icon.png 1024x1024 (red-cap kid holding golden checkmark ballot — new app icon)
+  - _gen-keyart.png 1344x768 (3 runners + comic cop chase, flying ballots — OG hero)
+  - _gen-post.png 1024x1024 (kid vaulting golden ballot box, cop with flashlight)
+  - _gen-story.png 768x1344 (vertical runner chase, golden hour)
+  - NOTE: API rejects 1440x720/720x1440 ("multiples of 32" rule) — use 1344x768 / 768x1344 for landscape/portrait.
+- ASSET PIPELINE (Task 92-b, scripts/brand/process.ts, sharp + png-to-ico dev-dep):
+  - public/favicon.ico (16+32+48), favicon-16/32, icon-{48,96,192,512}, apple-touch-icon 180, icon-maskable-512 (art shrunk 12% into amber safe zone)
+  - brand/og-image.png 1200x630: keyart + dark gradient band + "VOTECHOR / The Great Parliament Run / FREE 3D MULTIPLAYER BROWSER GAME — NO DOWNLOAD" SVG text overlay
+  - brand/instagram-post.png 1080x1080: red "PLAY FREE IN BROWSER" pill + "THE VOTES ARE MISSING. / THE PROTEST IS ON. / EVERYBODY RUN!" + "VOTECHOR — FREE 3D MULTIPLAYER" (badge widened to 560px after v1 text overflow)
+  - brand/instagram-story.png 1080x1920: top "VOTECHOR" wordmark + red pill, bottom tagline block + VOTECHOR.APP
+- BRANDING (public/logo.svg rewritten): old file was a generic placeholder "Z" mark — replaced with a VoteChor ballot-box mark (amber gradient tile, ink ballot box, falling white ballot with red check, white checkmark) used as mask-icon.
+- SEO/AIO/GEO (Task 92-c):
+  - layout.tsx: metadataBase https://votechor.app, canonical, template title, 20 keywords, icons set (ico+PNG+apple+mask-icon), manifest link, full openGraph (1200x630 image + alt), twitter summary_large_image @votechor, robots w/ googleBot max-image-preview:large max-snippet:-1, appleWebApp, category games.
+  - src/app/manifest.ts (PWA: fullscreen, theme #f2a541, bg #f5efdc, 192/512/maskable icons), src/app/sitemap.ts (weekly, priority 1).
+  - public/robots.txt: Allow / + Disallow /api/ + EXPLICIT Allow blocks for GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, Claude-Web, anthropic-ai, PerplexityBot(-User), Google-Extended, Applebot(-Extended), CCBot, cohere-ai, Bytespider + Sitemap line.
+  - public/llms.txt (AIO/GEO): game facts, what players do, 6 FAQs, citation guidance.
+  - page.tsx: JSON-LD @graph = VideoGame (playMode SP/MP/CoOp, free Offer, gamePlatform web) + WebSite + Organization + FAQPage (5 Q/As) — NO fabricated aggregateRating; sr-only semantic section (h1, how-to, features ul, FAQ h3s, link) since GameRoot is ssr:false and crawlers would otherwise see an empty page; noscript fallback.
+- VC_BUILD → v93. Lint clean; tsc-level import checks via dev compile OK.
+- LIVE QA (agent-browser + curl): page renders (menu + full branding), title now "VoteChor: The Great Parliament Run — Free 3D Multiplayer Browser Game"; 12/12 endpoints 200 (robots, sitemap.xml, manifest.webmanifest, favicon.ico, og-image, icons x3, llms.txt, logo.svg, ig post, ig story); 18/18 HTML meta checks PASS (canonical, og:*, twitter:*, JSON-LD, sr-only h1, noscript, robots meta); JSON-LD parses → 4 graph nodes. WebGL context error in headless console = known SwiftShader quirk (menu still renders; not a regression).
+- Pushed to GitHub: main + tag v93. /api/version = v93.
+
+Stage Summary:
+- VoteChor now has a complete, matching brand kit: ballot-box logo SVG, AI game-art app icon → favicon.ico/PWA/apple icons, OG share image with ad copy, and two Instagram ad creatives (post 1080x1080 + story 1080x1920) in Subway-Surfers style.
+- SEO/AIO/GEO layer is production-grade: canonical + OG/Twitter cards, PWA manifest, sitemap, robots with explicit AI-crawler welcomes, llms.txt, JSON-LD VideoGame/FAQPage graph, and crawlable semantic copy behind the canvas game.
+- Next Task ID: 93 (queued: profile save/load race; online dropTaken UX; GLB walk-clip stride calibration; optionally add Instagram creatives to an in-game "Share" panel; consider hreflang/en-hi alternates and a lightweight /about route for richer crawling).
