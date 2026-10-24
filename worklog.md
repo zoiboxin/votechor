@@ -2474,3 +2474,29 @@ Stage Summary:
 - GLB character selection is LIVE and multiplayer-correct: pick Classic Rig / Protester GLB / Runner Kid in the Wardrobe → it saves with the account, renders on the wardrobe pedestal, drives the local body in-game (13 animation clips, kid scaled to cast height), and every other player sees your chosen body via the join/cosmetics broadcast. Police duty stays Classic by design. Kill-switch retained.
 - Pushed to GitHub: main + tag v96. /api/version = v96, badge V96.
 - Next Task ID: 96 (queued: GLB walk-clip stride calibration; profile save/load race; online dropTaken UX; in-game Share panel with the IG creatives; season-bot cosmetics could occasionally roll 'protester' bodies for visual variety once perf headroom is measured).
+
+---
+Task ID: 96
+Agent: Z.ai Code (main session)
+Task: User feedback with screenshot — "runner kid doesn't look good enough… can you improve it" (the Runner Kid GLB from the CharacterSelect pedestal: googly eyes, grimace mouth, lanky body, suspender-looking straps)
+
+Work Log:
+- Rebuilt scripts/export-kid-character.ts as v2 (public/models/votechor-kid.glb, 372.6 KB, 77 meshes / 86 nodes / 21 materials / 13 clips — rig contract + clip set unchanged, KID_SCALE untouched):
+  - PROPORTIONS → chibi Subway-Surfers: headR 0.162→0.198 (BIG head), legLen 0.6→0.52 + legW 0.062→0.072 (short/chunky), armLen 0.48→0.4, hipY=legLen so soles land on y=0; total ≈1.41 m
+  - FACE → flat cartoon lens eyes: thin dark outline backing + white lens + BIG brown iris (0.031) + pupil + glint; faceZ(y,x) now a true 2-axis ellipsoid surface fn (v1/v2-early eyes/brows floated on the x=0 surface and bulged past the profile — side-view bug found via QA round 4)
+  - MOUTH → compact open smile: small dark fill + white upper-teeth strip tucked INSIDE + slim lower-lip cradle (v1's wide grimace box AND round-2's oversized "shocked gasp" fill both killed)
+  - BROWS → rounded capsules, gentle ±0.1 tilt (round-2's ±0.16 + heavy outline read "angry")
+  - CAP → rim sized to the skull cross-section (headCrossR(rimY)+0.009, no more floating lampshade), squat dome (scale y 0.8), visible curved brim (scale 1.34/0.11/1.02, tilt 0.16), V emblem on the white disc
+  - HAIR → HairBack shrunk/pushed back (no more beard-ring around the jaw), fringe tufts peek under the rim, small side/nape tufts
+  - BODY → backpack straps now run OVER the shoulders (front strap + StrapOverL/R on the shoulder top — kills the "suspenders" read); pack repositioned to actually protrude; sleeves slimmer, hands mitten-sized, arms baked with a slight outward splay so hands clear the thighs
+  - LEGS → separated (hipX 0.24→0.28·torsoW), BIG oversized sneakers (sole 0.145×0.255, toecaps, 3 laces, heel tab)
+- VISUAL QA LOOP (rebuilt the temp three.js+GLTFLoader preview harness public/tmp-glbview + scripts/tmp-glbview-entry.ts, bun build, agent-browser screenshots at 9 camera/clip presets): 5 export rounds — r1 mouth arc+fill left a screaming gap; r2 giant dark "O" mouth + angry brows + mushroom cap; r3 fixed at distance; r4 found the side-view eye-bulge bug → 2-axis faceZ; r5 final. Verified front/3-4/face/side/back/sneakers/run views.
+- Tests: anim-test 39/39, glb-test 24/24, tsc 0 src errors, lint clean (after deleting the temp bundle which ESLint hated).
+- LIVE QA (agent-browser): wardrobe → Runner Kid card active (toast), Face Check pedestal renders the new kid (brim + V emblem + proper eyes); Play Solo → V97 badge, CONNECTED, 100 players, 60 FPS, player wears the new kid, W-run works, checkpoints progress, zero console errors.
+- Housekeeping: public/brand/kid-preview-0..4.png refreshed with the new renders (old v1 shot set replaced; -5 removed); temp preview harness deleted; VC_BUILD → v97.
+
+Stage Summary:
+- The Runner Kid mascot got a full v2 redesign and is live everywhere the GLB loads (wardrobe pedestal, in-game local + remote bodies) — no engine/code changes needed beyond the asset + version bump because the rig contract was preserved.
+- Reusable lesson logged: face features on ellipsoid heads must use a 2-axis surface function faceZ(y, x); single-axis placement silently bulges eyes past the profile at side views.
+- Pushed to GitHub: main + tag v97. /api/version = v97.
+- Next Task ID: 97 (queued: GLB walk-clip stride calibration; profile save/load race; online dropTaken UX; in-game Share panel with the IG creatives; season-bot cosmetic variety).

@@ -1,11 +1,19 @@
 /**
- * VoteChor — "VC Kid" GLB character exporter (runs under bun, no DOM).
+ * VoteChor — "VC Kid" GLB character exporter v2 (runs under bun, no DOM).
+ *
+ * v2 redesign (user feedback: v1 face looked googly/creepy, body lanky):
+ *  - chibi Subway-Surfers proportions: BIG head (~2.8 heads tall), short
+ *    chunky limbs, oversized sneakers
+ *  - flat cartoon eyes: dark outline backing + white lens + LARGE brown iris
+ *    + pupil + glint (no more bulging googly sclera)
+ *  - proper open smile: dark mouth fill + white upper-teeth strip + smile arc
+ *  - cap hugs the skull (rim sized to the head cross-section, slight back
+ *    tilt, visible curved brim, V emblem)
+ *  - backpack straps run OVER the shoulders (no more suspenders read)
+ *  - rounded capsule brows, small ears, chunky fringe tufts under the rim
  *
  * Builds the runner kid from the brand story artwork (public/brand/_gen-story.png):
- * red cap, amber tee, blue jeans, red-and-white sneakers, navy backpack — with
- * far richer detailing than the base cast (layered cartoon eyes with highlights,
- * brows, grin, ears, nose, hair fringe, cap dome+brim+button, sleeve/jean cuffs,
- * multi-part sneakers with laces) and full PBR materials.
+ * red cap, amber tee, blue jeans, red-and-white sneakers, navy backpack.
  *
  * Rig contract is IDENTICAL to scripts/export-character-glb.ts so the game's
  * GLBAnimDriver / applyAvatarLook can consume it unchanged:
@@ -51,28 +59,30 @@ const C = {
   denim: 0x3e6b9e,
   denimLight: 0x5a83b3,
   skin: 0xb97a52,
-  hair: 0x201512,
+  hair: 0x241812,
   pack: 0x2c3a55,
   packLight: 0x3a4c6e,
   sole: 0xefece2,
   shoe: 0xcf3230,
-  eyeWhite: 0xf5f2ea,
-  pupil: 0x241812,
-  mouth: 0x5f2a24,
+  eyeWhite: 0xf7f4ec,
+  iris: 0x3d2317,
+  pupil: 0x1a100b,
+  eyeOutline: 0x2a1a12,
+  mouth: 0x4a201a,
   teeth: 0xf7f4ec,
 }
 
-// ---------- proportions (kid ~1.42m — young protagonist, engine-safe scale) ----------
+// ---------- proportions (kid ~1.40m — chibi runner: big head, short limbs) ----------
 const PROP = {
-  hipY: 0.6,     // hip pivot height
-  torsoH: 0.44,  // hips → neck
-  torsoW: 0.32,
+  hipY: 0.52,    // hip pivot height (= legLen: sole bottom lands on y=0)
+  torsoH: 0.42,  // hips → neck pivot
+  torsoW: 0.3,
   torsoD: 0.19,
-  armLen: 0.48,
-  armW: 0.052,
-  legLen: 0.6,   // hip pivot → floor
-  legW: 0.062,
-  headR: 0.162,
+  armLen: 0.4,   // short kid arms — hands end just below the hips
+  armW: 0.056,
+  legLen: 0.52,  // hip pivot → floor
+  legW: 0.072,   // chunky kid legs (hipX 0.28*W keeps a gap between them)
+  headR: 0.198,  // BIG cartoon head
 }
 
 type Q = [number, number, number, number]
@@ -113,6 +123,8 @@ function makeMaterials() {
     sole: new THREE.MeshStandardMaterial({ color: C.sole, roughness: 0.92, metalness: 0.0 }),
     shoe: new THREE.MeshStandardMaterial({ color: C.shoe, roughness: 0.6, metalness: 0.02 }),
     eyeWhite: new THREE.MeshStandardMaterial({ color: C.eyeWhite, roughness: 0.22, metalness: 0.0 }),
+    iris: new THREE.MeshStandardMaterial({ color: C.iris, roughness: 0.25, metalness: 0.0 }),
+    eyeOutline: new THREE.MeshStandardMaterial({ color: C.eyeOutline, roughness: 0.4, metalness: 0.0 }),
     pupil: new THREE.MeshStandardMaterial({ color: C.pupil, roughness: 0.12, metalness: 0.0 }),
     teeth: new THREE.MeshStandardMaterial({ color: C.teeth, roughness: 0.3, metalness: 0.0 }),
     mouth: new THREE.MeshStandardMaterial({ color: C.mouth, roughness: 0.45, metalness: 0.0 }),
@@ -132,14 +144,24 @@ const sph = (r: number, mat: THREE.Material, name: string, seg = 12) => mesh(new
 const cyl = (rt: number, rb: number, h: number, mat: THREE.Material, name: string, seg = 14) => mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat, name)
 
 // ---------- character builder ----------
-// Helper: z of the head ellipsoid surface at height y (head local space), so
-// face features sit PROUD of the skin instead of drowning inside it.
-// Head = sphere r=headR, scaled (0.94, 1.0, 0.96), center at y = headR*0.92.
-function faceZ(y: number): number {
-  const cy = PROP.headR * 0.92
-  const dy = (y - cy) / 1.0 // y-scale is 1.0
-  const rr = Math.max(0.05, 1 - (dy * dy) / (1.0 * 1.0))
-  return PROP.headR * 0.96 * Math.sqrt(rr)
+// Helper: z of the head ellipsoid FRONT surface at (x, y) (head-pivot local
+// space), so face features sit PROUD of the skin instead of drowning inside.
+// Head = sphere r=headR scaled (0.98, 1.02, 0.95), center at y = R*0.85.
+const HEAD_CY = 0.85
+const HEAD_RX = 0.98
+const HEAD_RY = 1.02
+const HEAD_RZ = 0.95
+function faceZ(y: number, x = 0): number {
+  const dx = x / (PROP.headR * HEAD_RX)
+  const dy = (y - PROP.headR * HEAD_CY) / (PROP.headR * HEAD_RY)
+  const rr = Math.max(0.02, 1 - dx * dx - dy * dy)
+  return PROP.headR * HEAD_RZ * Math.sqrt(rr)
+}
+// horizontal cross-section radius of the head at height y (for cap fit)
+function headCrossR(y: number): number {
+  const dy = (y - PROP.headR * HEAD_CY) / (PROP.headR * HEAD_RY)
+  const rr = Math.max(0.02, 1 - dy * dy)
+  return PROP.headR * HEAD_RX * Math.sqrt(rr)
 }
 
 function buildKid() {
@@ -165,12 +187,12 @@ function buildKid() {
   hips.add(torsoPivot)
 
   // tee body — tapered cylinder + shoulder cap + hem ring
-  const tee = cyl(0.15, 0.125, 0.34, M.tee, 'TeeBody', 16)
-  tee.position.y = 0.21
+  const tee = cyl(0.148, 0.126, 0.33, M.tee, 'TeeBody', 16)
+  tee.position.y = 0.205
   torsoPivot.add(tee)
-  const shoulders = sph(0.15, M.tee, 'Shoulders', 14)
-  shoulders.scale.set(1.08, 0.5, 0.82)
-  shoulders.position.y = 0.375
+  const shoulders = sph(0.146, M.tee, 'Shoulders', 16)
+  shoulders.scale.set(1.0, 0.44, 0.86)
+  shoulders.position.y = 0.36
   torsoPivot.add(shoulders)
   const hem = cyl(0.132, 0.132, 0.035, M.teeDark, 'TeeHem', 16)
   hem.position.y = 0.045
@@ -185,199 +207,253 @@ function buildKid() {
   // small protest badge sitting ON the tee surface
   const badge = cyl(0.022, 0.022, 0.008, M.white, 'ChestBadge', 10)
   badge.rotation.x = Math.PI / 2
-  badge.position.set(0.055, 0.3, 0.14)
+  badge.position.set(0.055, 0.29, 0.152)
   torsoPivot.add(badge)
 
   // === Backpack (navy, on the back) ===
-  const pack = box(0.24, 0.28, 0.11, M.pack, 'Backpack')
-  pack.position.set(0, 0.2, -0.15)
+  const pack = box(0.23, 0.27, 0.1, M.pack, 'Backpack')
+  pack.position.set(0, 0.21, -0.185)
   torsoPivot.add(pack)
-  const packTop = cyl(0.055, 0.055, 0.22, M.packLight, 'PackRoll', 10)
+  const packTop = cyl(0.05, 0.05, 0.21, M.packLight, 'PackRoll', 10)
   packTop.rotation.z = Math.PI / 2
-  packTop.position.set(0, 0.35, -0.15)
+  packTop.position.set(0, 0.355, -0.185)
   torsoPivot.add(packTop)
-  const zipper = box(0.02, 0.24, 0.012, M.teeDark, 'PackZipper')
-  zipper.position.set(0, 0.2, -0.208)
+  const zipper = box(0.02, 0.23, 0.012, M.teeDark, 'PackZipper')
+  zipper.position.set(0, 0.21, -0.24)
   torsoPivot.add(zipper)
-  // straps hug the tee's front surface, upper chest only (backpack straps, not suspenders)
+  // straps run over the shoulders and down the chest — reads as a backpack,
+  // not suspenders
   for (const s of [-1, 1] as const) {
-    const strap = box(0.034, 0.16, 0.014, M.packLight, s < 0 ? 'StrapL' : 'StrapR')
-    strap.position.set(s * 0.068, 0.31, 0.148)
-    strap.rotation.x = -0.05
-    torsoPivot.add(strap)
+    const front = box(0.028, 0.15, 0.013, M.packLight, s < 0 ? 'StrapL' : 'StrapR')
+    front.position.set(s * 0.074, 0.32, 0.146)
+    front.rotation.x = -0.04
+    torsoPivot.add(front)
+    const over = box(0.028, 0.012, 0.07, M.packLight, s < 0 ? 'StrapOverL' : 'StrapOverR')
+    over.position.set(s * 0.079, 0.425, 0.004)
+    over.rotation.z = s * -0.28
+    torsoPivot.add(over)
   }
 
-  // === Head (pivot at neck) ===
+  // === Head (pivot at neck) — BIG chibi skull ===
   const headPivot = new THREE.Group()
   headPivot.name = 'Head'
   headPivot.position.y = PROP.torsoH
   torsoPivot.add(headPivot)
 
-  const head = sph(R, M.skin, 'HeadMesh', 20)
-  head.position.y = R * 0.92
-  head.scale.set(0.94, 1.0, 0.96)
+  const cy = R * HEAD_CY
+  const head = sph(R, M.skin, 'HeadMesh', 22)
+  head.position.y = cy
+  head.scale.set(HEAD_RX, HEAD_RY, HEAD_RZ)
   headPivot.add(head)
 
-  // ears — at eye-line height, embedded halfway into the skull
+  // chin filler — rounds the jaw so the silhouette stays egg-cute
+  const chin = sph(R * 0.3, M.skin, 'Chin', 10)
+  chin.position.set(0, cy - R * 0.7, R * 0.28)
+  headPivot.add(chin)
+
+  // ears — small, tucked against the skull at eye-line
   for (const s of [-1, 1] as const) {
-    const ear = sph(0.036, M.skin, s < 0 ? 'EarL' : 'EarR', 8)
-    ear.scale.set(0.45, 1.0, 0.75)
-    ear.position.set(s * R * 0.9, R * 0.6, 0.005)
+    const ear = sph(0.03, M.skin, s < 0 ? 'EarL' : 'EarR', 8)
+    ear.scale.set(0.5, 1.0, 0.72)
+    ear.position.set(s * R * HEAD_RX * 0.96, cy + R * 0.02, 0.005)
     headPivot.add(ear)
   }
 
-  // nose — proud of the surface
-  const nose = sph(0.024, M.skin, 'Nose', 8)
-  nose.position.set(0, R * 0.42, R * 0.84)
+  // nose — tiny button, proud of the surface
+  const noseY = cy - R * 0.02
+  const nose = sph(0.023, M.skin, 'Nose', 8)
+  nose.position.set(0, noseY, faceZ(noseY) + 0.002)
   headPivot.add(nose)
 
-  // layered cartoon eyes: sclera + pupil + specular highlight (all proud of face)
+  // === eyes — flat cartoon lens style: thin outline stroke + white lens +
+  // BIG brown iris + pupil + glint (v1's bulging googly spheres are gone) ===
+  const eyeY = cy + R * 0.1
   for (const s of [-1, 1] as const) {
     const side = s < 0 ? 'L' : 'R'
-    const sclera = sph(0.04, M.eyeWhite, `Eye${side}`, 12)
-    sclera.scale.set(1, 1.12, 0.55)
-    sclera.position.set(s * 0.054, R * 0.66, R * 0.9)
+    const ex = s * R * 0.34
+    const zSurf = faceZ(eyeY, ex)
+    // dark outline backing — reads as a thin cartoon stroke around the eye
+    const outline = sph(0.045, M.eyeOutline, `EyeOutline${side}`, 12)
+    outline.scale.set(1.06, 1.12, 0.3)
+    outline.position.set(ex, eyeY, zSurf - 0.024)
+    headPivot.add(outline)
+    // white lens
+    const sclera = sph(0.042, M.eyeWhite, `Eye${side}`, 14)
+    sclera.scale.set(1.0, 1.06, 0.32)
+    sclera.position.set(ex, eyeY, zSurf - 0.012)
     headPivot.add(sclera)
-    const pupil = sph(0.019, M.pupil, `Pupil${side}`, 8)
-    pupil.position.set(s * 0.055, R * 0.67, R * 0.96)
+    // BIG brown iris — fills most of the lens (Subway-Surfers look)
+    const iris = sph(0.031, M.iris, `Iris${side}`, 12)
+    iris.scale.set(1.0, 1.0, 0.45)
+    iris.position.set(ex, eyeY - 0.002, zSurf + 0.006)
+    headPivot.add(iris)
+    const pupil = sph(0.0175, M.pupil, `Pupil${side}`, 10)
+    pupil.position.set(ex, eyeY - 0.002, zSurf + 0.015)
     headPivot.add(pupil)
-    const glint = sph(0.006, M.white, `Glint${side}`, 6)
-    glint.position.set(s * 0.048, R * 0.72, R * 0.99)
+    const glint = sph(0.007, M.white, `Glint${side}`, 6)
+    glint.position.set(ex - s * 0.01, eyeY + 0.015, zSurf + 0.022)
     headPivot.add(glint)
   }
 
-  // eyebrows — expressive, slightly angled, just above the eyes
+  // eyebrows — rounded capsule brows, gentle cheerful tilt
+  const browY = cy + R * 0.32
   for (const s of [-1, 1] as const) {
-    const brow = box(0.05, 0.012, 0.016, M.hair, s < 0 ? 'BrowL' : 'BrowR')
-    brow.position.set(s * 0.055, R * 0.86, R * 0.94)
-    brow.rotation.z = s * -0.12
+    const brow = new THREE.Mesh(new THREE.CapsuleGeometry(0.0085, 0.032, 3, 8), M.hair)
+    brow.name = s < 0 ? 'BrowL' : 'BrowR'
+    brow.rotation.z = Math.PI / 2 + s * 0.1
+    brow.position.set(s * R * 0.35, browY, faceZ(browY, s * R * 0.35) + 0.004)
     headPivot.add(brow)
   }
 
-  // grin — dark smile with a white teeth strip framed inside it
-  const mouth = box(0.085, 0.032, 0.014, M.mouth, 'Mouth')
-  mouth.position.set(0, R * 0.22, R * 0.68)
-  headPivot.add(mouth)
-  const teeth = box(0.055, 0.014, 0.015, M.teeth, 'Teeth')
-  teeth.position.set(0, R * 0.235, R * 0.685)
+  // === mouth — compact open smile: small dark mouth + white upper-teeth
+  // strip tucked INSIDE (v2's oversized fill read as a shocked gasp) ===
+  const mouthY = cy - R * 0.28
+  const mouthFill = sph(0.04, M.mouth, 'MouthFill', 14)
+  mouthFill.scale.set(1.08, 0.52, 0.32)
+  mouthFill.position.set(0, mouthY, faceZ(mouthY) + 0.004)
+  headPivot.add(mouthFill)
+  const teeth = box(0.048, 0.013, 0.01, M.teeth, 'Teeth')
+  teeth.position.set(0, mouthY + 0.014, faceZ(mouthY) + 0.012)
   headPivot.add(teeth)
+  // lower-lip hint — thin skin-tone arc cradling the mouth from below
+  const lowerLip = sph(0.04, M.skin, 'LowerLip', 10)
+  lowerLip.scale.set(1.12, 0.28, 0.32)
+  lowerLip.position.set(0, mouthY - 0.022, faceZ(mouthY - 0.022) - 0.002)
+  headPivot.add(lowerLip)
 
-  // hair — back volume pushed behind the face plane (no mask hack), fringe
-  // tufts along the forehead, side tufts in front of the ears, nape tufts
-  const hairBack = sph(R * 1.03, M.hair, 'HairBack', 16)
-  hairBack.scale.set(0.98, 1.0, 0.9)
-  hairBack.position.set(0, R * 1.0, -R * 0.04)
+  // hair — back volume pushed behind the face plane, chunky fringe under the
+  // cap rim, side tufts in front of the ears, nape tufts
+  const hairBack = sph(R * 1.0, M.hair, 'HairBack', 18)
+  hairBack.scale.set(0.96, 0.9, 0.92)
+  hairBack.position.set(0, cy + R * 0.12, -R * 0.16)
   headPivot.add(hairBack)
+  const fringeY = cy + R * 0.42
   for (let i = -2; i <= 2; i++) {
-    const tuft = sph(0.034, M.hair, `Fringe${i + 2}`, 8)
-    tuft.scale.set(1.15, 0.55, 0.7)
-    tuft.position.set(i * 0.042, R * (1.02 - Math.abs(i) * 0.06), R * (0.72 - Math.abs(i) * 0.045))
-    tuft.rotation.z = i * 0.18
+    const tuft = sph(0.04, M.hair, `Fringe${i + 2}`, 8)
+    tuft.scale.set(1.2, 0.58, 0.7)
+    tuft.position.set(i * 0.05, fringeY, faceZ(fringeY) - 0.014)
+    tuft.rotation.z = i * 0.2
     headPivot.add(tuft)
   }
   for (const s of [-1, 1] as const) {
     const tuft = sph(0.03, M.hair, s < 0 ? 'SideHairL' : 'SideHairR', 8)
-    tuft.scale.set(0.55, 0.95, 1.05)
-    tuft.position.set(s * R * 0.84, R * 0.86, R * 0.12)
+    tuft.scale.set(0.5, 0.85, 1.0)
+    tuft.position.set(s * R * 0.9, cy + R * 0.3, R * 0.08)
     headPivot.add(tuft)
     const nape = sph(0.034, M.hair, s < 0 ? 'NapeL' : 'NapeR', 8)
     nape.scale.set(1.0, 0.7, 0.8)
-    nape.position.set(s * R * 0.4, R * 0.44, -R * 0.68)
+    nape.position.set(s * R * 0.42, cy - R * 0.04, -R * 0.78)
     headPivot.add(nape)
   }
 
-  // === Cap — dome + brim + button + emblem, tilted back like the artwork ===
+  // === Cap — rim hugs the skull cross-section, slight back tilt, visible
+  // curved brim, squat dome + button + white emblem with a red V ===
+  const rimY = cy + R * 0.5
   const capGroup = new THREE.Group()
   capGroup.name = 'Cap'
-  capGroup.position.y = R * 0.95
-  capGroup.rotation.x = -0.12
+  capGroup.position.y = rimY
+  capGroup.rotation.x = -0.07
   headPivot.add(capGroup)
-  const capDome = new THREE.Mesh(new THREE.SphereGeometry(R * 1.08, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.52), M.cap)
+  const rimR = headCrossR(rimY) + 0.009
+  const capDome = new THREE.Mesh(new THREE.SphereGeometry(rimR + 0.002, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.5), M.cap)
   capDome.name = 'CapDome'
-  capDome.position.y = R * 0.08
-  capDome.scale.set(1.0, 0.95, 1.02)
+  capDome.position.y = 0.004
+  capDome.scale.set(1.0, 0.8, 1.02)
   capGroup.add(capDome)
-  const capRim = cyl(R * 1.06, R * 1.08, 0.026, M.capDark, 'CapRim', 18)
-  capRim.position.y = R * 0.06
+  const capRim = cyl(rimR - 0.003, rimR + 0.002, 0.026, M.capDark, 'CapRim', 20)
+  capRim.position.y = 0.0
   capGroup.add(capRim)
-  const brim = sph(0.14, M.cap, 'CapBrim', 14)
-  brim.scale.set(1.16, 0.14, 0.78)
-  brim.position.set(0, R * 0.02, R * 0.58)
+  const brim = sph(0.145, M.cap, 'CapBrim', 16)
+  brim.scale.set(1.34, 0.11, 1.02)
+  brim.rotation.x = 0.16
+  brim.position.set(0, -0.014, rimR * 0.85)
   capGroup.add(brim)
-  const button = sph(0.017, M.capDark, 'CapButton', 8)
-  button.position.y = R * 1.06
+  const button = sph(0.015, M.capDark, 'CapButton', 8)
+  button.position.y = (rimR + 0.002) * 0.8 + 0.004
   capGroup.add(button)
-  const emblem = cyl(0.026, 0.026, 0.008, M.white, 'CapEmblem', 12)
-  emblem.rotation.x = Math.PI / 2 - 0.55
-  emblem.position.set(0, R * 0.55, R * 0.82)
+  const emblem = cyl(0.022, 0.022, 0.008, M.white, 'CapEmblem', 12)
+  emblem.rotation.x = Math.PI / 2 - 0.7
+  emblem.position.set(0, rimR * 0.34, rimR * 0.9)
   capGroup.add(emblem)
+  // tiny red V on the emblem
+  for (const s of [-1, 1] as const) {
+    const v = box(0.005, 0.017, 0.004, M.cap, s < 0 ? 'EmblemVL' : 'EmblemVR')
+    v.rotation.z = s * 0.45
+    v.position.set(s * 0.006, rimR * 0.34 + 0.004, rimR * 0.9 + 0.005)
+    v.rotateX(Math.PI / 2 - 0.7)
+    capGroup.add(v)
+  }
 
   // === Arms (pivot at shoulder; hang down; rotation.x negative = raise forward) ===
-  const shoulderY = PROP.torsoH * 0.86
-  const shoulderX = PROP.torsoW / 2 + 0.028
+  const shoulderY = PROP.torsoH * 0.84
+  const shoulderX = PROP.torsoW / 2 + 0.014
   const buildArm = (side: -1 | 1) => {
     const name = side < 0 ? 'ArmL' : 'ArmR'
     const pivot = new THREE.Group()
     pivot.name = name
     pivot.position.set(side * shoulderX, shoulderY, 0)
     torsoPivot.add(pivot)
-    // skin upper+fore arm
+    // skin upper+fore arm — slight outward splay baked into the MESH so the
+    // hands clear the thighs even in the rest pose
     const arm = new THREE.Mesh(new THREE.CapsuleGeometry(PROP.armW, PROP.armLen - PROP.armW * 2.4, 4, 10), M.skin)
     arm.position.y = -PROP.armLen / 2 + 0.01
+    arm.rotation.z = side * -0.12
     arm.name = name + 'Mesh'
     pivot.add(arm)
     // short sleeve cuff
-    const sleeve = cyl(PROP.armW * 1.35, PROP.armW * 1.45, 0.11, M.tee, name + 'Sleeve', 10)
-    sleeve.position.y = -0.045
+    const sleeve = cyl(PROP.armW * 1.3, PROP.armW * 1.38, 0.11, M.tee, name + 'Sleeve', 10)
+    sleeve.position.y = -0.05
+    sleeve.rotation.z = side * -0.09
     pivot.add(sleeve)
     // mitten hand + thumb
     const hand = sph(PROP.armW * 1.32, M.skin, name + 'Hand', 10)
-    hand.position.y = -PROP.armLen + 0.02
+    hand.position.set(side * 0.018, -PROP.armLen + 0.018, 0.008)
     pivot.add(hand)
     const thumb = sph(PROP.armW * 0.5, M.skin, name + 'Thumb', 6)
-    thumb.position.set(side * -PROP.armW * 0.7, -PROP.armLen + 0.06, 0.02)
+    thumb.position.set(side * -0.024, -PROP.armLen + 0.058, 0.022)
     pivot.add(thumb)
     return pivot
   }
   buildArm(-1)
   buildArm(1)
 
-  // === Legs (pivot at hip joint; hang down) ===
-  const hipX = PROP.torsoW * 0.24
+  // === Legs (pivot at hip joint; hang down) — chunky jeans + BIG sneakers ===
+  const hipX = PROP.torsoW * 0.28
   const buildLeg = (side: -1 | 1) => {
     const name = side < 0 ? 'LegL' : 'LegR'
     const pivot = new THREE.Group()
     pivot.name = name
     pivot.position.set(side * hipX, 0, 0)
     hips.add(pivot)
-    // jean leg
-    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(PROP.legW, PROP.legLen - PROP.legW * 2.6 - 0.05, 4, 10), M.denim)
+    // jean leg — slight inward lean at the top so the pelvis bridges cleanly
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(PROP.legW, PROP.legLen - PROP.legW * 2.6 - 0.06, 4, 12), M.denim)
     leg.position.y = -PROP.legLen / 2 + 0.03
+    leg.rotation.z = side * 0.04
     leg.name = name + 'Mesh'
     pivot.add(leg)
     // rolled cuff
-    const cuff = cyl(PROP.legW * 1.18, PROP.legW * 1.22, 0.055, M.denimLight, name + 'Cuff', 10)
-    cuff.position.y = -PROP.legLen + 0.095
+    const cuff = cyl(PROP.legW * 1.14, PROP.legW * 1.18, 0.05, M.denimLight, name + 'Cuff', 12)
+    cuff.position.y = -PROP.legLen + 0.1
     pivot.add(cuff)
-    // === sneaker: sole + upper + toecap + laces + heel tab ===
-    const sole = box(0.125, 0.032, 0.215, M.sole, name + 'Sole')
-    sole.position.set(0, -PROP.legLen + 0.016, 0.04)
+    // === sneaker: sole + upper + toecap + laces + heel tab (oversized, SS style) ===
+    const sole = box(0.145, 0.036, 0.255, M.sole, name + 'Sole')
+    sole.position.set(0, -PROP.legLen + 0.018, 0.05)
     pivot.add(sole)
-    const upper = box(0.108, 0.05, 0.18, M.shoe, name + 'Shoe')
-    upper.position.set(0, -PROP.legLen + 0.055, 0.035)
+    const upper = box(0.122, 0.062, 0.205, M.shoe, name + 'Shoe')
+    upper.position.set(0, -PROP.legLen + 0.062, 0.045)
     pivot.add(upper)
-    const toecap = sph(0.052, M.sole, name + 'ToeCap', 10)
-    toecap.scale.set(1.05, 0.55, 1.15)
-    toecap.position.set(0, -PROP.legLen + 0.055, 0.105)
+    const toecap = sph(0.058, M.sole, name + 'ToeCap', 12)
+    toecap.scale.set(1.02, 0.6, 1.15)
+    toecap.position.set(0, -PROP.legLen + 0.058, 0.125)
     pivot.add(toecap)
     for (let i = 0; i < 3; i++) {
-      const lace = box(0.085, 0.008, 0.012, M.sole, name + `Lace${i}`)
-      lace.position.set(0, -PROP.legLen + 0.068 + i * 0.022, 0.035 + i * 0.028)
-      lace.rotation.x = -0.35
+      const lace = box(0.098, 0.009, 0.013, M.sole, name + `Lace${i}`)
+      lace.position.set(0, -PROP.legLen + 0.078 + i * 0.024, 0.032 + i * 0.032)
+      lace.rotation.x = -0.38
       pivot.add(lace)
     }
-    const heel = box(0.06, 0.03, 0.02, M.shoe, name + 'HeelTab')
-    heel.position.set(0, -PROP.legLen + 0.085, -0.058)
+    const heel = box(0.065, 0.034, 0.022, M.shoe, name + 'HeelTab')
+    heel.position.set(0, -PROP.legLen + 0.09, -0.062)
     pivot.add(heel)
     return pivot
   }
