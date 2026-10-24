@@ -466,6 +466,22 @@ export const BODY_CATALOG: CosmeticItem[] = [
     desc: 'The VoteChor mascot — red cap, backpack, unstoppable.',
     unlock: { type: 'free' },
   },
+  {
+    id: 'human',
+    kind: 'body',
+    label: 'Citizen HD',
+    emoji: '🧑',
+    desc: 'Skinned human body — smooth joints, blinking face, real gait.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'human-child',
+    kind: 'body',
+    label: 'Junior Citizen',
+    emoji: '🧒',
+    desc: 'Kid-proportioned human — big head, shorts, big sneaker energy.',
+    unlock: { type: 'free' },
+  },
 ]
 
 const CATALOGS: Record<CosmeticKind, CosmeticItem[]> = {

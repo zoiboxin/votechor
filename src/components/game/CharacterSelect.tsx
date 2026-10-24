@@ -279,6 +279,8 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     notify(
       id === 'classic' ? 'Classic Rig on — your full customized look is front and center'
       : id === 'protester' ? 'High-Fi body on — your outfit tint + gear ride the GLB'
+      : id === 'human' ? 'Citizen HD on — skinned body, blinking face, real gait'
+      : id === 'human-child' ? 'Junior Citizen on — big head, big sneaker energy'
       : 'Runner Kid equipped — the mascot hits the streets!', 'squad')
   }
 
@@ -510,6 +512,8 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                   <div className="grid gap-2">
                     {[
                       { id: 'classic', emoji: '🧍', label: 'Classic Rig', desc: 'Full wardrobe — every slot renders', badge: '' },
+                      { id: 'human', emoji: '🧑', label: 'Citizen HD', desc: 'Skinned human — smooth joints, blinking, real gait', badge: 'HD' },
+                      { id: 'human-child', emoji: '🧒', label: 'Junior Citizen', desc: 'Kid-proportioned human — same skeleton', badge: 'HD' },
                       { id: 'protester', emoji: '🎽', label: 'Protester GLB', desc: 'High-Fi body · outfit tint + gear ride along', badge: 'HI-FI' },
                       { id: 'kid', emoji: '🧢', label: 'Runner Kid', desc: 'The VoteChor mascot — fixed brand kit', badge: 'MASCOT' },
                     ].map((opt) => {

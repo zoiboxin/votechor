@@ -61,24 +61,33 @@ export interface AvatarLook {
  *  - 'classic'    procedural rig (full wardrobe) — no GLB
  *  - 'protester'  High-Fi GLB, gender-matching, full wardrobe pipeline
  *  - 'kid'        the Runner Kid mascot GLB (fixed brand outfit, no wardrobe)
+ *  - 'human'      professional SKINNED human, gender-matching (wardrobe pipeline)
+ *  - 'human-child' age-appropriate child variant of the human system
  */
-export type BodyModel = 'classic' | 'protester' | 'kid'
+export type BodyModel = 'classic' | 'protester' | 'kid' | 'human' | 'human-child'
 
 export const KID_MODEL_URL = '/models/votechor-kid.glb'
 /** The kid is authored ~1.42 m (young protagonist). The cast renders 1.5–1.96 m
  *  and the camera pivots at +1.55 m, so 1.42 reads tiny in third person — a
  *  1.12× instance scale brings him to ~1.59 m while keeping the mascot proportions. */
 export const KID_SCALE = 1.12
+/** The human child variant is authored ~1.14 m (age-appropriate, NOT a scaled
+ *  adult). A 1.28× instance scale brings him to ~1.46 m — reads as a kid next
+ *  to the 1.5–1.96 m cast without breaking the camera. */
+export const HUMAN_CHILD_SCALE = 1.28
 
 /** Safe read of cosmetics.body → BodyModel (default 'classic'; unknown = classic). */
 export function bodyModelOf(c: unknown): BodyModel {
   const v = (typeof c === 'object' && c !== null ? (c as Record<string, unknown>).body : undefined)
-  return v === 'protester' || v === 'kid' ? v : 'classic'
+  return v === 'protester' || v === 'kid' || v === 'human' || v === 'human-child' ? v : 'classic'
 }
 
-/** GLB url for a body model + gender (protester family is gender-split, kid is one asset). */
+/** GLB url for a body model + gender (protester/human families are gender-split).
+ *  'human' picks the SKINNED professional system by gender; 'human-child' is one asset. */
 export function resolveGlbUrl(model: BodyModel, gender: 'male' | 'female'): string | null {
   if (model === 'kid') return KID_MODEL_URL
+  if (model === 'human') return gender === 'female' ? '/models/votechor-human-female.glb' : '/models/votechor-human-male.glb'
+  if (model === 'human-child') return '/models/votechor-human-child.glb'
   if (model === 'protester') return gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
   return null
 }
@@ -161,6 +170,14 @@ const RIGGED_MAP: Record<string, keyof AvatarPalette> = {
   LegLMesh: 'pants', LegRMesh: 'pants',
   HeadMesh: 'skin', ArmLHand: 'skin', ArmRHand: 'skin',
   Sash: 'accent',
+  // professional human system (skinned GLB) — node names map to palette keys
+  HumanTorso: 'shirt', HumanArmL: 'shirt', HumanArmR: 'shirt',
+  SleeveL: 'shirt', SleeveR: 'shirt', DeltoidL: 'shirt', DeltoidR: 'shirt',
+  Collar: 'shirt', CuffL: 'shirt', CuffR: 'shirt',
+  HumanPelvis: 'pants', HumanLegL: 'pants', HumanLegR: 'pants', ShortsL: 'pants', ShortsR: 'pants',
+  HumanHead: 'skin', HumanNeck: 'skin', ForearmL: 'skin', ForearmR: 'skin',
+  HumanHandL: 'skin', HumanHandR: 'skin', CalfL: 'skin', CalfR: 'skin',
+  HumanShoeL: 'shoes', HumanShoeR: 'shoes', HumanSoleL: 'shoes', HumanSoleR: 'shoes',
 }
 
 // Mesh names of the TEXTURED family → palette key, with the MEASURED baked
@@ -578,18 +595,21 @@ export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook, model: 
   // 4. bone attachments
   const bone = (names: string[]) => names.map((n) => group.getObjectByName(n)).find(Boolean) ?? null
   const hairColor = look.palette.hairColor ?? '#191512'
-  const headSpec = female ? FEMALE_HEAD : { names: ['Head'], fit: 1 }
+  const childHuman = model === 'human-child'
+  // attachment fit: wardrobe pieces are authored against the male skinned head/
+  // hand/foot; the female puppet and the human child get scale factors.
+  const headSpec = childHuman ? { names: ['Head'], fit: 1.07 } : female ? FEMALE_HEAD : { names: ['Head'], fit: 1 }
   const head = bone(headSpec.names)
   attachTo(head, buildHair(look.hair, hairColor), headSpec.fit)
   if (look.hat !== 'none') attachTo(head, buildHat(look.hat), headSpec.fit)
   if (look.face !== 'clean') attachTo(head, buildFace(look.face), headSpec.fit)
   if (look.glasses) attachTo(head, buildGlasses(), headSpec.fit)
   // held item
-  const heldSpec = female ? FEMALE_HELD : { names: ['HandR'], fit: 1 }
+  const heldSpec = childHuman ? { names: ['HandR'], fit: 0.8 } : female ? FEMALE_HELD : { names: ['HandR'], fit: 1 }
   attachTo(bone(heldSpec.names), buildHeld(look.held, look.signText ?? ''), heldSpec.fit, heldSpec.fallbackOffset)
   // footwear (mirrored — the two foot bones share the same local space; the
   // female puppet has no Foot bones so LegL/LegR stand in with a foot-level offset)
-  const footFit = female ? 0.62 : 1
+  const footFit = childHuman ? 0.62 : female ? 0.62 : 1
   const footOffset = female ? ([0, -0.86, 0.03] as [number, number, number]) : undefined
   attachTo(bone(female ? ['FootL', 'LegL'] : ['FootL']), buildFootwear(look.footwear, look.palette.shoes ?? '#e8e4d8'), footFit, footOffset)
   attachTo(bone(female ? ['FootR', 'LegR'] : ['FootR']), buildFootwear(look.footwear, look.palette.shoes ?? '#e8e4d8'), footFit, footOffset)

@@ -11,7 +11,7 @@ import { CharacterRig } from '@/game/character'
 import { GLBAssetManager } from '@/game/glb'
 import { GLBAnimDriver } from '@/game/anim'
 import {
-  resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE,
+  resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE, HUMAN_CHILD_SCALE,
 } from '@/game/avatar-look'
 import { archetypeById } from '@/game/shared/constants'
 import { policeUniformColors } from '@/lib/cosmetics'
@@ -198,6 +198,7 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
             if (!inst) return
             applyAvatarLook(inst.group, avatarLook, model)
             if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
+            else if (model === 'human-child') inst.group.scale.setScalar(HUMAN_CHILD_SCALE)
             inst.group.visible = true
             stage.add(inst.group)
             const driver = new GLBAnimDriver(inst.mixer, inst.clips)

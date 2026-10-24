@@ -39,8 +39,9 @@ import { SuspectSystem } from './suspects'
 import { GLBAssetManager, type GLBInstance } from './glb'
 import { GLBAnimDriver } from './anim'
 import { SecondaryMotion } from './secondary-motion'
+import { FacialRig } from './facial-rig'
 import type { LocoState } from './anim'
-import { resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE, type BodyModel } from './avatar-look'
+import { resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE, HUMAN_CHILD_SCALE, type BodyModel } from './avatar-look'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
 /** v51 — soft-escape window: after the LAST chaser drops off, the WANTED badge
@@ -59,7 +60,7 @@ const SCARE_COOLDOWN_MS = 12000
 interface RemoteEntry {
   rig: import('./character').CharacterRig | null
   /** High-Fi GLB model instance (replaces the procedural body; rig keeps the name tag). */
-  glb: { inst: GLBInstance; driver: GLBAnimDriver; sec: import('./secondary-motion').SecondaryMotion | null; loading: boolean } | null
+  glb: { inst: GLBInstance; driver: GLBAnimDriver; sec: import('./secondary-motion').SecondaryMotion | null; facial: import('./facial-rig').FacialRig | null; loading: boolean } | null
   target: { x: number; y: number; z: number; ry: number }
   anim: AnimName
   name: string
@@ -300,9 +301,13 @@ export class Game {
     // by the time the player clicks PLAY, the cache is usually warm and the swap
     // is near-instant. Fire-and-forget: any failure just keeps the procedural rig.
     // task 95: the Runner Kid mascot joins the warm cache (294 KB — trivial).
+    // task 98: the professional human system joins too (~1.1 MB for all three).
     void this.glbMgr.load('/models/votechor-male-skinned.glb')
     void this.glbMgr.load('/models/votechor-female.glb')
     void this.glbMgr.load('/models/votechor-kid.glb')
+    void this.glbMgr.load('/models/votechor-human-male.glb')
+    void this.glbMgr.load('/models/votechor-human-female.glb')
+    void this.glbMgr.load('/models/votechor-human-child.glb')
     this.engine = new Engine(canvas)
     // lightning → white HUD flash + delayed thunder roll
     this.engine.sky.onLightning = () => {
@@ -1291,7 +1296,7 @@ export class Game {
     if (r.glb || !r.rig) return
     const model: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
     if (model === 'classic') return // this protester marches in the procedural rig
-    r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, sec: null, loading: true }
+    r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, sec: null, facial: null, loading: true }
     const look = resolveAvatarLook(r.cosmetics, r.archetype, r.role ?? 'protector')
     const url = resolveGlbUrl(model, look.gender)
     if (!url) { r.glb = null; return }
@@ -1304,14 +1309,16 @@ export class Game {
     if (!inst) { r.glb = null; return }
     applyAvatarLook(inst.group, look, model)
     if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
+    else if (model === 'human-child') inst.group.scale.setScalar(HUMAN_CHILD_SCALE)
     inst.group.visible = true
     inst.group.position.set(r.target.x, r.target.y, r.target.z)
     inst.group.rotation.y = r.target.ry
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
     const sec = new SecondaryMotion(inst.group)
+    const facial = new FacialRig(inst.group)
     r.rig.setBodyVisible(false) // name tag + alert sprites stay
-    r.glb = { inst, driver, sec, loading: false }
+    r.glb = { inst, driver, sec, facial: facial.available ? facial : null, loading: false }
     // catch the GLB up to wherever interpolation is right now
     inst.group.position.copy(r.rig.group.position)
     inst.group.rotation.y = r.rig.group.rotation.y
@@ -1321,7 +1328,7 @@ export class Game {
   /** Dispose one remote entry's GLB instance (scene removal + GPU teardown). */
   private detachRemoteGlb(r: RemoteEntry) {
     if (!r.glb) return
-    if (r.glb.inst) { r.glb.sec?.dispose(); this.engine.scene.remove(r.glb.inst.group); this.glbMgr.disposeInstance(r.glb.inst) }
+    if (r.glb.inst) { r.glb.sec?.dispose(); r.glb.facial?.dispose(); this.engine.scene.remove(r.glb.inst.group); this.glbMgr.disposeInstance(r.glb.inst) }
     r.glb = null
     r.rig?.setBodyVisible(true)
   }
@@ -1352,11 +1359,13 @@ export class Game {
     if (!inst) return
     applyAvatarLook(inst.group, look, model)
     if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
+    else if (model === 'human-child') inst.group.scale.setScalar(HUMAN_CHILD_SCALE)
     inst.group.visible = true
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
     const sec = new SecondaryMotion(inst.group)
-    p.attachGlb(inst, driver, sec)
+    const facial = new FacialRig(inst.group)
+    p.attachGlb(inst, driver, sec, facial.available ? facial : null)
     this.hiFiUrl = url
   }
 
@@ -3072,6 +3081,7 @@ export class Game {
         r.glb.inst.group.position.copy(pos)
         r.glb.inst.group.rotation.y = r.rig.group.rotation.y
         r.glb.sec?.update(animDt, { hSpeed, vy: 0, grounded: true })
+        r.glb.facial?.update(animDt, { loco, hSpeed, grounded: true })
       }
     }
 
@@ -3086,6 +3096,8 @@ export class Game {
 
     const playing = store.uiMode === 'playing'
     if (playing) {
+      // facial rig breathes/blink harder as stamina drains (local player)
+      this.player.fatigue = 1 - this.player.stamina / Math.max(1, this.player.maxStamina)
       this.player.render(dt)
       this.npcs.update(dt, 1, this.worldTime, this.player.pos.x, this.player.pos.z, this.camRig.yaw)
       this.updatePoliceTelegraphs()

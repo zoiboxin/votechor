@@ -11,6 +11,7 @@
 //   • gaze inertia — the head counter-rotates against torso lean and LAGS
 //                    behind facing changes, keeping the eyes level
 //   • cap jiggle   — kid only: the Cap node lags the head with its own spring
+//   • ponytail     — human female: the Ponytail node swings with accel + turns
 //
 // The overlay is IDEMPOTENT: every node's last-applied offset quaternion is
 // undone before the new one is applied, so offsets never accumulate even when
@@ -43,6 +44,9 @@ export class SecondaryMotion {
   private cap: THREE.Object3D | null
   private capBase = { x: 0, z: 0 }
   private hasCap = false
+  private pony: THREE.Object3D | null
+  private ponyBase = { x: 0, z: 0 }
+  private hasPony = false
   // last applied overlays (undone before each new apply → idempotent)
   private torsoQ = new THREE.Quaternion()
   private headQ = new THREE.Quaternion()
@@ -53,6 +57,8 @@ export class SecondaryMotion {
   private squash = 1; private squashV = 0
   private capX = 0; private capXV = 0
   private capZ = 0; private capZV = 0
+  private ponyX = 0; private ponyXV = 0
+  private ponyZ = 0; private ponyZV = 0
   private headYaw = 0; private headYawV = 0
   // previous-frame inputs
   private prevRy: number | null = null
@@ -68,6 +74,11 @@ export class SecondaryMotion {
     if (this.cap) {
       this.capBase = { x: this.cap.rotation.x, z: this.cap.rotation.z }
       this.hasCap = true
+    }
+    this.pony = root.getObjectByName('Ponytail') ?? null
+    if (this.pony) {
+      this.ponyBase = { x: this.pony.rotation.x, z: this.pony.rotation.z }
+      this.hasPony = true
     }
   }
 
@@ -111,6 +122,9 @@ export class SecondaryMotion {
     ;[this.capX, this.capXV] = spring(this.capX, this.capXV, THREE.MathUtils.clamp(accel * 0.02, -0.18, 0.18), 90, 7, dt)
     ;[this.capZ, this.capZV] = spring(this.capZ, this.capZV, THREE.MathUtils.clamp(-turnRate * 0.05, -0.25, 0.25), 90, 7, dt)
     ;[this.headYaw, this.headYawV] = spring(this.headYaw, this.headYawV, THREE.MathUtils.clamp(-turnRate * 0.06, -0.3, 0.3), 40, 7, dt)
+    // ponytail: swings UP-BACK with speed (x negative lifts the tail), lags turns (z)
+    ;[this.ponyX, this.ponyXV] = spring(this.ponyX, this.ponyXV, THREE.MathUtils.clamp(speedK * 0.22 + accel * 0.01, -0.1, 0.4), 55, 6, dt)
+    ;[this.ponyZ, this.ponyZV] = spring(this.ponyZ, this.ponyZV, THREE.MathUtils.clamp(turnRate * 0.05, -0.3, 0.3), 50, 5.5, dt)
 
     // ---- apply overlays (undo previous → apply new) ----
     const pitch = this.lean + this.lurch
@@ -132,6 +146,10 @@ export class SecondaryMotion {
       this.cap.rotation.x = this.capBase.x + this.capX
       this.cap.rotation.z = this.capBase.z + this.capZ
     }
+    if (this.hasPony && this.pony) {
+      this.pony.rotation.x = this.ponyBase.x + this.ponyX
+      this.pony.rotation.z = this.ponyBase.z + this.ponyZ
+    }
     // volume-preserving squash & stretch on the root scale
     const st = this.squash
     this.root.scale.set(
@@ -149,12 +167,17 @@ export class SecondaryMotion {
       this.cap.rotation.x = this.capBase.x
       this.cap.rotation.z = this.capBase.z
     }
+    if (this.hasPony && this.pony) {
+      this.pony.rotation.x = this.ponyBase.x
+      this.pony.rotation.z = this.ponyBase.z
+    }
     this.root.scale.copy(this.baseScale)
     this.torsoQ.identity()
     this.headQ.identity()
     this.lean = this.leanV = this.bank = this.bankV = this.lurch = this.lurchV = 0
     this.squash = this.squashV = 0
     this.capX = this.capXV = this.capZ = this.capZV = 0
+    this.ponyX = this.ponyXV = this.ponyZ = this.ponyZV = 0
     this.headYaw = this.headYawV = 0
     this.prevRy = null
     this.prevSpeed = 0
