@@ -225,29 +225,17 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Model</div>
-                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig = your full customized look (hat, hair, shoes…). High-Fi is parked for now — the wardrobe lives on the Classic rig</div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Body</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig / Protester GLB / Runner Kid — picked in the Wardrobe → Character Body (saves to your account &amp; shows to everyone)</div>
               </div>
-              {/* task 82: GLB characters are platform-disabled (GLB_CHARACTERS_ENABLED = false).
-                  The toggle stays readable but the High-Fi option is parked. */}
-              <Select
-                value="classic"
-                onValueChange={(v) => {
-                  if (v === 'hifi') return // kill-switch: option is parked
-                  update({ hiFiModel: false })
-                  notify('Classic rig on — your full customized look is front and center', 'info')
-                }}
-              >
-                <SelectTrigger className="w-40 rounded-xl border-2 border-[#1c1a17]/60 bg-[#f5efdc] font-black">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="vc-paper border-2 border-[#1c1a17]/70">
-                  <SelectItem value="classic" className="font-bold">Classic Rig</SelectItem>
-                  <SelectItem value="hifi" disabled className="font-bold text-[#1c1a17]/40">High-Fi GLB (soon)</SelectItem>
-                </SelectContent>
-              </Select>
+              {/* task 95: the body choice moved to the Wardrobe (Character Body section) —
+                  it persists with the profile cosmetics and broadcasts to the room, so the
+                  picker lives where you can SEE the body on the pedestal. */}
+              <span className="rounded-xl border-2 border-[#1c1a17]/60 bg-[#efe6c8] px-3 py-1.5 text-[10px] font-black uppercase tracking-tight text-[#1c1a17]/70">
+                Wardrobe → Body
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <div>

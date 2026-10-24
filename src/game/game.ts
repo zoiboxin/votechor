@@ -39,7 +39,7 @@ import { SuspectSystem } from './suspects'
 import { GLBAssetManager, type GLBInstance } from './glb'
 import { GLBAnimDriver } from './anim'
 import type { LocoState } from './anim'
-import { resolveAvatarLook, applyAvatarLook } from './avatar-look'
+import { resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE, type BodyModel } from './avatar-look'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
 /** v51 — soft-escape window: after the LAST chaser drops off, the WANTED badge
@@ -229,6 +229,10 @@ export class Game {
   private glbMgr = new GLBAssetManager()
   private hiFiPalette: { shirt: string; pants: string; skin: string; accent: string } | null = null
   private hiFiGender: 'male' | 'female' = 'male'
+  /** task 95 — the player's chosen BODY (wardrobe cosmetics.body); police duty = classic. */
+  private bodyModel: BodyModel = 'classic'
+  /** url of the GLB currently attached to the LOCAL player (mid-match body-swap detection). */
+  private hiFiUrl: string | null = null
   private role: 'protector' | 'police' = 'protector' // chosen side (profile.role)
   private suspects: SuspectSystem | null = null // offline police-role arrest targets
   private windupUntil = new Map<string, number>()
@@ -294,8 +298,10 @@ export class Game {
     // download + texture decode never lands on the match-start critical path —
     // by the time the player clicks PLAY, the cache is usually warm and the swap
     // is near-instant. Fire-and-forget: any failure just keeps the procedural rig.
+    // task 95: the Runner Kid mascot joins the warm cache (294 KB — trivial).
     void this.glbMgr.load('/models/votechor-male-skinned.glb')
     void this.glbMgr.load('/models/votechor-female.glb')
+    void this.glbMgr.load('/models/votechor-kid.glb')
     this.engine = new Engine(canvas)
     // lightning → white HUD flash + delayed thunder roll
     this.engine.sky.onLightning = () => {
@@ -598,8 +604,11 @@ export class Game {
       this.input.keybinds = s.settings.keybinds
       this.input.sensitivity = s.settings.mouseSensitivity
       this.input.invertY = s.settings.invertY
-      // ---- High-Fi GLB model toggle (live swap mid-match) ----
-      if (s.settings.hiFiModel !== prev.settings.hiFiModel) this.applyHiFiSetting(s.settings.hiFiModel)
+      // ---- character body (task 95): wardrobe cosmetics.body swaps the GLB LIVE, mid-match too ----
+      if (bodyModelOf(s.profile?.cosmetics) !== bodyModelOf(prev.profile?.cosmetics)) {
+        this.bodyModel = this.resolvedBodyModel()
+        this.applyBodyModel(this.bodyModel)
+      }
       // ---- performance-visibility toggle (live; off = the proven v25 rendering path) ----
       if (s.settings.distanceCulling !== prev.settings.distanceCulling) {
         const on = s.settings.distanceCulling === true
@@ -868,12 +877,15 @@ export class Game {
       this.engine.scene.remove(this.player.rig.group)
       this.player.rig.dispose()
     }
+    this.hiFiUrl = null
     const cosmetics = profile?.cosmetics
     const gender = cosmetics?.gender === 'female' ? 'female' as const : 'male' as const
     // High-Fi readiness gate + gender hint — the actual styling now flows through
     // resolveAvatarLook() at attach time (v83), so no palette duplication here
     this.hiFiPalette = { shirt: '#888888', pants: '#888888', skin: '#daa88e', accent: '#888888' }
     this.hiFiGender = gender
+    // task 95 — chosen body (wardrobe cosmetics.body); police duty always marches Classic
+    this.bodyModel = this.resolvedBodyModel()
     this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
       hat: cosmetics?.hat as string | undefined,
       glasses: cosmetics?.glasses as boolean | undefined,
@@ -940,8 +952,8 @@ export class Game {
       this.store.notify('Recovered from a graphics glitch — world restored', 'warning')
     }
     this.engine.scene.add(this.player.rig.group)
-    // High-Fi GLB player model (settings toggle; silently skips when the asset fails)
-    if (useGameStore.getState().settings.hiFiModel) void this.tryAttachHiFi()
+    // task 95 — High-Fi GLB body (wardrobe cosmetics.body; silently skips when the asset fails)
+    if (this.bodyModel !== 'classic') void this.tryAttachHiFi()
     this.camRig.yaw = 0 // camera behind player, looking down the road (-z)
 
     // impostor crowd for rig-less remotes — every mode needs it (solo seasons spawn ~99 bots)
@@ -1257,34 +1269,40 @@ export class Game {
     this.engine.scene.add(rig.group)
     rig.setNameColor(r.name, police ? '#9ecbff' : this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
     r.rig = rig
-    // High-Fi GLB for the remote too (same pipeline as the local player — assets are
-    // cached per URL so N remotes share one download). Fire-and-forget; the procedural
-    // body stays until the instance is ready, then hides behind the name tag.
-    if (this.store.settings.hiFiModel) void this.attachRemoteGlb(id, r)
+    // task 95 — High-Fi GLB body for the remote TOO, from THEIR OWN cosmetics.body
+    // (each player wears the body THEY picked; assets are cached per URL so N remotes
+    // share one download). Fire-and-forget; the procedural body stays until the
+    // instance is ready, then hides behind the name tag. attachRemoteGlb self-gates:
+    // police + 'classic' bodies return without spawning a GLB.
+    if (GLB_CHARACTERS_ENABLED) void this.attachRemoteGlb(id, r)
   }
 
   /**
-   * Attach a gender-matching, fully-styled GLB to a remote entry. Reuses the
-   * shared GLBAssetManager cache (no duplicate downloads) and never blocks gameplay:
-   * any failure leaves the procedural rig rendering as before.
-   * v83: the TEXTURED male hero asset (votechor-male-skinned.glb) replaces the
-   * flat-tinted rigged body, and styling runs through the SAME wardrobe pipeline
-   * as the wardrobe preview + local player (resolveAvatarLook → applyAvatarLook:
-   * normalized tint + hair/hat/face/glasses/footwear/gear/held attached to bones).
+   * Attach a remote player's chosen High-Fi GLB body. task 95: the model comes from
+   * THEIR cosmetics.body ('protester' → gender-matching GLB with the full wardrobe
+   * pipeline, 'kid' → the Runner Kid mascot with his baked brand outfit); police and
+   * 'classic' bodies stay on the procedural rig. Reuses the shared GLBAssetManager
+   * cache (no duplicate downloads) and never blocks gameplay: any failure leaves the
+   * procedural rig rendering as before.
    */
   private async attachRemoteGlb(id: string, r: RemoteEntry) {
-    if (!GLB_CHARACTERS_ENABLED) return // task 82: GLB characters disabled — procedural rigs stay
+    if (!GLB_CHARACTERS_ENABLED) return // kill-switch — procedural rigs stay
     if (r.glb || !r.rig) return
+    const model: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
+    if (model === 'classic') return // this protester marches in the procedural rig
     r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
     const look = resolveAvatarLook(r.cosmetics, r.archetype, r.role ?? 'protector')
-    const url = look.gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
+    const url = resolveGlbUrl(model, look.gender)
+    if (!url) { r.glb = null; return }
     const asset = await this.glbMgr.load(url)
     if (!asset) { r.glb = null; return }
-    // entry may have been pruned / rig budget-evicted / setting flipped mid-load
-    if (this.remotePlayers.get(id) !== r || !r.rig || !this.store.settings.hiFiModel) { r.glb = null; return }
+    // entry may have been pruned / rig budget-evicted / body swapped mid-load
+    const stillGlb: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
+    if (this.remotePlayers.get(id) !== r || !r.rig || stillGlb === 'classic') { r.glb = null; return }
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) { r.glb = null; return }
-    applyAvatarLook(inst.group, look)
+    applyAvatarLook(inst.group, look, model)
+    if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
     inst.group.visible = true
     inst.group.position.set(r.target.x, r.target.y, r.target.z)
     inst.group.rotation.y = r.target.ry
@@ -1309,29 +1327,34 @@ export class Game {
   // ---- High-Fi GLB player model (integration of the GLB pipeline with the player controller) ----
 
   /**
-   * Load + instantiate the gender-matching GLB and attach it to the local player.
-   * NEVER blocks the match and NEVER throws — any failure leaves the procedural
-   * rig visible (the pipeline's fallback contract).
-   * v83: males get the TEXTURED skinned hero asset with the FULL wardrobe pipeline
-   * (tint + per-bone attachments); females keep the rigged puppet, now styled by
-   * the same resolveAvatarLook → applyAvatarLook path so both backends match.
+   * Load + instantiate the player's CHOSEN GLB body (wardrobe cosmetics.body) and
+   * attach it to the local player. NEVER blocks the match and NEVER throws — any
+   * failure leaves the procedural rig visible (the pipeline's fallback contract).
+   * task 95: 'protester' gets the gender-matching textured asset with the FULL
+   * wardrobe pipeline (tint + per-bone attachments); 'kid' gets the Runner Kid
+   * mascot with his own baked brand outfit (wardrobe pipeline skipped).
    */
   private async tryAttachHiFi() {
-    if (!GLB_CHARACTERS_ENABLED) return // task 82: GLB characters disabled — procedural rig is the player
+    if (!GLB_CHARACTERS_ENABLED) return // kill-switch — procedural rig is the player
     const p = this.player
     if (!p || p.glb || !this.hiFiPalette) return
+    const model = this.bodyModel
+    if (model === 'classic') return
     const look = resolveAvatarLook(this.store.profile?.cosmetics, this.archetype, this.role)
-    const url = look.gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
+    const url = resolveGlbUrl(model, look.gender)
+    if (!url) return
     const asset = await this.glbMgr.load(url)
     if (!asset) return // loader already logged the reason; procedural stays
     if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) return
-    applyAvatarLook(inst.group, look)
+    applyAvatarLook(inst.group, look, model)
+    if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
     inst.group.visible = true
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
     p.attachGlb(inst, driver)
+    this.hiFiUrl = url
   }
 
   /** Tint the GLB instance to the player's archetype/police palette (clones materials per-instance). */
@@ -1339,24 +1362,39 @@ export class Game {
     void inst; void pal // v83: superseded by applyAvatarLook (wardrobe pipeline) — kept for reference removal in a later pass
   }
 
-  /** Live settings toggle — swap between the GLB and procedural rigs mid-match.
-   *  task 82: GLB_CHARACTERS_ENABLED=false pins this to OFF regardless of the
-   *  stored setting, so a stale `hiFiModel: true` can never spawn GLB bodies. */
-  private applyHiFiSetting(on: boolean) {
-    if (!GLB_CHARACTERS_ENABLED) on = false
+  /** Effective body for THIS match — the kill-switch and police duty both pin Classic. */
+  private resolvedBodyModel(): BodyModel {
+    if (!GLB_CHARACTERS_ENABLED || this.role === 'police') return 'classic'
+    return bodyModelOf(this.store.profile?.cosmetics)
+  }
+
+  /**
+   * Live body swap (task 95) — a wardrobe cosmetics.body change re-renders the
+   * player's body immediately, MID-MATCH included: Classic drops the GLB, a GLB
+   * model (re)attaches, and switching protester ↔ kid swaps the asset in place.
+   * Every remote is re-evaluated against THEIR OWN cosmetics.body.
+   */
+  private applyBodyModel(model: BodyModel) {
     const p = this.player
-    if (!p) return
-    if (!on) {
-      if (p.glb) {
-        this.engine.scene.remove(p.glb.inst.group)
-        this.glbMgr.disposeInstance(p.glb.inst)
-        p.detachGlb()
+    if (p) {
+      const lookGender = this.store.profile?.cosmetics?.gender === 'female' ? 'female' : 'male'
+      const wantUrl = model === 'classic' ? null : resolveGlbUrl(model, lookGender)
+      const attached = p.glb ? this.hiFiUrl : null
+      if (attached !== wantUrl) {
+        if (p.glb) {
+          this.engine.scene.remove(p.glb.inst.group)
+          this.glbMgr.disposeInstance(p.glb.inst)
+          p.detachGlb()
+          this.hiFiUrl = null
+        }
+        if (wantUrl !== null) void this.tryAttachHiFi()
       }
-      // remotes: restore their procedural bodies, drop the GLB instances
-      for (const [, r] of this.remotePlayers) this.detachRemoteGlb(r)
-    } else {
-      if (!p.glb) void this.tryAttachHiFi()
-      for (const [id, r] of this.remotePlayers) if (r.rig && !r.glb) void this.attachRemoteGlb(id, r)
+    }
+    // remotes: each wears THEIR chosen body — drop GLBs that must not be there
+    for (const [id, r] of this.remotePlayers) {
+      const rm: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
+      if (rm === 'classic') { this.detachRemoteGlb(r); continue }
+      if (!r.glb && r.rig) void this.attachRemoteGlb(id, r)
     }
   }
 

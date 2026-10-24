@@ -222,7 +222,7 @@ export function emoteIsUnlocked(emote: string | undefined | null, level: number,
 // Six equip slots: hat + face + outfit + footwear + back gear + held item.
 // All catalogs are pure data so the API route can validate unlocks server-side.
 
-export type CosmeticKind = 'hat' | 'hair' | 'face' | 'build' | 'outfit' | 'footwear' | 'gear' | 'held' | 'policeOutfit' | 'policeHat'
+export type CosmeticKind = 'hat' | 'hair' | 'face' | 'build' | 'outfit' | 'footwear' | 'gear' | 'held' | 'policeOutfit' | 'policeHat' | 'body'
 
 /** Body shape preset — drives the rig's torso/limb proportions (v32, expanded v85). */
 export type BodyBuild = 'regular' | 'slim' | 'sturdy' | 'athletic' | 'curvy'
@@ -433,6 +433,41 @@ export const HELD_CATALOG: CosmeticItem[] = [
   { id: 'megaphone', kind: 'held', label: 'Megaphone', emoji: '📢', desc: 'Slogans at 2× volume.', unlock: { type: 'achievement', code: 'rescuer' } },
 ]
 
+/**
+ * task 95 — CHARACTER BODY catalog: which BODY renders you in the world.
+ *  - classic    the procedural rig (full wardrobe styling — the default)
+ *  - protester  High-Fi GLB body (gender-matching, wardrobe applies)
+ *  - kid        the VoteChor Runner Kid mascot GLB (fixed brand outfit)
+ * Not part of the six equipment slots — the wardrobe renders it as its own
+ * top section. Police duty always marches in the Classic rig.
+ */
+export const BODY_CATALOG: CosmeticItem[] = [
+  {
+    id: 'classic',
+    kind: 'body',
+    label: 'Classic Rig',
+    emoji: '🧍',
+    desc: 'The full customized protester — every wardrobe slot renders.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'protester',
+    kind: 'body',
+    label: 'Protester GLB',
+    emoji: '🎽',
+    desc: 'High-Fi animated body. Your outfit tint + gear ride along.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'kid',
+    kind: 'body',
+    label: 'Runner Kid',
+    emoji: '🧢',
+    desc: 'The VoteChor mascot — red cap, backpack, unstoppable.',
+    unlock: { type: 'free' },
+  },
+]
+
 const CATALOGS: Record<CosmeticKind, CosmeticItem[]> = {
   hat: HAT_CATALOG,
   hair: HAIR_CATALOG,
@@ -444,14 +479,16 @@ const CATALOGS: Record<CosmeticKind, CosmeticItem[]> = {
   held: HELD_CATALOG,
   policeOutfit: POLICE_OUTFIT_CATALOG,
   policeHat: POLICE_HAT_CATALOG,
+  body: BODY_CATALOG,
 }
 
 export function catalogByKind(kind: CosmeticKind): CosmeticItem[] {
   return CATALOGS[kind]
 }
 
-/** All Wardrobe slots in tab order (hat already existed — kept first for muscle memory). */
-export const WARDROBE_KINDS: CosmeticKind[] = ['hat', 'hair', 'face', 'build', 'outfit', 'footwear', 'gear', 'held', 'policeOutfit', 'policeHat']
+/** All Wardrobe slots in tab order (hat already existed — kept first for muscle memory).
+ *  'body' is validated like every other slot but renders as its own wardrobe section. */
+export const WARDROBE_KINDS: CosmeticKind[] = ['hat', 'hair', 'face', 'build', 'outfit', 'footwear', 'gear', 'held', 'policeOutfit', 'policeHat', 'body']
 
 /** Equippable check across every catalog. Unknown ids are rejected. 'none'/defaults always pass. */
 const NONE_LIKE = new Set(['none', 'clean', 'classic', 'shoes', 'default', 'khaki', 'peak', 'regular'])
@@ -501,6 +538,9 @@ export function sanitizeCosmetics(raw: unknown): Record<string, string | boolean
   if (gear && CATALOGS.gear.some((i) => i.id === gear)) out.gear = gear
   const held = str(src.held, 24)
   if (held && CATALOGS.held.some((i) => i.id === held)) out.held = held
+  // task 95 — character body (classic rig / protester GLB / runner kid GLB)
+  const body = str(src.body, 12)
+  if (body && CATALOGS.body.some((i) => i.id === body)) out.body = body
   if (typeof src.glasses === 'boolean') out.glasses = src.glasses
   const skin = str(src.skinTone, 9)
   if (skin && /^#[0-9a-fA-F]{6}$/.test(skin)) out.skinTone = skin

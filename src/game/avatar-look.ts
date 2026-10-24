@@ -50,6 +50,37 @@ export interface AvatarLook {
   held: string
   glasses: boolean
   signText?: string
+  /** task 95 — which BODY this look is for: 'protester' (gender GLB, wardrobe
+   *  applies) or 'kid' (Runner Kid mascot — fixed outfit, wardrobe skipped). */
+  model?: BodyModel
+}
+
+// ---------- task 95 — character body registry (the GLB selection feature) ----------
+/**
+ * Which BODY renders a character:
+ *  - 'classic'    procedural rig (full wardrobe) — no GLB
+ *  - 'protester'  High-Fi GLB, gender-matching, full wardrobe pipeline
+ *  - 'kid'        the Runner Kid mascot GLB (fixed brand outfit, no wardrobe)
+ */
+export type BodyModel = 'classic' | 'protester' | 'kid'
+
+export const KID_MODEL_URL = '/models/votechor-kid.glb'
+/** The kid is authored ~1.42 m (young protagonist). The cast renders 1.5–1.96 m
+ *  and the camera pivots at +1.55 m, so 1.42 reads tiny in third person — a
+ *  1.12× instance scale brings him to ~1.59 m while keeping the mascot proportions. */
+export const KID_SCALE = 1.12
+
+/** Safe read of cosmetics.body → BodyModel (default 'classic'; unknown = classic). */
+export function bodyModelOf(c: unknown): BodyModel {
+  const v = (typeof c === 'object' && c !== null ? (c as Record<string, unknown>).body : undefined)
+  return v === 'protester' || v === 'kid' ? v : 'classic'
+}
+
+/** GLB url for a body model + gender (protester family is gender-split, kid is one asset). */
+export function resolveGlbUrl(model: BodyModel, gender: 'male' | 'female'): string | null {
+  if (model === 'kid') return KID_MODEL_URL
+  if (model === 'protester') return gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
+  return null
 }
 
 
@@ -503,15 +534,24 @@ function attachTo(bone: THREE.Object3D | null, built: THREE.Group | null, fit: n
 
 // ---------- the single entry point ----------
 /**
- * Apply the full cosmetic look to a High-Fi GLB instance. Idempotent per group:
+ * Apply the cosmetic look to a High-Fi GLB instance. Idempotent per group:
  * previous tint clones are discarded via the pristine map and previous
  * attachments (userData.vcCosmetic) are removed + disposed first.
+ *
+ * task 95 model-aware:
+ *  - 'protester' (default) → the full pipeline: tint + build scale + wardrobe
+ *    attachments (hair/hat/face/glasses/held/footwear/gear ride the bones).
+ *  - 'kid' → the Runner Kid wears his OWN baked brand outfit (cap, hair, tee,
+ *    backpack, jeans, sneakers are all part of the GLB) — only the cosmetic
+ *    strip runs, so a group previously styled as 'protester' cleans up cleanly.
  */
-export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook) {
+export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook, model: BodyModel = 'protester') {
   // 0. remove previous attachments
   const doomed: THREE.Object3D[] = []
   group.traverse((o) => { if ((o.userData as { vcCosmetic?: boolean } | undefined)?.vcCosmetic) doomed.push(o) })
   for (const d of doomed) { d.parent?.remove(d); disposeObject(d) }
+
+  if (model === 'kid') return // fixed outfit — tint/scale/attachments are baked into the asset
 
   // 1. tint (normalized multiply on the textured family, solid replace on the rigged one)
   tintGroup(group, look.palette)

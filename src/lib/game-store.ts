@@ -168,8 +168,10 @@ export interface Settings {
   /** accessibility — dampens camera shake on hits/explosions */
   reducedShake: boolean
   /** High-Fi GLB player model (keyframed animation clips) — auto-falls back to the procedural rig when unavailable.
-   *  task 82: the GLB backend is DISABLED platform-wide (GLB_CHARACTERS_ENABLED below) — the procedural
-   *  rig is the active character because it renders the full wardrobe. The setting stays for the return. */
+   *  task 95: RETIRED as a user-facing knob — the body choice now lives in the profile's
+   *  cosmetics.body ('classic' | 'protester' | 'kid') via the Wardrobe, so it SAVES with the
+   *  account and BROADCASTS to everyone in the room. The field stays for persisted-settings
+   *  compatibility and is simply ignored by the engine. */
   hiFiModel: boolean
   /** Distance culling for static world geometry (big draw-call win). Off = the
    *  pre-optimization rendering path (everything always drawn). The culler also
@@ -240,7 +242,7 @@ export interface Profile {
   role?: 'protector' | 'police'
   /** account creation date (ISO) — shown on the stats ID card */
   createdAt?: string
-  cosmetics: { hat?: string; glasses?: boolean; signText?: string; skinTone?: string; face?: string; build?: string; outfit?: string; footwear?: string; gear?: string; held?: string; gender?: 'male' | 'female'; hair?: string; policeOutfit?: string; policeHat?: string }
+  cosmetics: { hat?: string; glasses?: boolean; signText?: string; skinTone?: string; face?: string; build?: string; outfit?: string; footwear?: string; gear?: string; held?: string; gender?: 'male' | 'female'; hair?: string; policeOutfit?: string; policeHat?: string; /** task 95 — character body: 'classic' | 'protester' | 'kid' (absent = classic) */ body?: string }
 }
 
 export interface DailyState {
@@ -425,13 +427,14 @@ export const DEFAULT_KEYBINDS: Record<string, string> = {
 }
 
 /**
- * task 82 KILL-SWITCH — GLB characters are disabled by user request ("disable glb
- * character for now just work this"): the customization preview + every player now
- * use the procedural rig, whose wardrobe (gender styles, outfits, footwear, gear)
- * is the product. Flip to true to re-enable the v83 skinned-GLB path (game.ts
- * gates tryAttachHiFi / attachRemoteGlb / applyHiFiSetting on this flag).
+ * task 95 RE-ENABLE — GLB characters are live again. The kill-switch stays exported
+ * (one flip returns EVERYTHING to the procedural rig in an emergency), but the
+ * body choice itself is per-profile cosmetics.body ('classic' | 'protester' | 'kid'):
+ * the wardrobe renders the actual GLB on the pedestal, the choice persists with the
+ * account, and the join payload carries it so OTHER PLAYERS see your GLB body too.
+ * game.ts gates tryAttachHiFi / attachRemoteGlb / applyBodyModel on this flag.
  */
-export const GLB_CHARACTERS_ENABLED = false
+export const GLB_CHARACTERS_ENABLED = true
 
 const defaultSettings: Settings = {
   masterVolume: 0.8, musicVolume: 0.5, sfxVolume: 0.9,
@@ -443,9 +446,9 @@ const defaultSettings: Settings = {
   perfHud: true,
   minimapRotate: true,
   reducedShake: false,
-  /** task 82: default OFF — GLB characters are platform-disabled (see
-   *  GLB_CHARACTERS_ENABLED). The procedural rig renders the full wardrobe. When
-   *  the GLB path returns, flip the kill-switch AND this default together. */
+  /** task 95: RETIRED knob — the GLB body choice moved to profile cosmetics.body
+   *  (Wardrobe → Body), so it persists with the account and broadcasts to the room.
+   *  Default stays false and the engine never reads this field anymore. */
   hiFiModel: false,
   /** v50 DEFAULT ON — the measured cost of leaving it OFF is ~4,100 draw calls /
    *  ~260k triangles every frame (2,975 static meshes, 61% of them beyond the fog

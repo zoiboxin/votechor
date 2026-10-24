@@ -43,7 +43,7 @@ const POLICE_SLOTS: SlotSpec[] = [
 
 const DEFAULTS: Record<CosmeticKind, string> = {
   hat: 'none', hair: 'default', face: 'clean', build: 'regular', outfit: 'classic', footwear: 'shoes', gear: 'none', held: 'none',
-  policeOutfit: 'khaki', policeHat: 'peak',
+  policeOutfit: 'khaki', policeHat: 'peak', body: 'classic',
 }
 
 function cssMiniPreview(a: Archetype) {
@@ -84,6 +84,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const [glasses, setGlasses] = useState(profile?.cosmetics?.glasses ?? false)
   const [skinTone, setSkinTone] = useState(profile?.cosmetics?.skinTone ?? '')
   const [signText, setSignText] = useState(profile?.cosmetics?.signText ?? '')
+  const [body, setBody] = useState<string>(profile?.cosmetics?.body ?? 'classic')
   const [role, setRole] = useState<'protector' | 'police'>(profile?.role === 'police' ? 'police' : 'protector')
   const [saving, setSaving] = useState(false)
   const [unlockedCodes, setUnlockedCodes] = useState<Set<string>>(new Set())
@@ -137,6 +138,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const currentLook = () => ({
     hat, hair, gender, face, build, outfit, footwear, gear, held, glasses,
     policeOutfit, policeHat,
+    ...(body !== 'classic' ? { body } : {}),
     ...(skinTone ? { skinTone } : {}),
     signText: signText.slice(0, 24),
   })
@@ -265,6 +267,21 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     void persist({ signText: text })
   }
 
+  /** task 95 — CHARACTER BODY: classic procedural rig vs the High-Fi GLB bodies.
+   *  Persists as cosmetics.body (account-wide) and BROADCASTS with the join payload,
+   *  so other players see the body you picked. Police duty always renders Classic. */
+  const chooseBody = (id: string) => {
+    if (id === body) return
+    setBody(id)
+    uiActions().updateCosmetics({ body: id })
+    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, body: id } })
+    void persist({ body: id })
+    notify(
+      id === 'classic' ? 'Classic Rig on — your full customized look is front and center'
+      : id === 'protester' ? 'High-Fi body on — your outfit tint + gear ride the GLB'
+      : 'Runner Kid equipped — the mascot hits the streets!', 'squad')
+  }
+
   const randomize = () => {
     const pickFree = (catalog: CosmeticItem[]) => {
       const pool = catalog.filter(isUnlocked)
@@ -294,13 +311,16 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   }
 
   const police = role === 'police'
+  // task 95 — police duty always renders the Classic rig (the GLB bodies are protester wear)
+  const bodyShown = police ? 'classic' : body
   const look: PreviewLook = useMemo(() => ({
     archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText: signText.trim(),
     skinTone: skinTone || undefined,
     gender, hair,
     police,
     policeOutfit, policeHat,
-  }), [archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText, skinTone, gender, hair, police, policeOutfit, policeHat])
+    body: bodyShown,
+  }), [archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText, skinTone, gender, hair, police, policeOutfit, policeHat, bodyShown])
 
   const sel = ARCHETYPES.find((a) => a.id === archetype) ?? ARCHETYPES[0]
   const visibleSlots = police ? [...SLOTS, ...POLICE_SLOTS] : SLOTS
@@ -311,8 +331,8 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     () => itemsForKind(activeTab.kind, gender),
     [activeTab.kind, gender],
   )
-  const slotValues: Record<CosmeticKind, string> = { hat, hair, face, build, outfit, footwear, gear, held, policeOutfit, policeHat }
-  const equippedCount = visibleSlots.filter((s) => slotValues[s.kind] !== DEFAULTS[s.kind]).length + (glasses ? 1 : 0) + (skinTone ? 1 : 0)
+  const slotValues: Record<CosmeticKind, string> = { hat, hair, face, build, outfit, footwear, gear, held, policeOutfit, policeHat, body }
+  const equippedCount = visibleSlots.filter((s) => slotValues[s.kind] !== DEFAULTS[s.kind]).length + (glasses ? 1 : 0) + (skinTone ? 1 : 0) + (body !== 'classic' ? 1 : 0)
 
   return (
     <div className="vc-paper pointer-events-auto fixed inset-0 z-30 flex flex-col overflow-hidden">
@@ -476,10 +496,54 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
               )}
             </div>
             <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-              {/* Preview + build + skin tones */}
+              {/* Preview + body + build + skin tones */}
               <div className="space-y-3">
                 <div className="vc-dots overflow-hidden rounded-xl border-2 border-[#1c1a17]/50 bg-gradient-to-b from-[#cfe0e8] to-[#efe6c8]">
                   <CharacterPreview look={look} className="h-[300px] w-full" />
+                </div>
+                {/* task 95 — Character Body: procedural rig vs High-Fi GLB bodies */}
+                <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Character Body</span>
+                    <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">how everyone sees you</span>
+                  </div>
+                  <div className="grid gap-2">
+                    {[
+                      { id: 'classic', emoji: '🧍', label: 'Classic Rig', desc: 'Full wardrobe — every slot renders', badge: '' },
+                      { id: 'protester', emoji: '🎽', label: 'Protester GLB', desc: 'High-Fi body · outfit tint + gear ride along', badge: 'HI-FI' },
+                      { id: 'kid', emoji: '🧢', label: 'Runner Kid', desc: 'The VoteChor mascot — fixed brand kit', badge: 'MASCOT' },
+                    ].map((opt) => {
+                      const active = body === opt.id
+                      const lockedForPolice = police && opt.id !== 'classic'
+                      return (
+                        <button
+                          key={opt.id}
+                          onClick={() => chooseBody(opt.id)}
+                          aria-pressed={active}
+                          disabled={lockedForPolice}
+                          className={`rounded-xl border-2 px-3 py-2 text-left transition-all ${
+                            active
+                              ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
+                              : lockedForPolice
+                                ? 'cursor-not-allowed border-dashed border-[#1c1a17]/30 bg-[#efe6c8]/50 opacity-60'
+                                : 'border-[#1c1a17]/50 bg-white/60 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="text-base leading-none">{opt.emoji}</span>
+                            <span className="text-sm font-black uppercase tracking-tight text-[#1c1a17]">{opt.label}</span>
+                            {opt.badge && (
+                              <span className="rounded-full border border-[#8c1f28]/50 bg-[#8c1f28]/10 px-1.5 py-px text-[8px] font-black uppercase tracking-wider text-[#8c1f28]">{opt.badge}</span>
+                            )}
+                            {active && <Check className="ml-auto h-4 w-4 text-[#2e6e4e]" strokeWidth={3} />}
+                          </span>
+                          <span className="mt-0.5 block text-[9px] font-semibold leading-tight text-[#1c1a17]/60">
+                            {lockedForPolice ? 'Officer duty marches in the Classic rig' : opt.desc}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
                 {/* Build — male / female selection (round 23) */}
                 <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
