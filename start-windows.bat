@@ -69,15 +69,19 @@ if errorlevel 1 echo DATABASE_URL=file:../db/custom.db>>".env.local"
 findstr /B /C:"NEXT_PUBLIC_GAME_SERVER_URL=" ".env.local" >nul 2>nul
 if errorlevel 1 echo NEXT_PUBLIC_GAME_SERVER_URL=>>".env.local"
 echo  [OK] .env.local present - required keys verified
-REM v92: a public domain with :3002 in NEXT_PUBLIC_GAME_SERVER_URL can never work
-REM (Cloudflare's proxy does not accept port 3002) - warn loudly; the game now
-REM auto-relays through the web server anyway.
+REM v94: a https://domain:3002 value can NEVER work (Cloudflare's edge does not
+REM listen on port 3002) - AUTO-DISABLE it and force a rebuild, because env
+REM values are baked into the client bundle at BUILD time. This poisoned value
+REM is the #1 cause of "offline / 0 crowd" reports.
+set "ENVFIXED=0"
 findstr /B /C:"NEXT_PUBLIC_GAME_SERVER_URL=" ".env.local" | findstr /C:":3002" >nul 2>nul
 if not errorlevel 1 (
-    echo  [!] WARNING: NEXT_PUBLIC_GAME_SERVER_URL points at port 3002 through a
-    echo      domain - that port can NEVER be reached through Cloudflare/domains.
-    echo      LEAVE IT EMPTY ^(NEXT_PUBLIC_GAME_SERVER_URL=^) - the game connects
-    echo      through the web server automatically. Fix .env.local + REBUILD.
+    echo  [!] NEXT_PUBLIC_GAME_SERVER_URL points at a domain with port 3002 -
+    echo      that port can NEVER be reached through Cloudflare/domains.
+    echo  [..] auto-disabling it ^(leave it EMPTY - the game auto-connects^) ...
+    powershell -NoProfile -Command "$c = Get-Content '.env.local'; $c = $c -replace '^NEXT_PUBLIC_GAME_SERVER_URL=.*:3002.*', '# NEXT_PUBLIC_GAME_SERVER_URL=  (auto-disabled by v94 launcher: a domain:3002 value can never work - leave it empty)'; Set-Content '.env.local' $c"
+    set "ENVFIXED=1"
+    echo  [OK] fixed .env.local - the build will be refreshed automatically.
 )
 :ENV_DONE
 REM Schema-relative DATABASE_URL for every child process (prisma + servers).
@@ -115,6 +119,11 @@ netsh advfirewall firewall add rule name="VoteChor Game 3002" dir=in action=allo
 
 REM ---------- 9) build (skipped when up to date) ----------
 set "NEEDBUILD=1"
+if "!ENVFIXED!"=="1" (
+    REM the poisoned env var was just removed - the baked bundle MUST be rebuilt
+    set "NEEDBUILD=1"
+    goto DOBUILD
+)
 if exist ".next\BUILD_ID" set "NEEDBUILD=0"
 if not exist ".build-commit" goto BUILD_ASK
 where git >nul 2>nul
@@ -169,7 +178,18 @@ if %GTRIES% GEQ 20 goto FAIL_GAME
 ping -n 3 127.0.0.1 >nul
 goto WAIT_GAME
 :GAME_UP
-echo  [OK] game server is up on port 3002 - bots and crowd will appear
+echo  [OK] game server is up on port 3002
+echo  [..] verifying the FULL multiplayer chain (browser path) ...
+del "%TEMP%\votechor-relay.json" 2>nul
+curl -s --max-time 4 "http://localhost:3000/gs/?EIO=4&transport=polling" >"%TEMP%\votechor-relay.json" 2>nul
+findstr /B /C:"0{" "%TEMP%\votechor-relay.json" >nul 2>nul
+if errorlevel 1 (
+    echo  [!] relay check through the web server failed - the browser will fall
+    echo      back to the direct :3002 path. If bots are still missing, look at
+    echo      the "VoteChor WEB" window and re-run this launcher.
+) else (
+    echo  [OK] multiplayer chain VERIFIED: browser =^> :3000 relay =^> game server
+)
 echo.
 start "" http://localhost:3000
 

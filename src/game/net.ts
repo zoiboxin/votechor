@@ -106,6 +106,8 @@ export type NetEvents = {
 export interface NetCandidate {
   url: string
   label: string
+  /** socket.io path override (defaults to GAME_SOCKET_PATH). */
+  path?: string
 }
 
 /**
@@ -140,7 +142,18 @@ export const GAME_SOCKET_PATH = '/gs/'
 function resolveCandidates(): NetCandidate[] {
   const out: NetCandidate[] = []
   const explicit = process.env.NEXT_PUBLIC_GAME_SERVER_URL?.trim()
-  if (explicit) out.push({ url: explicit, label: 'env' })
+  // v94: an explicit value with an https:// domain and a port number (e.g.
+  // https://votechor.app:3002 — baked into a build days ago) can NEVER work:
+  // Cloudflare's edge does not listen on 3002. Keep it as a LAST-resort
+  // candidate instead of burning a 7 s timeout before the good fallbacks.
+  // Plain-http values (LAN IPs, localhost) stay first — those are legitimate.
+  let tailCandidate: NetCandidate | null = null
+  if (explicit) {
+    const impossible = /^https:\/\/[^/]+:\d+(?:\/|$)/.test(explicit)
+    const cand = { url: explicit, label: impossible ? 'env-last-resort' : 'env' }
+    if (impossible) tailCandidate = cand
+    else out.push(cand)
+  }
   if (typeof window !== 'undefined') {
     const h = window.location.hostname
     const proto = window.location.protocol
@@ -156,8 +169,12 @@ function resolveCandidates(): NetCandidate[] {
     }
     // universal fallbacks, in order:
     if (isLoop || isLan) out.push({ url: origin, label: 'same-origin-relay' })
+    // v94 — same-origin Next.js API relay (polling): works in dev AND prod and
+    // in locked-down browsers where direct ports are unreachable.
+    out.push({ url: '', label: 'next-relay', path: '/api/gs-relay/' })
     out.push({ url: '/?XTransformPort=3002', label: 'gateway' })
   }
+  if (tailCandidate) out.push(tailCandidate)
   return out
 }
 
@@ -203,7 +220,7 @@ export class NetClient {
         const cand = candidates[idx++]
         try {
           const socket = io(cand.url, {
-            path: GAME_SOCKET_PATH,
+            path: cand.path ?? GAME_SOCKET_PATH,
             // polling FIRST, then upgrade to websocket: this connects through
             // ANY one-port relay/tunnel (Cloudflare Tunnel, server.js) even
             // when the WS hop is degraded, and silently upgrades to WS when

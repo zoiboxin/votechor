@@ -27,6 +27,14 @@ const httpServer = createServer()
 //    (votechor.app etc.): Cloudflare's proxy cannot expose port 3002 at all,
 //    so the web server on :3000 forwards /gs/* (HTTP polling + WebSocket
 //    upgrades) to 127.0.0.1:3002. See docs/PROTOCOL.md.
+// v94 — never die silently: log hard crashes for the launcher/diagnostics.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException:', err?.stack || err)
+})
+process.on('unhandledRejection', (err) => {
+  console.error('[fatal] unhandledRejection:', err instanceof Error ? err.stack : err)
+})
+
 const io = new Server(httpServer, {
   path: '/gs/',
   cors: {
@@ -41,13 +49,36 @@ const io = new Server(httpServer, {
 // engine.io captures the 'request' listeners at attach time, so we re-wrap them:
 // socket.io/engine.io traffic always carries the EIO query param; everything else is health.
 // Kept cheap: per-request work is O(#seasons), no history buffers are iterated.
+//
+// v94 — LEGACY-PATH COMPATIBILITY: the socket.io path moved '/' → '/gs/' in v92.
+// Any client bundle built before v92 (or a stale browser tab that missed the
+// update banner) still speaks the OLD path '/'. To make that mismatch IMPOSSIBLE
+// to fail with, both the polling and the websocket handshakes arriving at '/'
+// (any /?EIO=... URL) are transparently rewritten to '/gs/...' before engine.io
+// sees them. Health checks (GET / with NO EIO query) are untouched.
 {
+  // v94 — idempotent under bun --hot: a hot reload re-executes this module, so
+  // guard the re-wrap with a global flag (double-wrapping would capture our own
+  // wrappers and corrupt engine.io's listener chain).
+  const g = globalThis as unknown as { __vcGsPathWrapInstalled?: boolean }
+  if (g.__vcGsPathWrapInstalled) {
+    // already wrapped — skip
+  } else {
+  g.__vcGsPathWrapInstalled = true
+  const rewriteLegacyPath = (rawUrl: string): string => {
+    if ((rawUrl === '/' || rawUrl.startsWith('/?')) && rawUrl.includes('EIO=')) {
+      return '/gs/' + rawUrl.slice(1) // '/?EIO=4&...' → '/gs/?EIO=4&...'
+    }
+    return rawUrl
+  }
   const engineListeners = httpServer.listeners('request').slice(0)
   httpServer.removeAllListeners('request')
   httpServer.on('request', (req, res) => {
-    const url = req.url ?? '/'
+    let url = req.url ?? '/'
     const isEngineIo = url.includes('EIO=')
-    if (!isEngineIo) {
+    if (isEngineIo) {
+      req.url = rewriteLegacyPath(url)
+    } else {
       const seasons = seasonManager.list().map((s) => ({ id: s.id, name: s.name, humans: s.humans, bots: s.bots }))
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
@@ -60,7 +91,7 @@ const io = new Server(httpServer, {
         },
         broadcast: {
           ticksPerSec: Math.round(broadcastStats.ticksPerSec * 10) / 10,
-          avgEntriesPerTick: Math.round(broadcastStats.avgEntriesPerTick * 10) / 10,
+          avgEntriesPerTick: Math.round(broadcastStats.avgEntriesPerTick * 100) / 100,
           avgTickMs: Math.round(broadcastStats.avgTickMs * 100) / 100,
           estBytesPerSec: broadcastStats.estBytesPerSec, // ESTIMATE: entries × ~90 B
         },
@@ -69,6 +100,14 @@ const io = new Server(httpServer, {
     }
     for (const l of engineListeners) (l as (r: unknown, s: unknown) => void)(req, res)
   })
+  // v94 — same rewrite for websocket upgrades (engine.io captures 'upgrade' too).
+  const upgradeListeners = httpServer.listeners('upgrade').slice(0)
+  httpServer.removeAllListeners('upgrade')
+  httpServer.on('upgrade', (req, sock, head) => {
+    req.url = rewriteLegacyPath(req.url ?? '/')
+    for (const l of upgradeListeners) (l as (r: unknown, s: unknown, h: Buffer) => void)(req, sock, head)
+  })
+  } // v94 — end idempotent wrap guard
 }
 
 // ---------- room registry ----------

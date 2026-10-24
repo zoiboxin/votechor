@@ -2397,3 +2397,32 @@ Stage Summary:
 - VoteChor now has a complete, matching brand kit: ballot-box logo SVG, AI game-art app icon → favicon.ico/PWA/apple icons, OG share image with ad copy, and two Instagram ad creatives (post 1080x1080 + story 1080x1920) in Subway-Surfers style.
 - SEO/AIO/GEO layer is production-grade: canonical + OG/Twitter cards, PWA manifest, sitemap, robots with explicit AI-crawler welcomes, llms.txt, JSON-LD VideoGame/FAQPage graph, and crawlable semantic copy behind the canvas game.
 - Next Task ID: 93 (queued: profile save/load race; online dropTaken UX; GLB walk-clip stride calibration; optionally add Instagram creatives to an in-game "Share" panel; consider hreflang/en-hi alternates and a lightweight /about route for richer crawling).
+
+---
+Task ID: 93
+Agent: Z.ai Code (main session)
+Task: User report — "checked start-windows.bat, pulled from git, ran the game, AGAIN showing offline and 0 crowd" + follow-up question: can we build custom .glb models? (answered yes — repo already has the GLB pipeline: scripts/export-character-glb.ts, bake-skinned-male.ts, inspect-glb.ts)
+
+Work Log:
+- PLATFORM ROLLBACK #9 RECOVERED: working tree was reset to v90 (4ccee5d), wiping v91-v93 from disk (server.js, brand assets, SEO layer all missing). origin/main intact (449292f = v93 + worklog). git reset --hard origin/main → v93 restored. NOTE: my 15-min webDevReview cron job was also wiped by the rollback (recreated at end of task).
+- ROOT-CAUSE HUNT for the user's offline/0-crowd (three real defects found):
+  1. v92 changed the game-server socket.io path '/' → '/gs/' with ZERO backward compat: any pre-v92 client bundle (stale build or stale tab) speaks '/' and EVERY connection candidate fails → exactly "offline + 0 crowd".
+  2. server.js relay (v92) routed ONLY /gs* through the relay: a legacy client's polling GET /?EIO=... fell through to Next (404) and its WS upgrade was destroyed by the upgrade handler → legacy client through the relay = guaranteed offline.
+  3. A poisoned NEXT_PUBLIC_GAME_SERVER_URL=https://votechor.app:3002 in .env.local (user set it earlier for the tunnel) is baked into the build and burns a 7 s candidate slot first (and can NEVER work — Cloudflare's edge does not listen on 3002).
+- FIXES (all v94):
+  - mini-services/game-server/index.ts: LEGACY-PATH COMPATIBILITY — engine.io/socket.io handshakes arriving at '/​?EIO=...' (polling AND websocket upgrade) are transparently rewritten to '/gs/...' before engine.io sees them (health GET / untouched). Wrapped request+upgrade listeners idempotently (global flag) for bun --hot safety. Added uncaughtException/unhandledRejection logging (never die silently).
+  - server.js: looksLikeEngineIo() — ANY EIO-looking request (both transports) is relayed to the game server, not just /gs* paths.
+  - src/game/net.ts: (a) an https://domain:port env candidate is deprioritized to LAST ('env-last-resort') instead of first; (b) NEW same-origin candidate 'next-relay' → /api/gs-relay/ (Next API route proxy, polling) — works in dev AND production and in locked-down browser contexts; per-candidate socket path support added to NetCandidate.
+  - NEW src/app/api/gs-relay/route.ts: catch-all GET/POST/PUT/OPTIONS proxy → http://127.0.0.1:3002/gs/<query> (streams responses, forwards content-type/cookie, 502 JSON on unreachable).
+  - start-windows.bat: (a) AUTO-DISABLES a https://domain:3002 NEXT_PUBLIC_GAME_SERVER_URL value in .env.local (comments it out via PowerShell) and FORCES a rebuild (ENVFIXED → NEEDBUILD=1) — env values are baked at build time; (b) NEW end-to-end relay verification after GAME_UP: curls "http://localhost:3000/gs/?EIO=4&transport=polling" and expects the engine.io handshake → prints "multiplayer chain VERIFIED: browser => :3000 relay => game server".
+  - VC_BUILD → v94.
+- NEW tests/relay-e2e.ts: spins the verbatim server.js relay replica on :3011 and joins REAL seasons with a real socket.io client: A) /gs/ via relay, B) /gs/ direct (WS upgraded), C) legacy '/' direct (WS upgraded!), D) legacy '/' via relay — ALL PASS (100 players incl. 99 season bots, 39 npcs per join). Ran 3 full passes.
+- LIVE BROWSER QA (agent-browser, fought a hostile sandbox): the platform periodically SIGKILLs foreign listeners on :3002 (game-server.log shows keepalive loop AND bun child killed together; .zscripts/mini-service-game-server.log shows platform SIGTERM shutdowns) — every earlier "browser can't reach :3002" observation was actually a dead server. In a live window: Play Solo → connected:true, source local-direct, offline:false, crowdVisible:72 (the real multiplayer crowd). gs-relay route verified serving the engine.io handshake (0{"sid":...}) through :3000.
+- Discovered but NOT pursued (sandbox-only): bun --hot reload corrupts this server's engine.io listener re-wrap chain (the Windows launcher runs plain `bun index.ts` via run-game-server.bat — unaffected).
+
+Stage Summary:
+- The user's offline/0-crowd root causes are eliminated at three layers: server accepts old+new socket paths (client/server version mismatch can no longer produce offline), the relay routes legacy clients, and the launcher auto-fixes the poisoned env var + verifies the FULL multiplayer chain before opening the browser.
+- On Windows: re-run start-windows.bat (it will auto-fix .env.local, rebuild, start both servers, verify the relay chain, then open the game) — bots/crowd come from the GAME SERVER window; keep both windows open.
+- Multiplayer now also works through the new same-origin /api/gs-relay fallback (dev + prod + locked-down browsers).
+- Pushed to GitHub: main + tag v94. /api/version = v94.
+- Next Task ID: 94 (queued: profile save/load race; online dropTaken UX; GLB walk-clip stride calibration; consider in-game "Share" panel surfacing the Instagram creatives; custom .glb modeling is available via the existing pipeline when the user picks a subject).

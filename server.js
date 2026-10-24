@@ -40,6 +40,16 @@ function isGamePath(url) {
   return u === '/gs' || u.startsWith('/gs/') || u.startsWith('/gs?')
 }
 
+// v94 — LEGACY CLIENTS: bundles built before v92 speak socket.io at '/' (the
+// old path), e.g. GET /?EIO=4&transport=polling — the game server rewrites
+// those to /gs/ on its side, so route ANY engine.io-looking request to the
+// relay too. Without this, a stale client bundle gets Next.js 404s (polling)
+// and destroyed sockets (WS) → "offline, 0 crowd" even though both servers
+// are perfectly healthy.
+function looksLikeEngineIo(url) {
+  return (url || '').includes('EIO=')
+}
+
 // ---------- HTTP relay (socket.io long-polling + handshakes) ----------
 function relayHttp(req, res) {
   const options = {
@@ -98,11 +108,11 @@ app.prepare().then(() => {
   // Next's own upgrade handler (dev HMR websocket); guarded for future API changes.
   const handleUpgrade = typeof app.getUpgradeHandler === 'function' ? app.getUpgradeHandler() : null
   const server = http.createServer((req, res) => {
-    if (isGamePath(req.url)) return relayHttp(req, res)
+    if (isGamePath(req.url) || looksLikeEngineIo(req.url)) return relayHttp(req, res)
     return handle(req, res)
   })
   server.on('upgrade', (req, sock, head) => {
-    if (isGamePath(req.url)) return relayWs(req, sock, head)
+    if (isGamePath(req.url) || looksLikeEngineIo(req.url)) return relayWs(req, sock, head)
     if (handleUpgrade) return handleUpgrade(req, sock, head)
     try { sock.destroy() } catch {}
   })

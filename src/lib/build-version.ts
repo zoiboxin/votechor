@@ -15,4 +15,4 @@
  * Bump VC_BUILD every round that ships client changes. A user screenshot that
  * lacks the current tag instantly identifies a stale bundle.
  */
-export const VC_BUILD = 'v93'
+export const VC_BUILD = 'v94'
