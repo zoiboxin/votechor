@@ -17,6 +17,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js'
+import { fetchAssetBuffer } from '@/lib/asset-cache'
 
 export interface GLBAsset {
   url: string
@@ -67,58 +68,80 @@ export class GLBAssetManager {
       // so a generous 120s ceiling + boot-time preload (game.bootUnsafe) keeps a
       // slow-but-working load alive while a dead fetch still resolves null.
       const timeout = setTimeout(() => done(null, 'timeout after 120s'), 120000)
-      try {
-        this.loader.load(
-          url,
-          (gltf) => {
-            clearTimeout(timeout)
-            try {
-              const scene = gltf.scene as THREE.Group
-              if (!scene) { done(null, 'empty scene'); return }
-              // normalize the graph: shadows off (software GPU), sane culling
-              let meshes = 0
-              let skinned = false
-              scene.traverse((o) => {
-                const m = o as THREE.Mesh
-                if (m.isMesh) {
-                  meshes++
-                  m.castShadow = false
-                  m.receiveShadow = false
-                  if ((o as THREE.SkinnedMesh).isSkinnedMesh) {
-                    // skeleton poses move vertices far outside the bind-pose
-                    // bounding box — stock culling would pop whole limbs off-screen
-                    skinned = true
-                    m.frustumCulled = false
-                  } else {
-                    m.frustumCulled = true
-                  }
-                  // material arrays stay as-is (three handles multi-primitive);
-                  // just guarantee they are valid instances
-                  const mats = Array.isArray(m.material) ? m.material : [m.material]
-                  for (const mat of mats) {
-                    if (!mat || !(mat as THREE.Material).isMaterial) {
-                      m.material = new THREE.MeshStandardMaterial({ color: 0xcccccc })
-                    }
-                  }
-                }
-              })
-              if (meshes === 0) { done(null, 'no meshes'); return }
-              const anims = Array.isArray(gltf.animations) ? gltf.animations : []
-              done({ url, scene, animations: anims, bytes: 0, skinned })
-            } catch (e) {
-              done(null, `normalize failed: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          },
-          undefined,
-          (err) => {
-            clearTimeout(timeout)
-            done(null, `loader error: ${err instanceof Error ? err.message : String(err)}`)
-          },
-        )
-      } catch (e) {
+      const onGltf = (gltf: { scene?: THREE.Object3D; animations?: THREE.AnimationClip[] }) => {
         clearTimeout(timeout)
-        done(null, `load threw: ${e instanceof Error ? e.message : String(e)}`)
+        try {
+          const scene = gltf?.scene as THREE.Group | undefined
+          if (!scene) { done(null, 'empty scene'); return }
+          // normalize the graph: shadows off (software GPU), sane culling
+          let meshes = 0
+          let skinned = false
+          scene.traverse((o) => {
+            const m = o as THREE.Mesh
+            if (m.isMesh) {
+              meshes++
+              m.castShadow = false
+              m.receiveShadow = false
+              if ((o as THREE.SkinnedMesh).isSkinnedMesh) {
+                // skeleton poses move vertices far outside the bind-pose
+                // bounding box — stock culling would pop whole limbs off-screen
+                skinned = true
+                m.frustumCulled = false
+              } else {
+                m.frustumCulled = true
+              }
+              // material arrays stay as-is (three handles multi-primitive);
+              // just guarantee they are valid instances
+              const mats = Array.isArray(m.material) ? m.material : [m.material]
+              for (const mat of mats) {
+                if (!mat || !(mat as THREE.Material).isMaterial) {
+                  m.material = new THREE.MeshStandardMaterial({ color: 0xcccccc })
+                }
+              }
+            }
+          })
+          if (meshes === 0) { done(null, 'no meshes'); return }
+          const anims = Array.isArray(gltf.animations) ? gltf.animations : []
+          done({ url, scene, animations: anims, bytes: 0, skinned })
+        } catch (e) {
+          done(null, `normalize failed: ${e instanceof Error ? e.message : String(e)}`)
+        }
       }
+      const onErr = (err: unknown) => {
+        clearTimeout(timeout)
+        done(null, `loader error: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      // task 97: local-cache fast path — once the user consents via the banner,
+      // models stream from the browser's Cache API (instant boots, zero re-fetch).
+      // Any miss/failure falls back to the classic loader path unchanged.
+      void fetchAssetBuffer(url)
+        .then((buf) => {
+          if (settled) return
+          if (buf) {
+            try {
+              this.loader.parse(buf, '', onGltf, onErr)
+              return
+            } catch {
+              // parse threw synchronously (corrupt cache entry) — fall through
+              // to the classic loader with the timeout still armed
+            }
+          }
+          try {
+            this.loader.load(url, onGltf, undefined, onErr)
+          } catch (e) {
+            clearTimeout(timeout)
+            done(null, `load threw: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        })
+        .catch(() => {
+          if (settled) return
+          try {
+            this.loader.load(url, onGltf, undefined, onErr)
+          } catch (e) {
+            clearTimeout(timeout)
+            done(null, `load threw: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        })
     })
   }
 

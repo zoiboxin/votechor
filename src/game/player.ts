@@ -6,6 +6,7 @@ import { policeUniformColors } from '../lib/cosmetics'
 import { pickLoco, mapToAnimName } from './anim'
 import type { GLBAnimDriver, LocoState } from './anim'
 import type { GLBInstance } from './glb'
+import { SecondaryMotion } from './secondary-motion'
 import type { AnimName } from './shared/types'
 import type { PhysicsWorld } from './physics'
 
@@ -52,7 +53,7 @@ export class PlayerController {
   /** Numeric-glitch sentinel fired when pos/vel stopped being finite (see applyInput). */
   onNanRecover: ((reason?: 'nan' | 'bounds') => void) | null = null
   // ---- High-Fi GLB rig (optional — procedural rig stays as the fallback) ----
-  glb: { inst: GLBInstance; driver: GLBAnimDriver } | null = null
+  glb: { inst: GLBInstance; driver: GLBAnimDriver; sec: SecondaryMotion | null } | null = null
   /** Last resolved animation state, published to the network (works for BOTH backends). */
   netAnim: AnimName = 'idle'
 
@@ -384,8 +385,8 @@ export class PlayerController {
   }
 
   /** Attach the High-Fi GLB rig (hides the procedural body; both stay positioned). */
-  attachGlb(inst: GLBInstance, driver: GLBAnimDriver) {
-    this.glb = { inst, driver }
+  attachGlb(inst: GLBInstance, driver: GLBAnimDriver, sec: SecondaryMotion | null = null) {
+    this.glb = { inst, driver, sec }
     this.glb.driver.snap('idle')
     this.rig.group.visible = false
     inst.group.visible = true
@@ -394,6 +395,7 @@ export class PlayerController {
   /** Remove the GLB rig and fall back to the procedural body. */
   detachGlb() {
     if (!this.glb) return
+    this.glb.sec?.dispose()
     this.glb.driver.dispose()
     this.glb = null
     this.rig.group.visible = true
@@ -434,6 +436,8 @@ export class PlayerController {
       this.glb.driver.update(dt)
       this.glb.inst.group.position.copy(this.pos)
       this.glb.inst.group.rotation.y = this.ry
+      // physics-flavored overlay (lean/bank/squash/gaze) on the keyed pose
+      this.glb.sec?.update(dt, { hSpeed, vy: this.vel.y, grounded: this.grounded })
     }
     // procedural backend always updates (it holds the name tag + is the fallback)
     this.rig.update(dt, this.netAnim, hSpeed)

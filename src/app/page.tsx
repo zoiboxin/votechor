@@ -1,5 +1,6 @@
 'use client'
 import dynamic from 'next/dynamic'
+import CookieBanner from '@/components/game/CookieBanner'
 
 const GameRoot = dynamic(() => import('@/components/game/GameRoot'), {
   ssr: false,
@@ -180,6 +181,7 @@ export default function Page() {
   return (
     <>
       <GameRoot />
+      <CookieBanner />
       <SeoStaticContent />
     </>
   )

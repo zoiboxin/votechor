@@ -38,6 +38,7 @@ import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
 import { GLBAssetManager, type GLBInstance } from './glb'
 import { GLBAnimDriver } from './anim'
+import { SecondaryMotion } from './secondary-motion'
 import type { LocoState } from './anim'
 import { resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE, type BodyModel } from './avatar-look'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
@@ -58,7 +59,7 @@ const SCARE_COOLDOWN_MS = 12000
 interface RemoteEntry {
   rig: import('./character').CharacterRig | null
   /** High-Fi GLB model instance (replaces the procedural body; rig keeps the name tag). */
-  glb: { inst: GLBInstance; driver: GLBAnimDriver; loading: boolean } | null
+  glb: { inst: GLBInstance; driver: GLBAnimDriver; sec: import('./secondary-motion').SecondaryMotion | null; loading: boolean } | null
   target: { x: number; y: number; z: number; ry: number }
   anim: AnimName
   name: string
@@ -1290,7 +1291,7 @@ export class Game {
     if (r.glb || !r.rig) return
     const model: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
     if (model === 'classic') return // this protester marches in the procedural rig
-    r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, loading: true }
+    r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, sec: null, loading: true }
     const look = resolveAvatarLook(r.cosmetics, r.archetype, r.role ?? 'protector')
     const url = resolveGlbUrl(model, look.gender)
     if (!url) { r.glb = null; return }
@@ -1308,8 +1309,9 @@ export class Game {
     inst.group.rotation.y = r.target.ry
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
+    const sec = new SecondaryMotion(inst.group)
     r.rig.setBodyVisible(false) // name tag + alert sprites stay
-    r.glb = { inst, driver, loading: false }
+    r.glb = { inst, driver, sec, loading: false }
     // catch the GLB up to wherever interpolation is right now
     inst.group.position.copy(r.rig.group.position)
     inst.group.rotation.y = r.rig.group.rotation.y
@@ -1319,7 +1321,7 @@ export class Game {
   /** Dispose one remote entry's GLB instance (scene removal + GPU teardown). */
   private detachRemoteGlb(r: RemoteEntry) {
     if (!r.glb) return
-    if (r.glb.inst) { this.engine.scene.remove(r.glb.inst.group); this.glbMgr.disposeInstance(r.glb.inst) }
+    if (r.glb.inst) { r.glb.sec?.dispose(); this.engine.scene.remove(r.glb.inst.group); this.glbMgr.disposeInstance(r.glb.inst) }
     r.glb = null
     r.rig?.setBodyVisible(true)
   }
@@ -1353,7 +1355,8 @@ export class Game {
     inst.group.visible = true
     this.engine.scene.add(inst.group)
     const driver = new GLBAnimDriver(inst.mixer, inst.clips)
-    p.attachGlb(inst, driver)
+    const sec = new SecondaryMotion(inst.group)
+    p.attachGlb(inst, driver, sec)
     this.hiFiUrl = url
   }
 
@@ -3068,6 +3071,7 @@ export class Game {
         r.glb.driver.update(animDt)
         r.glb.inst.group.position.copy(pos)
         r.glb.inst.group.rotation.y = r.rig.group.rotation.y
+        r.glb.sec?.update(animDt, { hSpeed, vy: 0, grounded: true })
       }
     }
 
