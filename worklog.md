@@ -2426,3 +2426,29 @@ Stage Summary:
 - Multiplayer now also works through the new same-origin /api/gs-relay fallback (dev + prod + locked-down browsers).
 - Pushed to GitHub: main + tag v94. /api/version = v94.
 - Next Task ID: 94 (queued: profile save/load race; online dropTaken UX; GLB walk-clip stride calibration; consider in-game "Share" panel surfacing the Instagram creatives; custom .glb modeling is available via the existing pipeline when the user picks a subject).
+
+---
+Task ID: 94
+Agent: Z.ai Code (main session)
+Task: User request — "check the public folder brand folder _gen_story.png can you build similar 3d character with more realistic detailing?" (answer to the earlier "can you build a custom 3d .glb?" question, with a real deliverable)
+
+Work Log:
+- Answer: YES — custom .glb files are buildable in this repo. The whole cast already comes from the in-repo pipeline (scripts/export-character-glb.ts → three.js + GLTFExporter under bun, node-TRS rig + 13 animation clips).
+- NEW scripts/export-kid-character.ts → public/models/votechor-kid.glb (293.7 KB): the runner kid from public/brand/_gen-story.png (Subway-Surfers-style) with far richer detailing than the base cast — 65 named meshes / 73 nodes / 17 PBR materials:
+  - red cap (dome + dark rim + front brim + top button + white emblem) tilted back like the artwork
+  - layered cartoon face: white sclera + dark pupils + specular glints, angled brows, nose, grin with framed teeth strip, ears, neck filler
+  - dark hair: back volume (no mask-hack — pushed behind the face plane), 5 fringe tufts under the cap, side + nape tufts
+  - brand-amber tee (#f2a541) with shoulder cap, hem ring, collar, chest badge; short sleeve cuffs
+  - navy backpack (body + top roll + zipper + SHORT front straps hugging the tee)
+  - blue jeans with lighter rolled cuffs; red sneakers with white soles, toe caps, 3 laces each, heel tabs
+- Rig contract kept 100% game-compatible: named pivots Hips/Torso/Head/ArmL/ArmR/LegL/LegR; 13 clips (idle walk run jump fall land slide hit detained recover celebrate throw heal); verified via scripts/inspect-glb.ts + direct JSON check that all animation channels target the contract nodes.
+- VISUAL QA LOOP (three heads needed): built a temp three.js+GLTFLoader bundle (bun build) + static preview page, screenshotted 6 views via agent-browser → public/brand/kid-preview-{0..5}.png (hero 3/4, face closeup, backpack, run stride, celebrate, sneaker low angle). Two fix rounds:
+  1. v1 face was dead — sclera spheres were INSIDE the head volume (z 0.78R vs surface ~0.94R), cap brim eclipsed everything, hair-mask sphere hack left jagged dark blotches, backpack straps stabbed through the chest.
+  2. v2 fixes: face features placed proud of the head ellipsoid (surface-z math), eyes reduced from googly 0.05R bulge to 0.04R, headR 0.185→0.162, cap grouped + tilted back -0.12 rad, hairBack pushed behind face plane, straps shortened to upper chest, mouth/teeth moved to the surface. v3 verified clean in all views.
+- Note: GLB characters remain platform-disabled (GLB_CHARACTERS_ENABLED=false in src/lib/game-store.ts, task 82) — the kid is a ready asset; wiring it in = flip the flag + add a model-selection path (offered, not done unprompted).
+- VC_BUILD → v95. Lint clean. Temp preview artifacts (public/tmp-glbview/, scripts/tmp-glbview-entry.ts) deleted; the 6 preview PNGs + GLB kept.
+
+Stage Summary:
+- VoteChor now has a 5th custom character asset: /models/votechor-kid.glb — the brand-mascot runner kid, fully rigged + 13 clips + PBR materials, verified visually and structurally. Preview renders in public/brand/kid-preview-0..5.png.
+- Custom .glb capability is now proven end-to-end (export script → inspect → browser-render QA): any future character/outfit can be produced the same way.
+- Next Task ID: 95 (queued: offer wiring votechor-kid.glb into gameplay via GLB_CHARACTERS_ENABLED + a look/model picker; profile save/load race; online dropTaken UX; GLB walk-clip stride calibration; in-game Share panel with IG creatives).
