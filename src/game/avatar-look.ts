@@ -178,6 +178,13 @@ const RIGGED_MAP: Record<string, keyof AvatarPalette> = {
   HumanHead: 'skin', HumanNeck: 'skin', ForearmL: 'skin', ForearmR: 'skin',
   HumanHandL: 'skin', HumanHandR: 'skin', CalfL: 'skin', CalfR: 'skin',
   HumanShoeL: 'shoes', HumanShoeR: 'shoes', HumanSoleL: 'shoes', HumanSoleR: 'shoes',
+  AnkleSockL: 'skin', AnkleSockR: 'skin',
+  // shoe details (toe-box half rides the Toe bone) + trapezius slope
+  ShoeToeL: 'shoes', ShoeToeR: 'shoes', SoleToeL: 'shoes', SoleToeR: 'shoes',
+  ShoeToeCapL: 'shoes', ShoeToeCapR: 'shoes',
+  ShoeCollarL: 'shoes', ShoeCollarR: 'shoes', ShoeTongueL: 'shoes', ShoeTongueR: 'shoes',
+  ShoeLaceL: 'shoes', ShoeLaceR: 'shoes', ShoeHeelTabL: 'shoes', ShoeHeelTabR: 'shoes',
+  TrapeziusL: 'shirt', TrapeziusR: 'shirt',
 }
 
 // Mesh names of the TEXTURED family → palette key, with the MEASURED baked

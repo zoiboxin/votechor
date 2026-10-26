@@ -16,7 +16,7 @@ const FILES: [string, number][] = [
 ]
 
 const REQUIRED_CLIPS = ['idle', 'walk', 'run', 'jump', 'doubleJump', 'fall', 'land', 'slide', 'hit', 'detained', 'recover', 'celebrate', 'throw', 'heal']
-const REQUIRED_BONES = ['Hips', 'Torso', 'Chest', 'Neck', 'Head', 'ClavicleL', 'ClavicleR', 'ArmL', 'ArmR', 'ElbowL', 'ElbowR', 'HandL', 'HandR', 'LegL', 'LegR', 'KneeL', 'KneeR', 'FootL', 'FootR']
+const REQUIRED_BONES = ['Hips', 'Torso', 'Chest', 'Neck', 'Head', 'ClavicleL', 'ClavicleR', 'ArmL', 'ArmR', 'ElbowL', 'ElbowR', 'HandL', 'HandR', 'LegL', 'LegR', 'KneeL', 'KneeR', 'FootL', 'FootR', 'ToeL', 'ToeR']
 const REQUIRED_FACIAL = ['LidTopL', 'LidTopR', 'BrowL', 'BrowR', 'Jaw', 'PupilL', 'PupilR']
 
 interface J {
@@ -164,6 +164,8 @@ for (const [file, expectedH] of FILES) {
   const walkTargets = new Set((walkAnim?.channels ?? []).map((c) => nodeName.get(c.target.node)))
   if (!walkTargets.has('FootL') || !walkTargets.has('FootR')) fail('walk clip does not drive FootL/FootR (no foot-roll)')
   else pass('walk clip drives foot-roll (FootL/FootR tracks)')
+  if (!walkTargets.has('ToeL') || !walkTargets.has('ToeR')) fail('walk clip does not drive ToeL/ToeR (no MTP break)')
+  else pass('walk clip drives toe-break (ToeL/ToeR tracks)')
 
   // ---- materials named ----
   const unnamed = (j.materials ?? []).filter((m) => !m.name).length

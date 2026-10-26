@@ -95,7 +95,7 @@ interface Prop {
 const MALE: Prop = {
   hipY: 0.98, thighLen: 0.46, calfLen: 0.42, footH: 0.10,
   torsoTop: 0.54, spineY: 0.10, chestY: 0.28,
-  shoulderY: 1.547, shoulderX: 0.215, hipX: 0.092,
+  shoulderY: 1.547, shoulderX: 0.195, hipX: 0.092,
   upperLen: 0.307, foreLen: 0.25, handLen: 0.11,
   headR: 0.105, headCY: 0.235, neckLen: 0.06,
   rings: [
@@ -105,7 +105,8 @@ const MALE: Prop = {
     { y: 0.22, rx: 0.128, rz: 0.094 },
     { y: 0.32, rx: 0.146, rz: 0.106 },
     { y: 0.40, rx: 0.163, rz: 0.114 },
-    { y: 0.47, rx: 0.146, rz: 0.102 },
+    { y: 0.47, rx: 0.178, rz: 0.116 },
+    { y: 0.505, rx: 0.165, rz: 0.102 },
     { y: 0.53, rx: 0.098, rz: 0.072 },
   ],
   pelvis: { rx: 0.158, rz: 0.112, h: 0.13 },
@@ -126,8 +127,9 @@ const FEMALE: Prop = {
     { y: 0.20, rx: 0.112, rz: 0.082 },
     { y: 0.28, rx: 0.142, rz: 0.104, bust: 0.16 },
     { y: 0.34, rx: 0.138, rz: 0.100, bust: 0.07 },
-    { y: 0.41, rx: 0.112, rz: 0.078 },
-    { y: 0.46, rx: 0.062, rz: 0.048 },
+    { y: 0.41, rx: 0.128, rz: 0.086 },
+    { y: 0.438, rx: 0.116, rz: 0.078 },
+    { y: 0.46, rx: 0.072, rz: 0.054 },
   ],
   pelvis: { rx: 0.155, rz: 0.108, h: 0.12 },
   armR1: 0.041, armR2: 0.035, armR3: 0.025,
@@ -145,8 +147,9 @@ const CHILD: Prop = {
     { y: 0.06, rx: 0.136, rz: 0.098 },
     { y: 0.13, rx: 0.142, rz: 0.100 },
     { y: 0.20, rx: 0.136, rz: 0.096 },
-    { y: 0.27, rx: 0.118, rz: 0.084 },
-    { y: 0.32, rx: 0.064, rz: 0.05 },
+    { y: 0.27, rx: 0.134, rz: 0.094 },
+    { y: 0.30, rx: 0.122, rz: 0.086 },
+    { y: 0.32, rx: 0.072, rz: 0.056 },
   ],
   pelvis: { rx: 0.134, rz: 0.098, h: 0.10 },
   armR1: 0.040, armR2: 0.035, armR3: 0.026,
@@ -339,6 +342,8 @@ function buildSkeleton(p: Prop): SkeletonDef {
     add(`Leg${L}`, hips, new THREE.Vector3(s * p.hipX, p.hipY - 0.02, 0))
     add(`Knee${L}`, bones[bones.length - 1], new THREE.Vector3(s * (p.hipX + 0.004), p.hipY - 0.02 - p.thighLen, 0))
     add(`Foot${L}`, bones[bones.length - 1], new THREE.Vector3(s * (p.hipX + 0.004), p.footH, 0.015))
+    // toe (ball-of-foot) joint — enables the MTP break during push-off
+    add(`Toe${L}`, bones[bones.length - 1], new THREE.Vector3(s * (p.hipX + 0.004), p.footH - p.footH * 0.32, 0.015 + p.footH * 1.05))
   }
   return { bones, index: Object.fromEntries(bones.map((b, i) => [b.name, i])), world }
 }
@@ -686,6 +691,9 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
   const collar = mesh(collarGeo, M.shirtDark, 'Collar')
   rigid.push(collar)
 
+  // ---- trapezius wedges REMOVED (QA r2: corners peeked out as dark flaps).
+  // The widened roof rings + sunk deltoid dome cover the notch. ----
+
   // ---- arms (per side) ----
   for (const s of [-1, 1] as const) {
     const L = s < 0 ? 'L' : 'R'
@@ -694,8 +702,11 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
     const wr = skel.world[`Hand${L}`]
     const midBicep = sh.clone().lerp(el, 0.52)
     const sleeveEnd = shortSleeves ? midBicep : el
-    // sleeve section (shirt)
-    const sleeveGeo2 = armLoft(sh, sleeveEnd, p.armR1 * 1.14, p.armR1 * 1.04, 12, 5)
+    // start the sleeve BELOW the joint so its top ring tucks under the deltoid
+    // dome (a full-radius ring AT the joint pokes 0.06 above it — QA r3/r4)
+    const shLow = sh.clone(); shLow.y -= p.armR1 * 1.26 * 0.85
+    // sleeve section (shirt) — top radius matches the deltoid capsule
+    const sleeveGeo2 = armLoft(shLow, sleeveEnd, p.armR1 * 1.26, p.armR1 * 1.04, 12, 5)
     if (shortSleeves) {
       skinnify(sleeveGeo2, segs, skel.index, 4, [`Clavicle${L}`, `Arm${L}`])
       const sleeve = new THREE.SkinnedMesh(sleeveGeo2, M.shirt)
@@ -709,17 +720,20 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
       skinned.push(fore)
     } else {
       // adult: full arm in the shirt material, spans the elbow
-      const armGeo = armLoft(sh, wr, p.armR1 * 1.1, p.armR3, 14, 10)
+      const armGeo = armLoft(shLow, wr, p.armR1 * 1.24, p.armR3, 14, 10)
       skinnify(armGeo, segs, skel.index, 4, [`Clavicle${L}`, `Arm${L}`, `Elbow${L}`, `Hand${L}`])
       const arm = new THREE.SkinnedMesh(armGeo, M.shirt)
       arm.name = `HumanArm${L}`
       skinned.push(arm)
     }
-    // deltoid cap (rigid child of Arm bone) — rounds the shoulder joint
-    const delt = new THREE.Mesh(new THREE.SphereGeometry(p.armR1 * 1.24, 12, 8), M.shirt)
-    delt.name = `Deltoid${L}`
-    delt.scale.set(1, 0.88, 0.96)
-    delt.position.y = 0.01
+    // deltoid — teardrop capsule along the upper-arm axis (NOT a ball on a
+    // stick): dome cap at the joint, radius matches the sleeve top so the two
+    // read as one continuous form
+    const deltCyl = Math.max(0.012, p.armR1 * 0.3)
+    const delt = mesh(new THREE.CapsuleGeometry(p.armR1 * 1.26, deltCyl, 4, 12), M.shirt, `Deltoid${L}`)
+    delt.scale.set(1.15, 1, 0.95)
+    delt.rotation.z = s * 0.1 // rest splay so the capsule axis matches the sleeve
+    delt.position.y = 0.012 - (deltCyl / 2 + p.armR1 * 1.26) // dome top covers the sleeve end-cap (cap sits at joint+0.004)
     rigid.push(delt)
     // hand (rigid child of Hand bone): palm loft + 4 curled fingers + thumb
     const handGeo = buildHandGeo(p, s)
@@ -747,7 +761,8 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
       const thigh = new THREE.SkinnedMesh(thighGeo, M.pants)
       thigh.name = `Shorts${L}`
       skinned.push(thigh)
-      const calfGeo = armLoft(kn, an, p.legR2 * 0.96, p.legR3, 12, 7)
+      const calfEnd = an.clone() // bare ankle continues via the AnkleSock
+      const calfGeo = armLoft(kn, calfEnd, p.legR2 * 0.96, p.legR3, 12, 7)
       skinnify(calfGeo, segs, skel.index, 4, [`Leg${L}`, `Knee${L}`, `Foot${L}`])
       const calf = new THREE.SkinnedMesh(calfGeo, M.skin)
       calf.name = `Calf${L}`
@@ -758,18 +773,20 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
       sock.position.y = -(an.y - kn.y) + 0.055
       rigid.push(sock)
     } else {
-      // full pant leg spans the knee — one smooth deforming tube
-      const legGeo = armLoft(hp, an, p.legR1 * 1.14, p.legR3 * 1.04, 14, 11)
+      // full pant leg spans the knee — hem ends ABOVE the ankle bone; the
+      // AnkleSock (skin, rigid on Foot) bridges hem→shoe. (QA r13: a hem at
+      // ankle height clips through the heel counter and shows the interior.)
+      const anExt = an.clone(); anExt.y = p.footH * 1.45
+      const legGeo = armLoft(hp, anExt, p.legR1 * 1.14, p.legR3 * 1.04, 14, 11)
       skinnify(legGeo, segs, skel.index, 4, [`Hips`, `Leg${L}`, `Knee${L}`, `Foot${L}`], legTopOverride(p, `Leg${L}`))
       const leg = new THREE.SkinnedMesh(legGeo, M.pants)
       leg.name = `HumanLeg${L}`
       skinned.push(leg)
     }
-    // shoe upper + sole (rigid child of Foot bone)
-    const shoe = mesh(buildShoeGeo(p), M.shoe, `HumanShoe${L}`)
-    rigid.push(shoe)
-    const sole = mesh(buildSoleGeo(p), M.sole, `HumanSole${L}`)
-    rigid.push(sole)
+    // shoe: anatomical sneaker split at the ball — rear on Foot, front on Toe
+    const shoeParts = buildShoeParts(p, M)
+    for (const m of shoeParts.foot) { m.name += L; rigid.push(m) }
+    for (const m of shoeParts.toe) { m.name += L; rigid.push(m) }
   }
 
   // parent rigid parts to their bones
@@ -778,10 +795,11 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
     else if (o.name === 'HumanNeck') skel.bones[skel.index.Chest].add(o)
     else if (o.name.startsWith('Deltoid')) skel.bones[skel.index[o.name.replace('Deltoid', 'Arm')]].add(o)
     else if (o.name.startsWith('HumanHand')) skel.bones[skel.index[o.name.replace('HumanHand', 'Hand')]].add(o)
-    else if (o.name.startsWith('HumanShoe') || o.name.startsWith('HumanSole')) skel.bones[skel.index[o.name.endsWith('L') ? 'FootL' : 'FootR']].add(o)
+    else if (o.name.startsWith('ShoeToe') || o.name.startsWith('SoleToe')) skel.bones[skel.index[o.name.endsWith('L') ? 'ToeL' : 'ToeR']].add(o)
+    else if (o.name.startsWith('HumanShoe') || o.name.startsWith('HumanSole') || o.name.startsWith('ShoeCollar') || o.name.startsWith('ShoeTongue') || o.name.startsWith('ShoeLace') || o.name.startsWith('ShoeHeelTab') || o.name.startsWith('AnkleSock')) skel.bones[skel.index[o.name.endsWith('L') ? 'FootL' : 'FootR']].add(o)
     else if (o.name.startsWith('Sock')) skel.bones[skel.index[o.name.endsWith('L') ? 'KneeL' : 'KneeR']].add(o)
     else if (o.name.startsWith('Cuff')) skel.bones[skel.index[o.name.endsWith('L') ? 'ElbowL' : 'ElbowR']].add(o)
-    else if (o.name === 'Collar') skel.bones[skel.index.Chest].add(o)
+    else if (o.name === 'Collar' || o.name.startsWith('Trapezius')) skel.bones[skel.index.Chest].add(o)
   })
   return { skinned, rigid }
 }
@@ -847,22 +865,176 @@ function buildHandGeo(p: Prop, side: -1 | 1): THREE.BufferGeometry {
   return mergeGeoms(parts)
 }
 
-function buildShoeGeo(p: Prop): THREE.BufferGeometry {
-  // upper: heel → toe loft along z (rigid on the Foot bone)
-  const rings: { y: number; rx: number; rz: number; cz: number }[] = [
-    { y: -p.footH * 0.3, rx: p.legR3 * 1.06, rz: 0.032, cz: -p.footH * 0.32 },
-    { y: -p.footH * 0.5, rx: p.legR3 * 1.22, rz: 0.052, cz: 0.01 },
-    { y: -p.footH * 0.58, rx: p.legR3 * 1.42, rz: 0.062, cz: 0.085 },
-    { y: -p.footH * 0.62, rx: p.legR3 * 1.3, rz: 0.052, cz: 0.15 },
-    { y: -p.footH * 0.68, rx: p.legR3 * 1.02, rz: 0.034, cz: 0.205 },
-  ]
-  return loft(rings, 12)
+// ============================================================================
+// SHOE — anatomical sneaker on a foot last, split at the ball of the foot:
+// rear (heel/arch) is a rigid child of Foot, front (toe box) of Toe, so the
+// MTP break is visible during push-off. Foot-local space: bone origin at the
+// ankle, ground at y=-footH, +z = forward.
+// ============================================================================
+interface FootLast { heelZ: number; tipZ: number; ballZ: number; U: number }
+function footLast(p: Prop): FootLast {
+  // TRUE foot-local space (origin at the Foot/ankle bone): heel behind, tip ahead
+  return {
+    heelZ: -p.footH * 0.72,
+    tipZ: p.footH * 2.02,
+    ballZ: p.footH * 1.05,
+    U: p.legR3 * 1.3, // half-width unit at the ball
+  }
+}
+/** half-width profile 0..1 of the foot last (heel → toe) */
+function footW(t: number): number {
+  if (t < 0.12) return 0.62 + (t / 0.12) * 0.2          // heel bulb
+  if (t < 0.3) return 0.82 + ((t - 0.12) / 0.18) * 0.06
+  if (t < 0.58) return 0.88 + ((t - 0.3) / 0.28) * 0.12  // widening to the ball
+  if (t < 0.78) return 1 - ((t - 0.58) / 0.2) * 0.08
+  if (t < 0.92) return 0.92 - ((t - 0.78) / 0.14) * 0.2
+  return 0.72 - ((t - 0.92) / 0.08) * 0.28               // rounded toe (fuller tip)
+}
+/** sole thickness (heel wedge → thin toe) */
+function soleTh(t: number, p: Prop): number { return p.footH * (0.3 - 0.13 * t) }
+/** toe spring — sole centerline lifts toward the tip (subtle: ~1.5cm adult) */
+function toeSpring(t: number, p: Prop): number {
+  return t < 0.68 ? 0 : p.footH * 0.15 * ((t - 0.68) / 0.32) ** 1.7
+}
+/** topline of the shoe upper (collar → vamp → toe box), foot-local y.
+ * One smooth descent from the collar to a round toe — no kink (QA r12: a
+ * slope break at t=0.7 read as a second toe knuckle). */
+function shoeTop(t: number, p: Prop): number {
+  const f = p.footH
+  if (t < 0.06) return f * (0.04 + (t / 0.06) * 0.12)     // heel counter rise
+  if (t < 0.2) return f * (0.16 - ((t - 0.06) / 0.14) * 0.02) // collar plateau
+  return f * (0.14 - ((t - 0.2) / 0.8) * 0.44)             // smooth vamp → toe
+}
+/** sole seat (top of the sole where the upper ends), foot-local y */
+function soleSeat(t: number, p: Prop): number { return -p.footH + soleTh(t, p) + toeSpring(t, p) }
+
+/** Loft along +z: cross-sections are ellipses in the x-y plane (halfW × halfH
+ * centered at cy). Closed tube with z-converged caps. */
+function zLoft(rows: { z: number; cy: number; hw: number; hh: number }[], segs = 14): THREE.BufferGeometry {
+  const pos: number[] = []
+  const idx: number[] = []
+  for (const r of rows) {
+    for (let j = 0; j < segs; j++) {
+      const a = (j / segs) * Math.PI * 2
+      pos.push(Math.cos(a) * r.hw, r.cy + Math.sin(a) * r.hh, r.z)
+    }
+  }
+  for (let i = 0; i < rows.length - 1; i++) {
+    const o0 = i * segs, o1 = (i + 1) * segs
+    for (let j = 0; j < segs; j++) {
+      const j1 = (j + 1) % segs
+      idx.push(o0 + j, o1 + j, o0 + j1, o0 + j1, o1 + j, o1 + j1)
+    }
+  }
+  const cap = (rowIdx: number, dir: 1 | -1) => {
+    const r = rows[rowIdx]
+    const ci = pos.length / 3
+    pos.push(0, r.cy, r.z + dir * 0.004)
+    const o = rowIdx * segs
+    for (let j = 0; j < segs; j++) {
+      const j1 = (j + 1) % segs
+      if (dir > 0) idx.push(o + j, ci, o + j1)
+      else idx.push(o + j1, ci, o + j)
+    }
+  }
+  cap(0, -1)
+  cap(rows.length - 1, 1)
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setIndex(idx)
+  geo.computeVertexNormals()
+  return geo
 }
 
-function buildSoleGeo(p: Prop): THREE.BufferGeometry {
-  const g = new THREE.BoxGeometry(p.legR3 * 2.75, 0.026, p.footH * 2.9, 2, 1, 2)
-  g.translate(0, -p.footH + 0.013, 0.05)
-  return g
+function buildShoeParts(p: Prop, M: Mats): { foot: THREE.Mesh[]; toe: THREE.Mesh[] } {
+  const F = footLast(p)
+  const tOf = (z: number) => (z - F.heelZ) / (F.tipZ - F.heelZ)
+  const zOf = (t: number) => F.heelZ + (F.tipZ - F.heelZ) * t
+  const splitT = tOf(F.ballZ) // ball of the foot
+  // Toe bone sits (foot-local) 0.32·footH BELOW and 1.05·footH AHEAD of the
+  // ankle — toe-parented parts must be re-expressed in Toe-local space.
+  const toeShift = { y: p.footH * 0.32, z: -p.footH * 1.05 }
+
+  const foot: THREE.Mesh[] = []
+  const toe: THREE.Mesh[] = []
+
+  // ---- upper: rear (heel → just past the ball), front (overlap → tip) ----
+  const upperRows = (t0: number, t1: number, n: number) => {
+    const rows: { z: number; cy: number; hw: number; hh: number }[] = []
+    for (let i = 0; i < n; i++) {
+      const t = t0 + ((t1 - t0) * i) / (n - 1)
+      const top = shoeTop(t, p), seat = soleSeat(t, p)
+      rows.push({ z: zOf(t), cy: (top + seat) / 2, hw: footW(t) * F.U, hh: Math.max(0.006, (top - seat) / 2) })
+    }
+    return rows
+  }
+  const upperRear = mesh(zLoft(upperRows(0, Math.min(1, splitT + 0.07), 9), 14), M.shoe, 'HumanShoe')
+  foot.push(upperRear)
+  const upperFront = mesh(zLoft(upperRows(Math.max(0, splitT - 0.045), 1, 6), 14), M.shoe, 'ShoeToe')
+  upperFront.geometry.translate(0, toeShift.y, toeShift.z)
+  toe.push(upperFront)
+
+  // ---- sole: same last, wider, flat-ish slab with heel wedge + toe spring ----
+  const soleRows = (t0: number, t1: number, n: number) => {
+    const rows: { z: number; cy: number; hw: number; hh: number }[] = []
+    for (let i = 0; i < n; i++) {
+      const t = t0 + ((t1 - t0) * i) / (n - 1)
+      const th = soleTh(t, p)
+      // slab spans ground(-footH+spring) → soleSeat; center sits halfway
+      rows.push({ z: zOf(t), cy: -p.footH + th / 2 + toeSpring(t, p), hw: footW(t) * F.U * 1.1 + 0.004, hh: th / 2 })
+    }
+    return rows
+  }
+  const soleRear = mesh(zLoft(soleRows(0, Math.min(1, splitT + 0.06), 8), 14), M.sole, 'HumanSole')
+  foot.push(soleRear)
+  const soleFront = mesh(zLoft(soleRows(Math.max(0, splitT - 0.04), 1, 6), 14), M.sole, 'SoleToe')
+  soleFront.geometry.translate(0, toeShift.y, toeShift.z)
+  toe.push(soleFront)
+
+  // ---- ankle filler (skin) — the pant hem ends at the ankle and the shoe
+  // topline is below it: without this there is a see-through gap (QA r10) ----
+  const sock = mesh(new THREE.CylinderGeometry(p.legR3 * 0.88, p.legR3 * 0.98, p.footH * 0.7, 10), M.skin, 'AnkleSock')
+  sock.position.y = p.footH * 0.05 // spans ≈ 0.7f..1.4f world: pant hem → collar → into the shoe
+  foot.push(sock)
+
+  // ---- toe-tip cap (small rubber tip hugging the closed toe) — child of Toe
+  // (QA r7: a ball-toecap at the ball line towered over the toe box) ----
+  const capT = 0.93
+  const toecap = mesh(new THREE.SphereGeometry(footW(capT) * F.U * 0.82, 12, 8), M.sole, 'ShoeToeCap')
+  toecap.scale.set(1.0, 0.9, 1.0)
+  toecap.position.set(0, (shoeTop(capT, p) + soleSeat(capT, p)) / 2 + toeShift.y, zOf(capT) + toeShift.z - 0.002)
+  toe.push(toecap)
+
+  // ---- padded collar around the ankle opening (child of Foot) — hugs the
+  // membrane, stays INSIDE the heel silhouette (QA r6/r7: oversize torus
+  // floated above the topline and overhung the heel) ----
+  const cT = 0.11
+  const collar = mesh(new THREE.TorusGeometry(footW(cT) * F.U * 0.72, p.footH * 0.11, 8, 16), M.shoe, 'ShoeCollar')
+  collar.rotation.x = Math.PI / 2
+  collar.scale.set(1.05, 1.06, 1) // mild oval along world z (local y pre-rotation)
+  collar.position.set(0, shoeTop(cT, p) - p.footH * 0.055, zOf(cT))
+  foot.push(collar)
+
+  // ---- tongue on the instep + 3 lace bars down the vamp (children of Foot) ----
+  const tongue = mesh(new THREE.SphereGeometry(F.U * 0.55, 10, 8), M.shoe, 'ShoeTongue')
+  tongue.scale.set(1.0, 0.36, 1.5)
+  tongue.position.set(0, shoeTop(0.3, p) - p.footH * 0.01, zOf(0.3) + 0.012)
+  foot.push(tongue)
+  const laceParts: THREE.BufferGeometry[] = []
+  for (const lt of [0.22, 0.3, 0.38]) {
+    const bar = new THREE.CapsuleGeometry(p.footH * 0.04, footW(lt) * F.U * 2.1, 3, 6)
+    bar.rotateZ(Math.PI / 2)
+    bar.translate(0, shoeTop(lt, p) + p.footH * 0.008, zOf(lt)) // half-sunk: reads as lace grooves
+    laceParts.push(bar)
+  }
+  const laceMesh = mesh(mergeGeoms(laceParts), M.sole, 'ShoeLace')
+  foot.push(laceMesh)
+  // heel pull-tab
+  const tab = mesh(new THREE.CapsuleGeometry(p.footH * 0.07, p.footH * 0.14, 3, 6), M.shoe, 'ShoeHeelTab')
+  tab.position.set(0, shoeTop(0.035, p) + p.footH * 0.02, F.heelZ + p.footH * 0.04)
+  foot.push(tab)
+
+  return { foot, toe }
 }
 
 // ============================================================================
@@ -910,16 +1082,31 @@ function kneeAngle(ph: number, s: GaitSpec): number {
   return s.kneeBase + s.kneeSwing * swing + s.kneeSwing * 0.3 * load
 }
 
-/** foot pitch over one leg cycle: heel strike (toe-up) → flat → toe-off (heel-up) → swing clear */
+/** foot pitch over one leg cycle (Foot bone, about the ankle):
+ * heel strike (toe-up) → flat → push-off (heel-rise, shared with the Toe) → swing clear.
+ * Push-off pitch is SPLIT with the Toe joint (MTP break) — foot 55%, toe 45%. */
 function footPitch(ph: number, s: GaitSpec): number {
   if (ph < 0.06) return -0.16 * (1 - ph / 0.06)      // heel strike — toe up
   if (ph < 0.34) return 0                            // flat stance
   if (ph < 0.52) {                                   // push-off — heel rises
     const t = (ph - 0.34) / 0.18
-    return s.footRoll * Math.sin(t * Math.PI * 0.6)
+    return s.footRoll * 0.55 * Math.sin(t * Math.PI * 0.6)
   }
   if (ph < 0.72) return -0.10                        // early swing dorsiflexion
   return -0.02                                       // reach
+}
+
+/** toe (MTP) pitch relative to the Foot — continues the push-off break so the
+ * forefoot rolls instead of the whole rigid foot pivoting at the ankle. */
+function toePitch(ph: number, s: GaitSpec): number {
+  if (ph < 0.06) return 0.05                         // toes relaxed at heel strike
+  if (ph < 0.34) return 0                            // flat stance
+  if (ph < 0.52) {
+    const t = (ph - 0.34) / 0.18
+    return s.footRoll * 0.45 * Math.sin(t * Math.PI * 0.6)
+  }
+  if (ph < 0.72) return -0.05                        // trail in swing
+  return 0
 }
 
 function gaitClip(name: string, s: GaitSpec, p: Prop): THREE.AnimationClip {
@@ -930,6 +1117,8 @@ function gaitClip(name: string, s: GaitSpec, p: Prop): THREE.AnimationClip {
   const kneeR: [number, number, number, number][] = []
   const footL: [number, number, number, number][] = []
   const footR: [number, number, number, number][] = []
+  const toeL: [number, number, number, number][] = []
+  const toeR: [number, number, number, number][] = []
   const armL: [number, number, number, number][] = []
   const armR: [number, number, number, number][] = []
   const elbL: [number, number, number, number][] = []
@@ -951,6 +1140,8 @@ function gaitClip(name: string, s: GaitSpec, p: Prop): THREE.AnimationClip {
     kneeR.push([t, kneeAngle((ph + 0.5) % 1, s), 0, 0])
     footL.push([t, footPitch(ph, s), 0, 0])
     footR.push([t, footPitch((ph + 0.5) % 1, s), 0, 0])
+    toeL.push([t, toePitch(ph, s), 0, 0])
+    toeR.push([t, toePitch((ph + 0.5) % 1, s), 0, 0])
     armL.push([t, s.armSwing * c, 0, 0.06 + 0.03 * sn])
     armR.push([t, -s.armSwing * c, 0, -0.06 + 0.03 * sn])
     elbL.push([t, -(s.elbowBase + s.elbowSwing * Math.max(0, -c) ** 1.4), 0, 0])
@@ -967,6 +1158,7 @@ function gaitClip(name: string, s: GaitSpec, p: Prop): THREE.AnimationClip {
     qAnim('LegL', legL, true), qAnim('LegR', legR, true),
     qAnim('KneeL', kneeL, true), qAnim('KneeR', kneeR, true),
     qAnim('FootL', footL, true), qAnim('FootR', footR, true),
+    qAnim('ToeL', toeL, true), qAnim('ToeR', toeR, true),
     qAnim('ArmL', armL, true), qAnim('ArmR', armR, true),
     qAnim('ElbowL', elbL, true), qAnim('ElbowR', elbR, true),
     bobAnim('Hips', p.hipY, bob, true),
@@ -977,15 +1169,16 @@ function buildClips(p: Prop): THREE.AnimationClip[] {
   const H = 'Hips', T = 'Torso', HD = 'Head', NK = 'Neck'
   const AL = 'ArmL', AR = 'ArmR', EL = 'ElbowL', ER = 'ElbowR'
   const LL = 'LegL', LR = 'LegR', KL = 'KneeL', KR = 'KneeR', FL = 'FootL', FR = 'FootR'
+  const TL = 'ToeL', TR = 'ToeR'
   const hipY = p.hipY
   const clips: THREE.AnimationClip[] = []
 
-  // walk — adult ~0.95s cycle, child quicker
+  // walk — adult ~0.95s cycle, child quicker (footRoll now split foot+toe)
   const walkDur = p === CHILD ? 0.75 : p === FEMALE ? 0.88 : 0.95
   clips.push(gaitClip('walk', {
     duration: walkDur, stride: 0.52, kneeSwing: 0.72, kneeBase: 0.10,
     armSwing: 0.38, elbowBase: 0.22, elbowSwing: 0.34,
-    bob: 0.024, lean: 0.05, yaw: 0.09, footRoll: 0.30,
+    bob: 0.024, lean: 0.05, yaw: 0.09, footRoll: 0.44,
   }, p))
 
   // run — runner arm carriage: elbows stay ~90° so forearms stay forward-flat
@@ -993,7 +1186,7 @@ function buildClips(p: Prop): THREE.AnimationClip[] {
   clips.push(gaitClip('run', {
     duration: runDur, stride: 0.92, kneeSwing: 1.42, kneeBase: 0.20,
     armSwing: 0.65, elbowBase: 0.95, elbowSwing: 0.25,
-    bob: 0.052, lean: 0.24, yaw: 0.15, footRoll: 0.42,
+    bob: 0.052, lean: 0.24, yaw: 0.15, footRoll: 0.6,
   }, p))
 
   // idle — weight shift, breath-posture on Torso (Chest is runtime-owned), sway
@@ -1018,6 +1211,8 @@ function buildClips(p: Prop): THREE.AnimationClip[] {
     qAnim(LR, [[0, 0, 0, 0], [0.16, -0.5, 0, 0], [0.38, 0.32, 0, 0], [0.85, 0.28, 0, 0]], false),
     qAnim(FL, [[0, 0, 0, 0], [0.16, 0.25, 0, 0], [0.38, -0.3, 0, 0], [0.85, -0.2, 0, 0]], false),
     qAnim(FR, [[0, 0, 0, 0], [0.16, 0.2, 0, 0], [0.38, -0.25, 0, 0], [0.85, -0.18, 0, 0]], false),
+    qAnim(TL, [[0, 0, 0, 0], [0.16, 0.12, 0, 0], [0.38, -0.12, 0, 0], [0.85, -0.08, 0, 0]], false),
+    qAnim(TR, [[0, 0, 0, 0], [0.16, 0.1, 0, 0], [0.38, -0.1, 0, 0], [0.85, -0.07, 0, 0]], false),
     qAnim(AL, [[0, 0, 0, 0], [0.16, 0.5, 0, 0], [0.5, -2.6, 0, 0], [0.85, -2.6, 0, 0]], false),
     qAnim(AR, [[0, 0, 0, 0], [0.16, 0.5, 0, 0], [0.5, -2.6, 0, 0], [0.85, -2.6, 0, 0]], false),
     qAnim(EL, [[0, -0.14, 0, 0], [0.16, -0.45, 0, 0], [0.5, -0.15, 0, 0], [0.85, -0.15, 0, 0]], false),
@@ -1063,6 +1258,8 @@ function buildClips(p: Prop): THREE.AnimationClip[] {
     qAnim(LR, [[0, -0.92, 0, 0], [0.5, -0.05, 0, 0]], false),
     qAnim(FL, [[0, 0.15, 0, 0], [0.5, 0, 0, 0]], false),
     qAnim(FR, [[0, 0.15, 0, 0], [0.5, 0, 0, 0]], false),
+    qAnim(TL, [[0, 0.08, 0, 0], [0.5, 0, 0, 0]], false),
+    qAnim(TR, [[0, 0.08, 0, 0], [0.5, 0, 0, 0]], false),
     qAnim(AL, [[0, -1.3, 0, 0.44], [0.5, 0.05, 0, 0]], false),
     qAnim(AR, [[0, -1.3, 0, -0.44], [0.5, 0.05, 0, -0]], false),
     qAnim(EL, [[0, -0.5, 0, 0], [0.5, -0.14, 0, 0]], false),
