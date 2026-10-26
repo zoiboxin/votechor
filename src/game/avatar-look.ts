@@ -174,6 +174,9 @@ const RIGGED_MAP: Record<string, keyof AvatarPalette> = {
   HumanTorso: 'shirt', HumanArmL: 'shirt', HumanArmR: 'shirt',
   SleeveL: 'shirt', SleeveR: 'shirt', DeltoidL: 'shirt', DeltoidR: 'shirt',
   Collar: 'shirt', CuffL: 'shirt', CuffR: 'shirt',
+  // v102 kid garment details (rigid finishers on the same skeleton)
+  WaistHem: 'shirt', ChestBadge: 'accent', SleeveHemL: 'shirt', SleeveHemR: 'shirt',
+  ShortsCuffL: 'pants', ShortsCuffR: 'pants',
   HumanPelvis: 'pants', HumanLegL: 'pants', HumanLegR: 'pants', ShortsL: 'pants', ShortsR: 'pants',
   HumanHead: 'skin', HumanNeck: 'skin', ForearmL: 'skin', ForearmR: 'skin',
   HumanHandL: 'skin', HumanHandR: 'skin', CalfL: 'skin', CalfR: 'skin',

@@ -443,6 +443,48 @@ function faceZ(p: Prop, yLocal: number, x = 0): number {
   return R * HEAD_RZ * Math.sqrt(rr)
 }
 
+/** v102 kid hairstyle — a sculpted crop, not a cap with beads:
+ *  layered crown volume shell, chunky scalloped fringe (capsules fanned along
+ *  the frontal hairline curve), and a crown cowlick. Every piece is sunk INTO
+ *  the scalp shell so nothing floats (old bug: 4 bead spheres + tiny cones). */
+function buildKidHairTop(g: THREE.Group, p: Prop, M: Mats, R: number, cy: number): void {
+  // crown volume — second shell over the top/back gives the head its silhouette
+  const vol = new THREE.Mesh(new THREE.SphereGeometry(R * 1.06, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.38), M.hair)
+  vol.name = 'HairVolume'
+  vol.scale.set(HEAD_RX * 1.05, HEAD_RY * 1.04, HEAD_RZ * 1.06)
+  vol.position.set(0, cy + R * 0.02, -R * 0.04)
+  vol.rotation.x = -0.18
+  g.add(vol)
+  // chunky scalloped fringe — 5 overlapping locks ON the volume shell front
+  // (v102r2: sampled on the shell ellipsoid — the first attempt sat at the
+  // skull radius and vanished inside the shell)
+  const volR = { x: 1.057, y: 1.235, z: 1.122 } // vol shell radii in units of R
+  const volC = { y: 0.02, z: -0.04 }            // shell center offset in R
+  for (let i = 0; i < 5; i++) {
+    const fx = (i - 2) / 2 // -1..1
+    const phi = fx * 0.7 // angle around the head axis
+    const drop = Math.abs(fx) * R * 0.035 // hairline dips toward the temples
+    const y = cy + R * 0.49 - drop
+    // shell-frame: heights are measured from the SHELL CENTER (cy + volC.y·R)
+    const sinT = Math.sqrt(Math.max(0.05, 1 - (((y - cy) / R - volC.y) / volR.y) ** 2))
+    const x = Math.sin(phi) * volR.x * sinT * R
+    const z = Math.cos(phi) * volR.z * sinT * R + volC.z * R
+    const tuft = new THREE.Mesh(new THREE.CapsuleGeometry(R * 0.115, R * 0.22, 3, 8), M.hair)
+    tuft.name = `Fringe${i}`
+    tuft.rotation.set(0.28, phi * 0.9, Math.PI / 2) // axis along x, fanned + tilted down over the brow
+    tuft.scale.set(1, 1, 0.62) // flattened lock
+    tuft.position.set(x, y - R * 0.025, z + R * 0.025)
+    g.add(tuft)
+  }
+  // crown cowlick — one cheeky tuft leaning forward off the crown (v102r2:
+  // re-anchored to poke OUT of the shell — the old tip was buried inside it)
+  const cowlick = new THREE.Mesh(new THREE.ConeGeometry(R * 0.095, R * 0.3, 7), M.hair)
+  cowlick.name = 'Cowlick'
+  cowlick.position.set(R * 0.18, cy + R * 1.22, -R * 0.16)
+  cowlick.rotation.set(-0.55, 0, -0.3)
+  g.add(cowlick)
+}
+
 function buildHead(p: Prop, M: Mats): THREE.Group {
   const g = new THREE.Group()
   g.name = 'HeadGroup'
@@ -591,7 +633,8 @@ function buildHead(p: Prop, M: Mats): THREE.Group {
   nape.scale.set(1.4, 0.8, 0.95)
   nape.position.set(0, cy - R * 0.14, -R * 0.74)
   g.add(nape)
-  const fringeN = kid ? 4 : 3
+  // v102: the kid gets the sculpted crop (buildKidHairTop) instead of bead fringe
+  const fringeN = kid ? 0 : 3
   for (let i = 0; i < fringeN; i++) {
     const fx = (i - (fringeN - 1) / 2) * R * 0.3
     const tuft = new THREE.Mesh(new THREE.SphereGeometry(R * (kid ? 0.17 : 0.145), 8, 6), M.hair)
@@ -601,24 +644,16 @@ function buildHead(p: Prop, M: Mats): THREE.Group {
     tuft.position.set(fx, cy + R * 0.54, faceZ(p, cy + R * 0.54, fx) - R * 0.03)
     g.add(tuft)
   }
-  // side tufts above the ears kill the bare-strip look
+  // side coverage above the ears kills the bare-strip look. Kid: temple panels
+  // come further DOWN over the ear tops and UP to meet the fringe locks
   for (const s of [-1, 1] as const) {
-    const tuft = new THREE.Mesh(new THREE.SphereGeometry(R * 0.16, 8, 6), M.hair)
+    const tuft = new THREE.Mesh(new THREE.SphereGeometry(R * (kid ? 0.2 : 0.16), 10, 8), M.hair)
     tuft.name = s < 0 ? 'SideHairL' : 'SideHairR'
-    tuft.scale.set(0.55, 1.1, 1.0)
-    tuft.position.set(s * R * 0.88, cy + R * 0.24, -R * 0.05)
+    tuft.scale.set(kid ? 0.52 : 0.55, kid ? 1.45 : 1.1, kid ? 1.2 : 1.0)
+    tuft.position.set(s * R * HEAD_RX * 0.88, cy + R * (kid ? 0.2 : 0.24), -R * 0.04)
     g.add(tuft)
   }
-  if (kid) {
-    for (let i = 0; i < 4; i++) {
-      const spike = new THREE.Mesh(new THREE.ConeGeometry(R * 0.075, R * 0.24, 6), M.hair)
-      spike.name = `Spike${i}`
-      const a = (i / 4) * Math.PI * 2 + 0.4
-      spike.position.set(Math.sin(a) * R * 0.5, cy + R * 0.78, -Math.abs(Math.cos(a)) * R * 0.4)
-      spike.rotation.set(Math.cos(a) * 0.5, 0, -Math.sin(a) * 0.5)
-      g.add(spike)
-    }
-  }
+  if (kid) buildKidHairTop(g, p, M, R, cy)
   if (p === FEMALE) {
     // long back mane
     const mane = new THREE.Mesh(new THREE.CapsuleGeometry(R * 0.34, R * 1.15, 4, 10), M.hair)
@@ -685,11 +720,41 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
   const neckM = mesh(neckGeo, M.skin, 'HumanNeck')
   rigid.push(neckM)
 
-  // ---- collar band (rigid child of Chest) — closes the shirt around the neck
-  const collarGeo = new THREE.CylinderGeometry(p.headR * 0.46, p.headR * 0.72, 0.05, 12)
-  collarGeo.translate(0, p.hipY + p.torsoTop - 0.035 - (p.hipY + p.chestY), 0)
-  const collar = mesh(collarGeo, M.shirtDark, 'Collar')
+  // ---- collar — closes the shirt around the neck. v102: the kid gets a real
+  // ribbed crew-neck (tilted torus with a front dip) — the old straight
+  // cylinder flared over the chest like a funnel ----
+  let collar: THREE.Mesh
+  if (isChild) {
+    collar = new THREE.Mesh(new THREE.TorusGeometry(p.headR * 0.52, p.headR * 0.08, 8, 18), M.shirtDark)
+    collar.name = 'Collar'
+    collar.rotation.x = Math.PI / 2 - 0.1
+    collar.scale.set(1, 0.88, 1) // oval along world z after the x-rotation
+    collar.position.set(0, p.torsoTop - p.chestY - 0.018, 0)
+  } else {
+    const collarGeo = new THREE.CylinderGeometry(p.headR * 0.46, p.headR * 0.72, 0.05, 12)
+    collarGeo.translate(0, p.hipY + p.torsoTop - 0.035 - (p.hipY + p.chestY), 0)
+    collar = mesh(collarGeo, M.shirtDark, 'Collar')
+  }
   rigid.push(collar)
+
+  if (isChild) {
+    // ribbed waist hem — finishes the tee just above the shorts (rigid on
+    // Hips). v102r2: the torso WIDENS upward here, so the hem cone must be
+    // proud at BOTH edges (an inverted taper gets buried and scallops)
+    const hem = new THREE.Mesh(new THREE.CylinderGeometry(p.rings[1].rx * 1.055, p.rings[0].rx * 1.06, 0.05, 18), M.shirtDark)
+    hem.name = 'WaistHem'
+    hem.scale.z = p.rings[0].rz / p.rings[0].rx
+    hem.position.y = 0.048
+    rigid.push(hem)
+    // chest badge (rigid on Chest) — a small round accent print on the
+    // chest-left. v102r2: a flat local disc can't zigzag against the loft the
+    // way the old full-ring stripe did
+    const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.009, 14), M.accent)
+    badge.name = 'ChestBadge'
+    badge.rotation.x = Math.PI / 2
+    badge.position.set(-0.04, 0.225 - p.chestY, 0.094)
+    rigid.push(badge)
+  }
 
   // ---- trapezius wedges REMOVED (QA r2: corners peeked out as dark flaps).
   // The widened roof rings + sunk deltoid dome cover the notch. ----
@@ -703,8 +768,10 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
     const midBicep = sh.clone().lerp(el, 0.52)
     const sleeveEnd = shortSleeves ? midBicep : el
     // start the sleeve BELOW the joint so its top ring tucks under the deltoid
-    // dome (a full-radius ring AT the joint pokes 0.06 above it — QA r3/r4)
-    const shLow = sh.clone(); shLow.y -= p.armR1 * 1.26 * 0.85
+    // dome (a full-radius ring AT the joint pokes 0.06 above it — QA r3/r4).
+    // v102 kid: sleeve starts much higher (the old gap exposed the deltoid as
+    // a separate shoulder ball) and the dome sinks to meet it
+    const shLow = sh.clone(); shLow.y -= p.armR1 * 1.26 * (isChild ? 0.42 : 0.85)
     // sleeve section (shirt) — top radius matches the deltoid capsule
     const sleeveGeo2 = armLoft(shLow, sleeveEnd, p.armR1 * 1.26, p.armR1 * 1.04, 12, 5)
     if (shortSleeves) {
@@ -718,6 +785,11 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
       const fore = new THREE.SkinnedMesh(foreGeo, M.skin)
       fore.name = `Forearm${L}`
       skinned.push(fore)
+      // ribbed cuff finishes the short sleeve (v102, rigid on Arm)
+      const shem = new THREE.Mesh(new THREE.CylinderGeometry(p.armR1 * 1.22, p.armR1 * 1.18, 0.03, 12), M.shirtDark)
+      shem.name = `SleeveHem${L}`
+      shem.position.set(sleeveEnd.x - sh.x, sleeveEnd.y - sh.y + 0.016, 0)
+      rigid.push(shem)
     } else {
       // adult: full arm in the shirt material, spans the elbow
       const armGeo = armLoft(shLow, wr, p.armR1 * 1.24, p.armR3, 14, 10)
@@ -731,9 +803,9 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
     // read as one continuous form
     const deltCyl = Math.max(0.012, p.armR1 * 0.3)
     const delt = mesh(new THREE.CapsuleGeometry(p.armR1 * 1.26, deltCyl, 4, 12), M.shirt, `Deltoid${L}`)
-    delt.scale.set(1.15, 1, 0.95)
+    delt.scale.set(isChild ? 1.05 : 1.15, 1, 0.95)
     delt.rotation.z = s * 0.1 // rest splay so the capsule axis matches the sleeve
-    delt.position.y = 0.012 - (deltCyl / 2 + p.armR1 * 1.26) // dome top covers the sleeve end-cap (cap sits at joint+0.004)
+    delt.position.y = 0.012 - (deltCyl / 2 + p.armR1 * 1.26) - (isChild ? 0.028 : 0) // kid dome sinks to the sleeve line
     rigid.push(delt)
     // hand (rigid child of Hand bone): palm loft + 4 curled fingers + thumb
     const handGeo = buildHandGeo(p, s)
@@ -755,22 +827,36 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
     const kn = skel.world[`Knee${L}`]
     const an = skel.world[`Foot${L}`]
     if (isChild) {
-      // shorts (thigh) + bare calves — modular demo of the clothing split
-      const thighGeo = armLoft(hp, kn, p.legR1 * 1.16, p.legR2 * 1.05, 12, 6)
+      // proper kid shorts (v102): hem mid-thigh with a fold cuff — the old
+      // knee-length loft read as capri pants
+      const shortsEnd = hp.clone().lerp(kn, 0.8)
+      const thighGeo = armLoft(hp, shortsEnd, p.legR1 * 1.16, p.legR2 * 1.02, 12, 6)
       skinnify(thighGeo, segs, skel.index, 4, [`Hips`, `Leg${L}`], legTopOverride(p, `Leg${L}`))
       const thigh = new THREE.SkinnedMesh(thighGeo, M.pants)
       thigh.name = `Shorts${L}`
       skinned.push(thigh)
-      const calfEnd = an.clone() // bare ankle continues via the AnkleSock
-      const calfGeo = armLoft(kn, calfEnd, p.legR2 * 0.96, p.legR3, 12, 7)
+      // fold cuff at the hem — SKINNED (v102r3: a rigid Knee-child cuff floated
+      // off the deforming shorts at full flexion; a skinned loft tracks it)
+      const cuffA = hp.clone().lerp(kn, 0.72)
+      const cuffB = hp.clone().lerp(kn, 0.84)
+      const cuffGeo = armLoft(cuffA, cuffB, p.legR2 * 1.07, p.legR2 * 1.03, 12, 3)
+      skinnify(cuffGeo, segs, skel.index, 4, [`Hips`, `Leg${L}`], legTopOverride(p, `Leg${L}`))
+      const cuff = new THREE.SkinnedMesh(cuffGeo, M.pants)
+      cuff.name = `ShortsCuff${L}`
+      skinned.push(cuff)
+      // bare knee + calf — the skin loft now starts UNDER the hem (spans the
+      // knee so the weights stay smooth) and runs to the ankle
+      const calfEnd = an.clone()
+      const calfGeo = armLoft(shortsEnd, calfEnd, p.legR2 * 1.0, p.legR3, 12, 7)
       skinnify(calfGeo, segs, skel.index, 4, [`Leg${L}`, `Knee${L}`, `Foot${L}`])
       const calf = new THREE.SkinnedMesh(calfGeo, M.skin)
       calf.name = `Calf${L}`
       skinned.push(calf)
-      // sock band
-      const sock = new THREE.Mesh(new THREE.CylinderGeometry(p.legR3 * 1.12, p.legR3 * 1.18, 0.05, 10), M.sock)
+      // sock band — sits just above the shoe collar (v102 fix: the old +0.2
+      // Knee-local offset buried it INSIDE the shorts where it never showed)
+      const sock = new THREE.Mesh(new THREE.CylinderGeometry(p.legR3 * 1.08, p.legR3 * 1.14, 0.04, 10), M.sock)
       sock.name = `Sock${L}`
-      sock.position.y = -(an.y - kn.y) + 0.055
+      sock.position.y = (an.y - kn.y) + p.footH * 0.95
       rigid.push(sock)
     } else {
       // full pant leg spans the knee — hem ends ABOVE the ankle bone; the
@@ -797,7 +883,10 @@ function buildBodyAndClothes(p: Prop, M: Mats, skel: SkeletonDef, segs: Seg[]): 
     else if (o.name.startsWith('HumanHand')) skel.bones[skel.index[o.name.replace('HumanHand', 'Hand')]].add(o)
     else if (o.name.startsWith('ShoeToe') || o.name.startsWith('SoleToe')) skel.bones[skel.index[o.name.endsWith('L') ? 'ToeL' : 'ToeR']].add(o)
     else if (o.name.startsWith('HumanShoe') || o.name.startsWith('HumanSole') || o.name.startsWith('ShoeCollar') || o.name.startsWith('ShoeTongue') || o.name.startsWith('ShoeLace') || o.name.startsWith('ShoeHeelTab') || o.name.startsWith('AnkleSock')) skel.bones[skel.index[o.name.endsWith('L') ? 'FootL' : 'FootR']].add(o)
-    else if (o.name.startsWith('Sock')) skel.bones[skel.index[o.name.endsWith('L') ? 'KneeL' : 'KneeR']].add(o)
+    else if (o.name.startsWith('Sock') || o.name.startsWith('ShortsCuff')) skel.bones[skel.index[o.name.endsWith('L') ? 'KneeL' : 'KneeR']].add(o)
+    else if (o.name.startsWith('SleeveHem')) skel.bones[skel.index[o.name.endsWith('L') ? 'ArmL' : 'ArmR']].add(o)
+    else if (o.name === 'WaistHem') skel.bones[skel.index.Hips].add(o)
+    else if (o.name === 'ChestBadge') skel.bones[skel.index.Chest].add(o)
     else if (o.name.startsWith('Cuff')) skel.bones[skel.index[o.name.endsWith('L') ? 'ElbowL' : 'ElbowR']].add(o)
     else if (o.name === 'Collar' || o.name.startsWith('Trapezius')) skel.bones[skel.index.Chest].add(o)
   })
@@ -874,11 +963,14 @@ function buildHandGeo(p: Prop, side: -1 | 1): THREE.BufferGeometry {
 interface FootLast { heelZ: number; tipZ: number; ballZ: number; U: number }
 function footLast(p: Prop): FootLast {
   // TRUE foot-local space (origin at the Foot/ankle bone): heel behind, tip ahead
+  // v102: the kid gets a chunkier "big sneaker" last — proportionally longer
+  // and wider so the shoe reads on the short, thick leg (old shoe was swallowed).
+  const kid = p === CHILD
   return {
-    heelZ: -p.footH * 0.72,
-    tipZ: p.footH * 2.02,
-    ballZ: p.footH * 1.05,
-    U: p.legR3 * 1.3, // half-width unit at the ball
+    heelZ: -p.footH * (kid ? 0.8 : 0.72),
+    tipZ: p.footH * (kid ? 2.4 : 2.02),
+    ballZ: p.footH * (kid ? 1.2 : 1.05),
+    U: p.legR3 * (kid ? 1.45 : 1.3), // half-width unit at the ball
   }
 }
 /** half-width profile 0..1 of the foot last (heel → toe) */
@@ -964,7 +1056,18 @@ function buildShoeParts(p: Prop, M: Mats): { foot: THREE.Mesh[]; toe: THREE.Mesh
     for (let i = 0; i < n; i++) {
       const t = t0 + ((t1 - t0) * i) / (n - 1)
       const top = shoeTop(t, p), seat = soleSeat(t, p)
-      rows.push({ z: zOf(t), cy: (top + seat) / 2, hw: footW(t) * F.U, hh: Math.max(0.006, (top - seat) / 2) })
+      let hw = footW(t) * F.U
+      let hh = Math.max(0.006, (top - seat) / 2)
+      // v102 rounded toe closure: over the last 12% of the last the section
+      // falls off smoothly so the converging zLoft cap reads as a ROUND toe
+      // (the old hard cap pinched into a snout past the toe box)
+      if (t > 0.88) {
+        const k = (t - 0.88) / 0.12
+        const fall = Math.cos(k * Math.PI * 0.5)
+        hw *= 0.45 + 0.55 * fall
+        hh *= 0.6 + 0.4 * fall
+      }
+      rows.push({ z: zOf(t), cy: (top + seat) / 2, hw, hh })
     }
     return rows
   }
@@ -974,20 +1077,23 @@ function buildShoeParts(p: Prop, M: Mats): { foot: THREE.Mesh[]; toe: THREE.Mesh
   upperFront.geometry.translate(0, toeShift.y, toeShift.z)
   toe.push(upperFront)
 
-  // ---- sole: same last, wider, flat-ish slab with heel wedge + toe spring ----
+  // ---- sole: same last, wider, flat-ish slab with heel wedge + toe spring.
+  // v102r3: the sole extends PAST the upper tip and curves up around it — the
+  // sole itself becomes the rubber toe wrap (the separate pancake bumper read
+  // as a detached disc on the kid's tiny shoe)
   const soleRows = (t0: number, t1: number, n: number) => {
     const rows: { z: number; cy: number; hw: number; hh: number }[] = []
     for (let i = 0; i < n; i++) {
       const t = t0 + ((t1 - t0) * i) / (n - 1)
-      const th = soleTh(t, p)
+      const th = soleTh(Math.min(t, 1), p)
       // slab spans ground(-footH+spring) → soleSeat; center sits halfway
-      rows.push({ z: zOf(t), cy: -p.footH + th / 2 + toeSpring(t, p), hw: footW(t) * F.U * 1.1 + 0.004, hh: th / 2 })
+      rows.push({ z: zOf(t), cy: -p.footH + th / 2 + toeSpring(t, p), hw: footW(Math.min(t, 1)) * F.U * 1.1 + 0.004, hh: th / 2 })
     }
     return rows
   }
   const soleRear = mesh(zLoft(soleRows(0, Math.min(1, splitT + 0.06), 8), 14), M.sole, 'HumanSole')
   foot.push(soleRear)
-  const soleFront = mesh(zLoft(soleRows(Math.max(0, splitT - 0.04), 1, 6), 14), M.sole, 'SoleToe')
+  const soleFront = mesh(zLoft(soleRows(Math.max(0, splitT - 0.04), 1.045, 7), 14), M.sole, 'SoleToe')
   soleFront.geometry.translate(0, toeShift.y, toeShift.z)
   toe.push(soleFront)
 
@@ -997,34 +1103,38 @@ function buildShoeParts(p: Prop, M: Mats): { foot: THREE.Mesh[]; toe: THREE.Mesh
   sock.position.y = p.footH * 0.05 // spans ≈ 0.7f..1.4f world: pant hem → collar → into the shoe
   foot.push(sock)
 
-  // ---- toe-tip cap (small rubber tip hugging the closed toe) — child of Toe
-  // (QA r7: a ball-toecap at the ball line towered over the toe box) ----
-  const capT = 0.93
-  const toecap = mesh(new THREE.SphereGeometry(footW(capT) * F.U * 0.82, 12, 8), M.sole, 'ShoeToeCap')
-  toecap.scale.set(1.0, 0.9, 1.0)
-  toecap.position.set(0, (shoeTop(capT, p) + soleSeat(capT, p)) / 2 + toeShift.y, zOf(capT) + toeShift.z - 0.002)
-  toe.push(toecap)
+  // v102r3: separate toe bumper REMOVED — the up-wrapped sole front is the
+  // rubber toe cap now (one form instead of two stacked pancakes)
 
-  // ---- padded collar around the ankle opening (child of Foot) — hugs the
-  // membrane, stays INSIDE the heel silhouette (QA r6/r7: oversize torus
-  // floated above the topline and overhung the heel) ----
-  const cT = 0.11
-  const collar = mesh(new THREE.TorusGeometry(footW(cT) * F.U * 0.72, p.footH * 0.11, 8, 16), M.shoe, 'ShoeCollar')
+  // ---- padded collar around the ankle opening (child of Foot). v102r3:
+  // OVAL ring — wide enough (x) to clear the chunky kid leg, SHORT (z) so it
+  // never overhangs the heel (the old round torus poked 2.6cm out the back) ----
+  const cT = 0.13
+  const collarR = Math.max(footW(cT) * F.U * 0.74, p.legR3 * 1.16)
+  const collar = mesh(new THREE.TorusGeometry(collarR, p.footH * 0.11, 8, 18), M.shoe, 'ShoeCollar')
   collar.rotation.x = Math.PI / 2
-  collar.scale.set(1.05, 1.06, 1) // mild oval along world z (local y pre-rotation)
-  collar.position.set(0, shoeTop(cT, p) - p.footH * 0.055, zOf(cT))
+  collar.scale.set(1.04, 0.42, 1) // oval: long axis across the foot (x), short along z
+  collar.position.set(0, shoeTop(cT, p) + p.footH * 0.03, zOf(cT))
   foot.push(collar)
 
-  // ---- tongue on the instep + 3 lace bars down the vamp (children of Foot) ----
-  const tongue = mesh(new THREE.SphereGeometry(F.U * 0.55, 10, 8), M.shoe, 'ShoeTongue')
-  tongue.scale.set(1.0, 0.36, 1.5)
-  tongue.position.set(0, shoeTop(0.3, p) - p.footH * 0.01, zOf(0.3) + 0.012)
-  foot.push(tongue)
+  // ---- tongue (v102r3): oval pad standing IN the collar opening, tilted back
+  // along the instep. KID-ONLY: the adult opening is hidden under the pant
+  // hem + ankle filler, where a tongue just floats detached (QA r15) ----
+  const kidShoe = p === CHILD
+  if (kidShoe) {
+    const tongue = mesh(new THREE.CapsuleGeometry(F.U * 0.4, p.footH * 0.4, 4, 10), M.shoe, 'ShoeTongue')
+    tongue.rotation.x = Math.PI / 2 - 0.5
+    tongue.scale.set(1.08, 1, 0.34)
+    tongue.position.set(0, shoeTop(0.2, p) + p.footH * 0.2, zOf(0.22))
+    foot.push(tongue)
+  }
+  // ---- 3 lace bars ACROSS the vamp. Half-embedded so no gap shows; pushed
+  // past the ankle-filler's z-shadow on the adult last ----
   const laceParts: THREE.BufferGeometry[] = []
-  for (const lt of [0.22, 0.3, 0.38]) {
-    const bar = new THREE.CapsuleGeometry(p.footH * 0.04, footW(lt) * F.U * 2.1, 3, 6)
+  for (const lt of kidShoe ? [0.26, 0.35, 0.44] : [0.45, 0.54, 0.62]) {
+    const bar = new THREE.CapsuleGeometry(p.footH * 0.065, F.U * 0.95, 3, 6)
     bar.rotateZ(Math.PI / 2)
-    bar.translate(0, shoeTop(lt, p) + p.footH * 0.008, zOf(lt)) // half-sunk: reads as lace grooves
+    bar.translate(0, shoeTop(lt, p) + p.footH * 0.05, zOf(lt))
     laceParts.push(bar)
   }
   const laceMesh = mesh(mergeGeoms(laceParts), M.sole, 'ShoeLace')
