@@ -84,11 +84,41 @@ export const CLIP_FALLBACK: Record<LocoState, string[]> = {
 const WALK_DESIGN_SPEED = 4.4
 const RUN_DESIGN_SPEED = 7.6
 
+/**
+ * Destination-driven crossfade table (UE animation-system practice): each entry
+ * is the blend time used when FADING INTO that state. Locomotion blends are
+ * longer & smooth; air/impact transitions are short so jumps, falls and hits
+ * read instantly; capture/emote states ease gently. Seconds.
+ */
+const FADE_INTO: Record<LocoState, number> = {
+  idle: 0.2,
+  walk: 0.15,
+  run: 0.15,
+  jump: 0.1,
+  doubleJump: 0.1,
+  fall: 0.08,
+  land: 0.05,
+  slide: 0.1,
+  hit: 0.08,
+  detained: 0.25,
+  recover: 0.2,
+  celebrate: 0.25,
+  throw: 0.12,
+  heal: 0.25,
+}
+
+/** Cycling gait states whose stride phase should hand over seamlessly. */
+const CYCLING: ReadonlySet<string> = new Set(['walk', 'run'])
+
 export class GLBAnimDriver {
   private current: THREE.AnimationAction | null = null
   private currentState: LocoState | null = null
   private currentClipName: string | null = null
   private lodAccum = 0
+  /** Smoothed stride rate actually applied to the active action. */
+  private timeScale = 1
+  /** Target stride rate from the latest play() — approached critically-damped. */
+  private timeScaleTarget = 1
   /** Distance-driven LOD: >0 throttles mixer updates to ~15Hz (distant characters). */
   lodInterval = 0
 
@@ -108,17 +138,18 @@ export class GLBAnimDriver {
    * anything else → crossfade over `fade` seconds. Missing clips walk the
    * fallback chain; a model with no clips at all simply never animates.
    */
-  play(state: LocoState, ctx: AnimContext, fade = 0.16) {
+  play(state: LocoState, ctx: AnimContext, fade?: number) {
     const clipName = this.resolveClip(state) ?? this.resolveClip('idle')
     if (!clipName) return
     const next = this.mixer.clipAction(this.clips.get(clipName)!)
     if (!next) return
 
-    // retime locomotion to actual speed
-    let timeScale = 1
-    if (state === 'walk') timeScale = THREE.MathUtils.clamp(ctx.hSpeed / WALK_DESIGN_SPEED, 0.72, 1.6)
-    else if (state === 'run') timeScale = THREE.MathUtils.clamp(ctx.hSpeed / RUN_DESIGN_SPEED, 0.8, 1.45)
-    next.setEffectiveTimeScale(timeScale)
+    // retime locomotion toward actual speed — stored as a TARGET and approached
+    // smoothly in update() so speed changes (boost pickups, landings) never pop
+    // the stride rate. The smoothed value is applied to the new action below.
+    if (state === 'walk') this.timeScaleTarget = THREE.MathUtils.clamp(ctx.hSpeed / WALK_DESIGN_SPEED, 0.72, 1.6)
+    else if (state === 'run') this.timeScaleTarget = THREE.MathUtils.clamp(ctx.hSpeed / RUN_DESIGN_SPEED, 0.8, 1.45)
+    else this.timeScaleTarget = 1
 
     if (this.currentState === state && this.current === next) {
       // same state → keep whatever is playing (looping clips continue,
@@ -126,12 +157,23 @@ export class GLBAnimDriver {
       return
     }
 
+    const dur = fade ?? FADE_INTO[state] ?? 0.16
     const once = ONE_SHOT.has(state)
     if (once) next.setLoop(THREE.LoopOnce, 1)
     next.clampWhenFinished = once
     next.reset()
+    // stride-phase handover (UE blend-space practice): walk↔run are the same
+    // gait at different cadences — starting the incoming clip at t=0 re-plants
+    // the foot mid-swing (the classic clip-transition foot skip). Carry the
+    // normalized cycle phase across instead.
+    if (this.current && this.current !== next && CYCLING.has(state) && this.currentState && CYCLING.has(this.currentState)) {
+      const from = this.current.getClip().duration
+      const to = next.getClip().duration
+      if (from > 0.001 && to > 0.001) next.time = ((this.current.time % from) / from) * to
+    }
+    next.setEffectiveTimeScale(this.timeScale)
     if (this.current && this.current !== next) {
-      next.crossFadeFrom(this.current, fade, false)
+      next.crossFadeFrom(this.current, dur, false)
     }
     next.play()
     this.current = next
@@ -147,6 +189,8 @@ export class GLBAnimDriver {
     this.current?.stop()
     this.current = null
     this.currentState = null
+    this.timeScale = 1
+    this.timeScaleTarget = 1
     this.play(state, { grounded: true, vy: 0, hSpeed: 0, sliding: false, dazed: false, detained: false, landTimer: 0, recoverTimer: 0, jumpsUsed: 0 }, 0)
   }
 
@@ -157,6 +201,12 @@ export class GLBAnimDriver {
       if (this.lodAccum < this.lodInterval) return
       dt = this.lodAccum
       this.lodAccum = 0
+    }
+    // critically-damped stride-rate approach (≈0.2s to settle, no overshoot):
+    // speed ups/downs read as acceleration, not a step-rate glitch
+    if (Math.abs(this.timeScale - this.timeScaleTarget) > 0.001) {
+      this.timeScale += (this.timeScaleTarget - this.timeScale) * Math.min(1, dt * 9)
+      this.current?.setEffectiveTimeScale(this.timeScale)
     }
     this.mixer.update(dt)
   }

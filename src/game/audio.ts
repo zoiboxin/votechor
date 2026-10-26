@@ -30,6 +30,17 @@ class AudioManagerImpl {
   volumes = { master: 0.8, music: 0.5, sfx: 0.9 }
   private started = false
 
+  // ---------- footfall voice concurrency (UE audio practice) ----------
+  // One shared budget per footstep FAMILY: a max of simultaneous voices, a
+  // minimum retrigger gap, and oldest-steal with a short release fade. A
+  // marching crowd of 100 then sounds like a march, not a machine gun, and
+  // the local player's own steps can never be drowned out by bot spam.
+  private static STEP_MAX_VOICES = 4
+  private static STEP_RETRIGGER_S = 0.05
+  private static STEP_VOICE_TTL_S = 0.35
+  private stepVoices: { g: GainNode; at: number }[] = []
+  private lastStepAt = -1
+
   init() {
     if (this.ctx) return
     try {
@@ -182,6 +193,33 @@ class AudioManagerImpl {
     this.playDest = null
   }
 
+  /**
+   * Footstep voice-budget gate (concurrency + retrigger). Returns the per-voice
+   * gain node every footfall component must route through, or null = skip this
+   * step entirely (retrigger window). When the pool is full the OLDEST voice is
+   * stolen with a ~0.08s release fade (no click). Works for both the local
+   * player (straight bus) and spatial remotes (playAt chain) — the budget is
+   * deliberately global so 100 marching bots can't bury the mix.
+   */
+  private stepVoiceBudget(t: number): GainNode | null {
+    if (!this.ctx) return null
+    // retire finished voices (step tails are well under the TTL)
+    if (this.stepVoices.length > 0 && t - this.stepVoices[0].at > AudioManagerImpl.STEP_VOICE_TTL_S) {
+      this.stepVoices = this.stepVoices.filter((v) => t - v.at <= AudioManagerImpl.STEP_VOICE_TTL_S)
+    }
+    if (this.lastStepAt >= 0 && t - this.lastStepAt < AudioManagerImpl.STEP_RETRIGGER_S) return null
+    this.lastStepAt = t
+    const g = this.ctx.createGain()
+    g.connect(this.out())
+    if (this.stepVoices.length >= AudioManagerImpl.STEP_MAX_VOICES) {
+      const victim = this.stepVoices.shift()!
+      victim.g.gain.cancelScheduledValues(t)
+      victim.g.gain.setTargetAtTime(0.0001, t, 0.03) // ≈0.08s fade, no click
+    }
+    this.stepVoices.push({ g, at: t })
+    return g
+  }
+
   private emit(name: SfxName, v: number) {
     if (!this.ctx || !this.sfxGain) return
     const t = this.ctx.currentTime
@@ -190,19 +228,24 @@ class AudioManagerImpl {
         // walk footfall anatomy: heel-weight thud + rubber-sole scuff + short
         // toe flick. Pitch/brightness randomized per step so steps never loop.
         // v45: peaks raised ~65% — players reported walking as nearly silent.
+        // v101: routed through the shared footfall voice budget (see above).
+        const vg = this.stepVoiceBudget(t)
+        if (!vg) break
         const f = 0.9 + Math.random() * 0.2
-        this.osc('sine', (78 + Math.random() * 14) * f, t, 0.055, 0.2 * v)
-        this.noise(0.05, t, 0.28 * v, (850 + Math.random() * 350) * f, 1.1)
-        this.noise(0.035, t + 0.05, 0.13 * v, 1400 * f, 1.4)
+        this.osc('sine', (78 + Math.random() * 14) * f, t, 0.055, 0.2 * v, undefined, vg)
+        this.noise(0.05, t, 0.28 * v, (850 + Math.random() * 350) * f, 1.1, vg)
+        this.noise(0.035, t + 0.05, 0.13 * v, 1400 * f, 1.4, vg)
         break
       }
       case 'footstepRun': {
         // run footfall: heavier full-weight slam, bigger scuff, audible sole
         // slap a beat after contact — reads as real ground strikes, louder
+        const vg = this.stepVoiceBudget(t)
+        if (!vg) break
         const f = 0.9 + Math.random() * 0.2
-        this.osc('sine', (72 + Math.random() * 12) * f, t, 0.07, 0.3 * v)
-        this.noise(0.06, t, 0.4 * v, (750 + Math.random() * 400) * f, 1)
-        this.noise(0.04, t + 0.055, 0.16 * v, 1700 * f, 1.3)
+        this.osc('sine', (72 + Math.random() * 12) * f, t, 0.07, 0.3 * v, undefined, vg)
+        this.noise(0.06, t, 0.4 * v, (750 + Math.random() * 400) * f, 1, vg)
+        this.noise(0.04, t + 0.055, 0.16 * v, 1700 * f, 1.3, vg)
         break
       }
       case 'jump': {

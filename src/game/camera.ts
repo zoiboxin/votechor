@@ -12,6 +12,10 @@ export class ThirdPersonCamera {
   lookAt = new THREE.Vector3()
   shake = 0
   private shakeOffset = new THREE.Vector3()
+  /** Phase accumulator for the layered-sine shake (advances only while shaking). */
+  private shakeT = 0
+  /** 0..1 normalized focus speed (set by the render loop) — pulls the boom back slightly at sprint. */
+  speedNorm = 0
   sensitivityMul = 1
 
   constructor(private camera: THREE.PerspectiveCamera, private physics: PhysicsWorld) {}
@@ -24,8 +28,10 @@ export class ThirdPersonCamera {
     if (!Number.isFinite(target.x + target.y + target.z)) return
     this.yaw -= lookDx
     this.pitch = Math.max(-0.55, Math.min(1.15, this.pitch + lookDy))
-    // smooth distance
-    this.distance += (this.targetDistance - this.distance) * Math.min(1, dt * 8)
+    // smooth distance — photo zoom (targetDistance, wheel-owned) + sprint dolly:
+    // a ~0.5m pull-back at full sprint reads as speed without touching the FOV kick
+    const wantDistance = this.targetDistance + this.speedNorm * 0.55
+    this.distance += (wantDistance - this.distance) * Math.min(1, dt * 8)
 
     const focus = new THREE.Vector3(target.x, target.y + this.offset.y, target.z)
 
@@ -55,11 +61,19 @@ export class ThirdPersonCamera {
     this.pos.lerp(desired, lag)
     this.lookAt.lerp(focus, Math.min(1, dt * 14))
 
-    // shake
+    // shake — layered incommensurate sines (pseudo-Perlin): raw per-frame random
+    // reads as a glitch; slow layered wobble reads as a camera being buffeted
+    // (UE camera-shake practice: noise pattern + blend envelope). The amplitude
+    // envelope stays the existing linear decay; the noise layers ride on it.
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt * 2.4)
-      const s = this.shake * 0.22
-      this.shakeOffset.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s)
+      this.shakeT += dt * 13
+      const s = this.shake * 0.24
+      this.shakeOffset.set(
+        (Math.sin(this.shakeT) * 0.55 + Math.sin(this.shakeT * 2.7 + 1.3) * 0.45) * s,
+        (Math.sin(this.shakeT * 1.7 + 0.6) * 0.6 + Math.sin(this.shakeT * 3.1 + 2.2) * 0.4) * s,
+        (Math.sin(this.shakeT * 1.3 + 1.9) * 0.5 + Math.sin(this.shakeT * 2.3 + 0.4) * 0.5) * s,
+      )
     } else this.shakeOffset.set(0, 0, 0)
 
     this.camera.position.copy(this.pos).add(this.shakeOffset)

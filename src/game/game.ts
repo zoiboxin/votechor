@@ -71,6 +71,14 @@ interface RemoteEntry {
   cosmetics?: Record<string, string | boolean>
   lastSeen: number
   animAcc: number
+  // ---- v101 dead reckoning + remote footfalls (UE movement-replication practice) ----
+  /** Estimated horizontal velocity from consecutive server samples (m/s). */
+  vx: number
+  vz: number
+  /** Epoch ms when the current target arrived (drives the extrapolation window). */
+  lastTargetAt: number
+  /** Stride phase for spatial footfalls (mirrors the local controller's model). */
+  footPhase: number
 }
 
 export const QUICK_MESSAGES = [
@@ -1177,7 +1185,28 @@ export class Game {
       // rogue-snapshot shield: a non-finite remote transform would poison this
       // client's interpolation, name tags and squad rally — drop the sample.
       if (!Number.isFinite(p.x + p.y + p.z + p.ry)) continue
+      // dead-reckoning velocity: measured from the PREVIOUS target, 50/50
+      // smoothed, clamped to the fastest legit sprint (9.2 × 1.45 boost ≈ 13.3).
+      // Teleport-sized jumps (arrest release, respawn) zero the estimate so a
+      // relocation never reads as a burst of speed.
+      if (r.lastTargetAt > 0) {
+        const dtS = (now - r.lastTargetAt) / 1000
+        if (dtS > 0.016 && dtS < 0.5) {
+          const moved = Math.hypot(p.x - r.target.x, p.z - r.target.z)
+          if (moved > 8) { r.vx = 0; r.vz = 0 }
+          else {
+            const cap = 13.5
+            let ivx = (p.x - r.target.x) / dtS
+            let ivz = (p.z - r.target.z) / dtS
+            const mag = Math.hypot(ivx, ivz)
+            if (mag > cap) { ivx *= cap / mag; ivz *= cap / mag }
+            r.vx = (r.vx + ivx) * 0.5
+            r.vz = (r.vz + ivz) * 0.5
+          }
+        }
+      }
       r.target = { x: p.x, y: p.y, z: p.z, ry: p.ry }
+      r.lastTargetAt = now
       r.anim = p.anim
       r.health = p.health
       r.detained = p.detained
@@ -1419,7 +1448,7 @@ export class Game {
     // data-only entry — the rig budget pass (ensureRemoteRigs) attaches real characters
     const cosmetics = p.cosmetics ?? this.pendingCosmetics.get(p.id)
     const role = p.role ?? this.pendingRoles.get(p.id)
-    const r: RemoteEntry = { rig: null as import('./character').CharacterRig | null, glb: null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, role, cosmetics, lastSeen: Date.now(), animAcc: 0 }
+    const r: RemoteEntry = { rig: null as import('./character').CharacterRig | null, glb: null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, role, cosmetics, lastSeen: Date.now(), animAcc: 0, vx: 0, vz: 0, lastTargetAt: Date.now(), footPhase: 0 }
     this.remotePlayers.set(p.id, r)
     return r
   }
@@ -3044,18 +3073,44 @@ export class Game {
     // boss intro cinematic — orbit the boss once on activation
     this.updateBossCinematic(dt)
     // remote player interpolation (data-only bots have no rig — their target stays fresh)
+    const remotesNow = performance.now()
     for (const [, r] of this.remotePlayers) {
+      // ---- v101 remote footfalls + dead reckoning (no rig required: a data-only
+      // bot within earshot should march audibly too) ----
+      // extrapolation window: dead-reckon the sample forward up to 0.28s so a
+      // 12 Hz packet gap never reads as stutter; corrected on the next sample.
+      const sinceSample = r.lastTargetAt > 0 ? (remotesNow - r.lastTargetAt) / 1000 : 0
+      const ex = Math.max(0, Math.min(0.28, sinceSample))
+      const stepping = (r.anim === 'walk' || r.anim === 'run') && !r.detained
+      const estSpeed = Math.min(9.4, Math.hypot(r.vx, r.vz))
+      const rHSpeed = stepping ? estSpeed : 0
+      if (rHSpeed > 1.1) {
+        r.footPhase += dt * rHSpeed * 1.35 // mirrors the local controller's cadence
+        if (r.footPhase >= Math.PI) {
+          r.footPhase -= Math.PI
+          AudioManager.playAt(
+            r.anim === 'run' ? 'footstepRun' : 'footstep',
+            r.target.x, r.target.z,
+            this.player.pos.x, this.player.pos.z, this.camRig.yaw,
+            18, 0.8, // short radius: near footsteps only — the voice budget caps the rest
+          )
+        }
+      } else r.footPhase = 0
       if (!r.rig) continue
       const pos = r.rig.group.position
       // teleports (detention release, rally, reconnect respawn) snap instead of glide
       const jump = Math.hypot(r.target.x - pos.x, r.target.z - pos.z)
       if (jump > 25) pos.set(r.target.x, r.target.y, r.target.z)
-      else pos.lerp(_lerpTarget.set(r.target.x, r.target.y, r.target.z), Math.min(1, dt * 10))
+      else pos.lerp(_lerpTarget.set(r.target.x + r.vx * ex, r.target.y, r.target.z + r.vz * ex), Math.min(1, dt * 10))
       let d = r.target.ry - r.rig.group.rotation.y
       while (d > Math.PI) d -= Math.PI * 2
       while (d < -Math.PI) d += Math.PI * 2
       r.rig.group.rotation.y += d * Math.min(1, dt * 8)
-      const hSpeed = r.anim === 'run' ? 9 : r.anim === 'walk' ? 5 : 0
+      // velocity-calibrated stride (was hardcoded 9/5): the walk/run clips now
+      // retime to what the remote is ACTUALLY doing — the queued "GLB walk-clip
+      // stride calibration" item. Falls back to the old heuristic when the
+      // velocity estimate is still cold (first samples after spawn).
+      const hSpeed = rHSpeed > 0.5 ? rHSpeed : r.anim === 'run' ? 9 : r.anim === 'walk' ? 5 : 0
       // ---- anim LOD: distant rigs (>45m) update their pose at ~15Hz instead of 60Hz ----
       const rDist = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
       let animDt = 0
@@ -3114,6 +3169,10 @@ export class Game {
       this.engine.camera.fov += (targetFov - this.engine.camera.fov) * Math.min(1, dt * 5)
       this.engine.camera.updateProjectionMatrix()
     }
+    // v101 sprint dolly — feed the normalized speed to the camera rig so the
+    // boom eases back ~0.5m at full sprint (UE spring-arm practice; pairs with
+    // the FOV kick above without doubling the effect)
+    this.camRig.speedNorm = Math.max(0, Math.min(1, (hSpeed - MOVE.walkSpeed) / (MOVE.sprintSpeed - MOVE.walkSpeed)))
     // slide dip: the camera sinks toward the road while sliding (lerped both ways)
     const slideTarget = this.player.state === 'sliding' ? 1 : 0
     this.slideAmt += (slideTarget - this.slideAmt) * Math.min(1, dt * 7)
