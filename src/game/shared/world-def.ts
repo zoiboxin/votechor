@@ -654,7 +654,10 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
     { id: 'veh_auto2', kind: 'auto', speed: 6.5, path: [[-190, -286], [190, -286]] },
     { id: 'veh_auto3', kind: 'auto', speed: 6, path: [[-16, -455.2], [-162, -455.2]] },
     { id: 'veh_bus1', kind: 'bus', speed: 6, path: [[0, -300], [0, -415]] },
-    { id: 'veh_cow1', kind: 'cow', speed: 1.2, path: [[-10, -330], [10, -395]] },
+    // task 108 — the old procedural traffic cows (veh_cow1..6) are RETIRED:
+    // the GLB cow/bull/donkey/horse herds (WildlifeSystem, domestic habitat)
+    // now graze the city margins + farm belt, and they FLEE instead of blocking
+    // traffic. The road-hazard HP chip went with them.
     // cross streets A + B carry checkpoint gate pillars at x ±8.5 — roamers stay
     // on their own half (|x| >= 14) and never clip the gates. v66 — extended to
     // the ring roads so traffic reaches the mall district and west colony.
@@ -666,7 +669,6 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
     // car turns off the junction and roams down the grand avenue (U-turn before
     // the boss gate at z -478)
     { id: 'veh_bus2', kind: 'bus', speed: 5.5, path: [[-190, -452], [190, -452]] },
-    { id: 'veh_cow2', kind: 'cow', speed: 1.1, path: [[-96, -44], [-52, -58]] },
     { id: 'veh_car1', kind: 'car', speed: 10.5, path: [[-162, -79.0], [-16, -79.0]] },   // Plaza Cross Rd westbound (lane north of the row-A shopfront corner)
     { id: 'veh_car2', kind: 'car', speed: 9.5, path: [[16, -195.5], [162, -195.5]] },    // Market Exit eastbound
     { id: 'veh_car3', kind: 'car', speed: 9, path: [[-190, -283.5], [190, -283.5]] },    // Avenue Cross Rd westbound — full map
@@ -688,11 +690,6 @@ export function buildWorldDef(mapId: string = 'classic'): WorldDef {
     { id: 'veh_bike6', kind: 'bike', speed: 9, path: [[166, -90], [166, -196]] },       // east ring north shuttle
     { id: 'veh_auto9', kind: 'auto', speed: 6.5, path: [[100, -75.5], [190, -75.5]] },  // Plaza Cross Rd far-east lane
     { id: 'veh_auto10', kind: 'auto', speed: 6.5, path: [[-190, -195.5], [-100, -195.5]] }, // Market Exit far-west lane
-    { id: 'veh_cow3', kind: 'cow', speed: 1.0, path: [[-191, -120], [-185, -158]] },    // west jungle cow
-    { id: 'veh_cow4', kind: 'cow', speed: 1.0, path: [[191, -320], [186, -360]] },      // east jungle cow
-    // v68 — Vanodyan Deep cattle: the trail cow and the river-south grazer
-    { id: 'veh_cow5', kind: 'cow', speed: 1.0, path: [[8, -606], [24, -634]] },         // deep-jungle trail cow
-    { id: 'veh_cow6', kind: 'cow', speed: 1.0, path: [[58, -716], [72, -738]] },        // south-of-river grazing cow
   )
 
   // Street trees lining the avenue sidewalks (zones B+C) — every spot verified

@@ -127,12 +127,12 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
           <ul className="space-y-1 text-[10px] font-semibold leading-snug text-[#1c1a17]/80">
             <li>• Police look where they walk. Break line of sight behind buildings, then breathe.</li>
             <li>• Police batons hurt — when an officer raises his lathi (the wind-up), dodge sideways! A double jump works too.</li>
-            <li>• <b className="font-black text-[#2e6e4e]">Health matters:</b> baton hits (13), traffic (35) and cows (8) all chip your HP. Below 30 HP officers can grab you twice as fast — eat! Collect <b>chai (+10 HP)</b>, <b>samosas (+10)</b>, <b>snacks (+5)</b> and <b>first-aid kits (+50)</b>, then press <b>H</b> to eat the smart one. Out of combat you also slowly recover on your own.</li>
+            <li>• <b className="font-black text-[#2e6e4e]">Health matters:</b> baton hits (13) and traffic (35) chip your HP. Below 30 HP officers can grab you twice as fast — eat! Collect <b>chai (+10 HP)</b>, <b>samosas (+10)</b>, <b>snacks (+5)</b> and <b>first-aid kits (+50)</b>, then press <b>H</b> to eat the smart one. Out of combat you also slowly recover on your own.</li>
             <li>• Press <b className="font-black text-[#2e6e4e]">V</b> to shout or whistle — every patrol nearby comes to check the noise. Perfect for luring cops away from a checkpoint, or straight into your plan.</li>
             <li>• <b className="font-black text-[#8c1f28]">If you get DETAINED, police confiscate ALL your votes &amp; items.</b> The votes are re-hidden in the city and your gear drops right where you were caught — run back (or send a cellmate) to recover it before it vanishes!</li>
             <li>• Searchlights rotate. Watch the rhythm like cricket. Or traffic.</li>
             <li>• Red dots on the minimap are chasing you. Blue dots are merely disappointed in you.</li>
-            <li>• The cow on Grand Avenue is not a bug. Give it the respect it demands.</li>
+            <li>• Cows, bulls, donkeys and horses graze the city margins and the farm belt; foxes and huskies haunt the graveyards; deer, stags and wolves roam the deep jungle. Get too close and they <b className="font-black text-[#2e6e4e]">bolt away</b> — approach slowly if you want a good look.</li>
             <li>• Reviving squadmates gives more XP than letting them think about their choices.</li>
           </ul>
         </section>

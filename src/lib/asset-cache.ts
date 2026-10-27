@@ -49,6 +49,16 @@ export const SMALL_ASSET_URLS = [
   '/models/suit-man.glb',
   '/models/swat-man.glb',
   '/models/worker-man.glb',
+  // task 108 — the DOMESTIC wildlife joins the warm-cache offer: the cow/
+  // bull/donkey/horse/shiba herds graze the city margins + farm belt, so
+  // nearly every session crosses the stream gate that loads them (~14 MB).
+  // The graveyard/jungle species (fox/husky/deer/stag/wolf) stay on-demand —
+  // only wild visitors ever pay for those.
+  '/models/cow.glb',
+  '/models/bull.glb',
+  '/models/donkey.glb',
+  '/models/horse.glb',
+  '/models/shiba-inu.glb',
 ] as const
 
 /** The 24 MB textured protester hero — offered as an opt-in second step. */

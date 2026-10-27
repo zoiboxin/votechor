@@ -1,14 +1,23 @@
-// VoteChor wildlife — task 107: the 10 GLB animal species from the user's
-// "Characters & Animals" pack live in the Vanodyan Jungle at RANDOM locations
-// every session, plus the pack's four props (3 vehicles + water tower) placed
-// as abandoned jungle landmarks.
+// VoteChor wildlife — task 108: the 10 GLB animal species from the user's
+// "Characters & Animals" pack now live in three HABITATS (per the user's brief):
+//   • DOMESTIC (cow, bull, donkey, horse, shiba-inu) — herds at the city street
+//     margins + the countryside farm belt. These REPLACE the old procedural
+//     traffic cows (world-def veh_cow1..6 and the street-animal cow spots).
+//   • GRAVEYARD (fox, husky) — haunting the Vanodyan Kabristan fence ring and
+//     the three forgotten-grave clusters of the far wild.
+//   • JUNGLE (deer, stag, wolf) — rejection-sampled wild spots, reshuffled every
+//     session.
+// PANIC-FLEE (the core of this task): every beast has a species temperament
+// radius — the moment the player steps inside it, the beast bolts (Gallop
+// clip), keeps RE-AIMING its escape vector while it is still chased (so the
+// player can never corner it), and only settles once the threat is gone.
+// Domestic beasts are habituated (small panic radius, slower flight, leashed
+// to their pasture); wild ones are skittish (big radius, fast, long flight).
+// A spatial panic voice (moo/bark) sells the moment.
 //
-// Design: independent client-side ambience bots — same philosophy as the street
-// animals/birds in animals.ts, but DRIVEN BY THE PACK'S OWN GLB ANIMATION CLIPS
-// (Idle/Idle_2/Idle_Headlow/Walk/Eating/Gallop) through tiny per-beast mixers.
-// No server coupling, no physics coupling (kinematic, ground-sampled). They
-// lazily stream the FIRST time the player approaches the wild (wildness gate),
-// so city-only sessions never pay the ~30 MB download.
+// Design unchanged from task 107: independent client-side ambience bots driven
+// by the pack's own GLB clips through tiny per-beast mixers; no server/physics
+// coupling (kinematic, ground-sampled); lazily streamed on first approach.
 //
 // FACING (v104 binary recipe, verified on every animal file): heads/horns
 // extend +Z, canid tails swing −Z — the pack is natively +Z-facing, which is
@@ -16,8 +25,11 @@
 import * as THREE from 'three'
 import { GRAVEYARD, WORLD_DISC } from './shared/constants'
 import { wildnessAt } from './jungle-ambience'
+import { AudioManager, type SfxName } from './audio'
 import type { GLBAssetManager, GLBAsset, GLBInstance } from './glb'
 import type { PhysicsWorld } from './physics'
+
+type Habitat = 'domestic' | 'graveyard' | 'jungle'
 
 interface BeastDef {
   id: string
@@ -25,19 +37,62 @@ interface BeastDef {
   count: number
   /** wander speed (m/s) — plausibly scaled to species size */
   speed: number
+  habitat: Habitat
+  /** player distance (m) inside which the beast panics and bolts */
+  panicR: number
+  /** flight speed multiplier over `speed` while fleeing */
+  fleeMul: number
+  /** max distance (m) from home the beast may ever stray (panic leash) */
+  leash: number
+  /** spatial voice played when the panic starts (null = silent species) */
+  voice: SfxName | null
 }
 
 const BEASTS: BeastDef[] = [
-  { id: 'deer', url: '/models/deer.glb', count: 4, speed: 1.7 },
-  { id: 'stag', url: '/models/stag.glb', count: 3, speed: 1.5 },
-  { id: 'fox', url: '/models/fox.glb', count: 3, speed: 1.9 },
-  { id: 'wolf', url: '/models/wolf.glb', count: 3, speed: 1.8 },
-  { id: 'husky', url: '/models/husky.glb', count: 2, speed: 1.7 },
-  { id: 'shiba', url: '/models/shiba-inu.glb', count: 3, speed: 1.4 },
-  { id: 'cow', url: '/models/cow.glb', count: 3, speed: 0.9 },
-  { id: 'bull', url: '/models/bull.glb', count: 2, speed: 1.0 },
-  { id: 'donkey', url: '/models/donkey.glb', count: 2, speed: 1.0 },
-  { id: 'horse', url: '/models/horse.glb', count: 2, speed: 1.3 },
+  // ---- DOMESTIC: the old street/traffic cows' replacements — city + farm ----
+  { id: 'cow',    url: '/models/cow.glb',       count: 3, speed: 0.9, habitat: 'domestic',  panicR: 4.6, fleeMul: 2.2, leash: 24, voice: 'moo' },
+  { id: 'bull',   url: '/models/bull.glb',      count: 2, speed: 1.0, habitat: 'domestic',  panicR: 5.0, fleeMul: 2.4, leash: 24, voice: 'moo' },
+  { id: 'donkey', url: '/models/donkey.glb',    count: 2, speed: 1.0, habitat: 'domestic',  panicR: 5.4, fleeMul: 2.4, leash: 24, voice: 'moo' },
+  { id: 'horse',  url: '/models/horse.glb',     count: 2, speed: 1.3, habitat: 'domestic',  panicR: 6.0, fleeMul: 2.8, leash: 26, voice: 'moo' },
+  { id: 'shiba',  url: '/models/shiba-inu.glb', count: 2, speed: 1.4, habitat: 'domestic',  panicR: 6.5, fleeMul: 2.8, leash: 22, voice: 'bark' },
+  // ---- GRAVEYARD: scavengers of the Kabristan + the forgotten clusters ----
+  { id: 'fox',    url: '/models/fox.glb',       count: 3, speed: 1.9, habitat: 'graveyard', panicR: 8.5, fleeMul: 2.9, leash: 30, voice: 'bark' },
+  { id: 'husky',  url: '/models/husky.glb',     count: 2, speed: 1.7, habitat: 'graveyard', panicR: 8.0, fleeMul: 2.9, leash: 30, voice: 'bark' },
+  // ---- JUNGLE: the deep wild, random every session ----
+  { id: 'deer',   url: '/models/deer.glb',      count: 4, speed: 1.7, habitat: 'jungle', panicR: 10.5, fleeMul: 3.0, leash: 40, voice: null },
+  { id: 'stag',   url: '/models/stag.glb',      count: 3, speed: 1.5, habitat: 'jungle', panicR: 10.0, fleeMul: 3.0, leash: 40, voice: null },
+  { id: 'wolf',   url: '/models/wolf.glb',      count: 3, speed: 1.8, habitat: 'jungle', panicR: 9.0,  fleeMul: 3.0, leash: 40, voice: null },
+]
+
+// DOMESTIC herd sites. City pool = the exact street margins the old procedural
+// street animals used (all verified ≥4 m off every vehicle lane by the v66
+// route data); farm pool = the Zone-B countryside field belt that continues the
+// ring roads outward. Each species pops ONE site from the pools (alternating
+// city/farm so both zones are always stocked) and huddles its herd there.
+const CITY_MARGINS: Array<{ x: number; z: number }> = [
+  { x: 10,  z: -400 }, // grand avenue east margin (the classic cow spot)
+  { x: -6,  z: -505 }, // Parliament Plaza north edge
+  { x: 8,   z: -62 },  // plaza side, north of Plaza Cross Rd
+  { x: -7,  z: -188 }, // Market Exit margin
+  { x: 10,  z: -462 }, // Colony Cross Rd east margin
+]
+const FARM_BELT: Array<{ x: number; z: number }> = [
+  { x: 120,  z: -240 }, // east countryside field belt
+  { x: -125, z: -215 }, // west countryside field belt
+  { x: 132,  z: -455 }, // SE countryside by the ring road
+  { x: -132, z: -430 }, // SW countryside
+  { x: 62,   z: -588 }, // south fields before the Vanodyan Deep
+]
+
+// GRAVEYARD sites: the Kabristan itself (beasts scavenge just OUTSIDE the
+// grave ring — r+5..r+16) + the three v71 forgotten-grave clusters of the far
+// wild (NW wing, SE wing, far north). Members round-robin across the sites so
+// every session haunts several graveyards at once.
+const GRAVE_SITES: Array<{ x: number; z: number; r: number }> = [
+  { x: GRAVEYARD.x, z: GRAVEYARD.z, r: GRAVEYARD.r }, // Vanodyan Kabristan
+  { x: -330, z: -100, r: 12 }, // NW forgotten graves
+  { x: 300,  z: -620, r: 12 }, // SE forgotten graves
+  { x: -30,  z: 62,   r: 12 }, // far-north forgotten graves
 ]
 
 const PROPS: Array<{ url: string }> = [
@@ -64,23 +119,52 @@ interface Beast {
   target: { x: number; z: number }
   ry: number
   y: number
-  spookCd: number
+  /** panic re-aim countdown (s) — keeps the escape vector fresh while chased */
+  reevalT: number
+  /** spatial voice cooldown (s) so a long chase does not spam audio nodes */
+  voiceCd: number
 }
 
 interface Prop {
   inst: GLBInstance
 }
 
-function validSpot(x: number, z: number, used: Array<{ x: number; z: number }>, minDist: number, wildMin = 0.35): boolean {
+function inDisc(x: number, z: number, r = 600): boolean {
   const dx = x - WORLD_DISC.cx
   const dz = z - WORLD_DISC.cz
-  if (dx * dx + dz * dz > 600 * 600) return false
-  if (z > 20) return false // the city band keeps its street animals; the wild starts here
-  if (wildnessAt(x, z) < wildMin) return false
+  return dx * dx + dz * dz <= r * r
+}
+
+function nearGraveyard(x: number, z: number, pad = 16): boolean {
   const gx = x - GRAVEYARD.x
   const gz = z - GRAVEYARD.z
-  const gr = GRAVEYARD.r + 16
-  if (gx * gx + gz * gz < gr * gr) return false
+  const gr = GRAVEYARD.r + pad
+  return gx * gx + gz * gz < gr * gr
+}
+
+/** Common hazard exclusions for the anchored habitats (domestic + graveyard):
+ *  inside the disc, off the Kabristan interior, out of the Bhayanak river band
+ *  and the arena exit corridor, and not stacked on a claimed spot. Graveyard
+ *  scavengers pass avoidGraveyard=false — they are SUPPOSED to haunt the
+ *  Kabristan fence ring. */
+function anchoredValid(x: number, z: number, used: Array<{ x: number; z: number }>, minDist: number, avoidGraveyard = true): boolean {
+  if (!inDisc(x, z)) return false
+  if (avoidGraveyard && nearGraveyard(x, z)) return false
+  if (Math.abs(x) < 46 && z < -564) return false // arena exit + south trail head
+  if (Math.abs(x) < 214 && z < -662 && z > -712) return false // river band
+  for (const u of used) {
+    const ux = x - u.x
+    const uz = z - u.z
+    if (ux * ux + uz * uz < minDist * minDist) return false
+  }
+  return true
+}
+
+function validSpot(x: number, z: number, used: Array<{ x: number; z: number }>, minDist: number, wildMin = 0.35): boolean {
+  if (!inDisc(x, z, 600)) return false
+  if (z > 20) return false // the city band keeps its street animals; the wild starts here
+  if (wildnessAt(x, z) < wildMin) return false
+  if (nearGraveyard(x, z)) return false
   for (const u of used) {
     const ux = x - u.x
     const uz = z - u.z
@@ -101,6 +185,15 @@ function pickSpot(used: Array<{ x: number; z: number }>, minDist: number, wildMi
   return null
 }
 
+function shuffled<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 export class WildlifeSystem {
   readonly group = new THREE.Group()
   private mgr: GLBAssetManager
@@ -108,6 +201,9 @@ export class WildlifeSystem {
   private beasts: Beast[] = []
   private props: Prop[] = []
   private used: Array<{ x: number; z: number }> = []
+  private cityPool: Array<{ x: number; z: number }> = []
+  private farmPool: Array<{ x: number; z: number }> = []
+  private gravePool: Array<{ x: number; z: number; r: number }> = []
   private started = false
   private disposed = false
 
@@ -117,39 +213,29 @@ export class WildlifeSystem {
     this.group.name = 'vc-wildlife'
   }
 
-  /** Idempotent lazy start — the first time the player nears the wild, the
-   *  pack streams in and beasts spawn at random jungle spots. */
+  /** Idempotent lazy start — task 108: the domestic herds live AT the city
+   *  margins now, so the old wildness-only gate would never open for a city
+   *  session. Start once the player leaves the spawn plaza (0, −8) by 65 m —
+   *  every real match does within its first minute — or wanders into the wild. */
   ensureStarted(px: number, pz: number): void {
     if (this.started || this.disposed) return
-    if (wildnessAt(px, pz) < 0.18) return
+    if (wildnessAt(px, pz) < 0.18 && Math.hypot(px, pz + 8) < 65) return
     this.started = true
     void this.build()
   }
 
   private async build(): Promise<void> {
+    // per-session habitat pools (reshuffled every build)
+    this.cityPool = shuffled(CITY_MARGINS)
+    this.farmPool = shuffled(FARM_BELT)
+    this.gravePool = shuffled(GRAVE_SITES)
     for (const def of BEASTS) {
       if (this.disposed) return
       const asset = await this.mgr.load(def.url)
       if (!asset) continue // loader already logged; this species just stays home
-      let last: { x: number; z: number } | null = null
-      for (let n = 0; n < def.count; n++) {
-        if (this.disposed) return
-        // HERD clustering: the first member rejection-samples a fresh wild spot;
-        // later members huddle near the previous one (natural herds AND the
-        // jungle actually reads alive when a player finds one group)
-        let spot: { x: number; z: number } | null = null
-        if (last && Math.random() < 0.65) {
-          for (let t = 0; t < 12 && !spot; t++) {
-            const x = last.x + (Math.random() * 2 - 1) * 7
-            const z = last.z + (Math.random() * 2 - 1) * 7
-            if (validSpot(x, z, this.used, 3)) spot = { x, z }
-          }
-        }
-        if (!spot) spot = pickSpot(this.used, 14)
-        if (!spot) break
-        last = spot
-        this.spawnBeast(def, asset, spot)
-      }
+      if (def.habitat === 'domestic') this.spawnDomestic(def, asset)
+      else if (def.habitat === 'graveyard') this.spawnGraveyard(def, asset)
+      else this.spawnJungle(def, asset)
     }
     // abandoned landmarks — bigger spacing so they read as intentional set pieces
     for (const p of PROPS) {
@@ -169,10 +255,86 @@ export class WildlifeSystem {
     }
   }
 
-  private spawnBeast(def: BeastDef, asset: GLBAsset, spot: { x: number; z: number }): void {
+  /** DOMESTIC herds: alternate the city-margin and farm-belt pools so both
+   *  zones are always stocked, huddling each species' herd at its own site. */
+  private domesticToggle = false
+  private spawnDomestic(def: BeastDef, asset: GLBAsset): void {
+    let pool: Array<{ x: number; z: number }>
+    if (this.cityPool.length && this.farmPool.length) {
+      this.domesticToggle = !this.domesticToggle
+      pool = this.domesticToggle ? this.cityPool : this.farmPool
+    } else {
+      pool = this.cityPool.length ? this.cityPool : this.farmPool
+    }
+    const site = pool.shift()
+    if (!site) return
+    let last: { x: number; z: number } | null = null
+    for (let n = 0; n < def.count; n++) {
+      if (this.disposed) return
+      let spot: { x: number; z: number } | null = null
+      for (let t = 0; t < 14 && !spot; t++) {
+        const base = last ?? site
+        const j = last ? 7 : 4
+        const x = base.x + (Math.random() * 2 - 1) * j
+        const z = base.z + (Math.random() * 2 - 1) * j
+        if (anchoredValid(x, z, this.used, 3)) spot = { x, z }
+      }
+      if (!spot) spot = { x: site.x + (Math.random() * 2 - 1) * 4, z: site.z + (Math.random() * 2 - 1) * 4 }
+      last = spot
+      this.used.push(spot)
+      this.spawnBeast(def, asset, spot, 5 + Math.random() * 4)
+    }
+  }
+
+  /** GRAVEYARD scavengers: members round-robin across the Kabristan + the
+   *  three forgotten clusters — several haunted graveyards every session. */
+  private spawnGraveyard(def: BeastDef, asset: GLBAsset): void {
+    const baseIdx = Math.floor(Math.random() * this.gravePool.length)
+    for (let n = 0; n < def.count; n++) {
+      if (this.disposed) return
+      const site = this.gravePool[(baseIdx + n) % this.gravePool.length] ?? GRAVE_SITES[0]
+      // the Kabristan (r 44): the fence ring r+5..r+16, just outside the graves;
+      // the small forgotten clusters: anywhere in the patch
+      const rMin = site.r > 20 ? site.r + 5 : 2
+      const rMax = site.r > 20 ? site.r + 16 : site.r
+      let spot: { x: number; z: number } | null = null
+      for (let t = 0; t < 14 && !spot; t++) {
+        const a = Math.random() * Math.PI * 2
+        const r = rMin + Math.random() * (rMax - rMin)
+        const x = site.x + Math.cos(a) * r
+        const z = site.z + Math.sin(a) * r
+        if (anchoredValid(x, z, this.used, 3.5, false)) spot = { x, z }
+      }
+      if (!spot) continue // grave site is jammed this session — skip the member
+      this.used.push(spot)
+      this.spawnBeast(def, asset, spot, 7 + Math.random() * 6)
+    }
+  }
+
+  /** JUNGLE wanderers: the task-107 rejection sampling + herd clustering. */
+  private spawnJungle(def: BeastDef, asset: GLBAsset): void {
+    let last: { x: number; z: number } | null = null
+    for (let n = 0; n < def.count; n++) {
+      if (this.disposed) return
+      let spot: { x: number; z: number } | null = null
+      if (last && Math.random() < 0.65) {
+        for (let t = 0; t < 12 && !spot; t++) {
+          const x = last.x + (Math.random() * 2 - 1) * 7
+          const z = last.z + (Math.random() * 2 - 1) * 7
+          if (validSpot(x, z, this.used, 3)) spot = { x, z }
+        }
+      }
+      if (!spot) spot = pickSpot(this.used, 14)
+      if (!spot) break
+      last = spot
+      this.used.push(spot)
+      this.spawnBeast(def, asset, spot, 9 + Math.random() * 12)
+    }
+  }
+
+  private spawnBeast(def: BeastDef, asset: GLBAsset, spot: { x: number; z: number }, wanderR: number): void {
     const inst = this.mgr.instantiate(asset)
     if (!inst) return
-    this.used.push(spot)
     // resolve the species' clip set (names are lowercased by instantiate())
     const clip = (name: string) => inst.clips.get(name) ?? null
     const idles = ['idle', 'idle_2', 'idle_headlow', 'idle_2_headlow']
@@ -189,11 +351,12 @@ export class WildlifeSystem {
       state: 'idle',
       stateT: 2 + Math.random() * 5,
       home: { x: spot.x, z: spot.z },
-      wanderR: 9 + Math.random() * 12,
+      wanderR,
       target: { x: spot.x, z: spot.z },
       ry: Math.random() * Math.PI * 2,
       y: this.physics.groundHeight(spot.x, spot.z, 40),
-      spookCd: 0,
+      reevalT: 0,
+      voiceCd: 0,
     }
     inst.group.position.set(spot.x, beast.y, spot.z)
     inst.group.rotation.y = beast.ry
@@ -218,26 +381,56 @@ export class WildlifeSystem {
     b.target.z = b.home.z + Math.sin(ang) * r
   }
 
-  update(dt: number, player: { x: number; z: number }): void {
+  /** PANIC VECTOR — aim away from the player with a slight random tangent,
+   *  then clamp onto the home leash so a flight can never drag a cow three
+   *  districts away (or a fox off its graveyard). */
+  private retargetFlee(b: Beast, px: number, pz: number): void {
+    const pos = b.inst.group.position
+    const fx = pos.x - px
+    const fz = pos.z - pz
+    const l = Math.max(0.001, Math.hypot(fx, fz))
+    const ang = Math.atan2(fx / l, fz / l) + (Math.random() - 0.5) * 0.7
+    const dist = 14 + Math.random() * 10
+    let tx = pos.x + Math.sin(ang) * dist
+    let tz = pos.z + Math.cos(ang) * dist
+    const hx = tx - b.home.x
+    const hz = tz - b.home.z
+    const hd = Math.hypot(hx, hz)
+    if (hd > b.def.leash) {
+      tx = b.home.x + (hx / hd) * b.def.leash
+      tz = b.home.z + (hz / hd) * b.def.leash
+    }
+    b.target.x = tx
+    b.target.z = tz
+  }
+
+  private voice(b: Beast, px: number, pz: number, yaw: number): void {
+    if (!b.def.voice || b.voiceCd > 0) return
+    b.voiceCd = 2.8 + Math.random() * 2.2
+    AudioManager.playAt(b.def.voice, b.inst.group.position.x, b.inst.group.position.z, px, pz, yaw, 46, 1.0)
+  }
+
+  update(dt: number, player: { x: number; z: number }, yaw = 0): void {
     if (!this.beasts.length) return
     for (const b of this.beasts) {
-      const dx = player.x - b.inst.group.position.x
-      const dz = player.z - b.inst.group.position.z
+      const def = b.def
+      const pos = b.inst.group.position
+      const dx = player.x - pos.x
+      const dz = player.z - pos.z
       const distSq = dx * dx + dz * dz
       const far = distSq > 140 * 140
       const hidden = distSq > 190 * 190
       if (b.inst.group.visible !== !hidden) b.inst.group.visible = !hidden
-      if (b.spookCd > 0) b.spookCd -= dt
+      if (b.voiceCd > 0) b.voiceCd -= dt
 
-      // spook: player stumbles into a beast → short flight away (herbivore energy)
-      if (!far && b.state !== 'flee' && b.gallop && b.spookCd <= 0 && distSq < 5.5 * 5.5) {
+      // ---- PANIC: the player stepped inside the species' comfort radius ----
+      if (b.state !== 'flee' && !far && distSq < def.panicR * def.panicR) {
         b.state = 'flee'
-        b.stateT = 1.5 + Math.random() * 0.9
-        b.spookCd = 9
-        const away = Math.atan2(-dx, -dz) + (Math.random() - 0.5) * 0.6
-        b.target.x = b.inst.group.position.x + Math.sin(away) * 22
-        b.target.z = b.inst.group.position.z + Math.cos(away) * 22
-        this.play(b, b.gallop, 0.18)
+        b.stateT = 2.2
+        b.reevalT = 0
+        this.retargetFlee(b, player.x, player.z)
+        this.play(b, b.gallop ?? b.walk, 0.16)
+        this.voice(b, player.x, player.z, yaw)
       }
 
       b.stateT -= dt
@@ -263,25 +456,47 @@ export class WildlifeSystem {
         }
         case 'walk':
         case 'flee': {
-          const tx = b.target.x - b.inst.group.position.x
-          const tz = b.target.z - b.inst.group.position.z
+          const fleeing = b.state === 'flee'
+          // while still chased, keep the escape vector fresh so the player can
+          // never corner the beast against its leash
+          if (fleeing) {
+            b.reevalT -= dt
+            if (b.reevalT <= 0) {
+              b.reevalT = 0.45
+              if (distSq < (def.panicR + 4) * (def.panicR + 4)) {
+                this.retargetFlee(b, player.x, player.z)
+                b.stateT = Math.max(b.stateT, 1.5)
+              }
+            }
+          }
+          const tx = b.target.x - pos.x
+          const tz = b.target.z - pos.z
           const d = Math.hypot(tx, tz)
-          const speed = b.state === 'flee' ? b.def.speed * 2.6 : b.def.speed
-          const arrive = b.state === 'flee' ? 0.6 : 0.5
-          if (d < arrive || b.stateT <= 0) {
-            b.state = 'idle'
-            b.stateT = 2.5 + Math.random() * 5
-            this.play(b, b.idles[0] ?? null)
+          const speed = fleeing ? def.speed * def.fleeMul : def.speed
+          const arrive = fleeing ? 0.6 : 0.5
+          const safe = distSq > (def.panicR + 7) * (def.panicR + 7)
+          const arrived = d < arrive
+          if (arrived || (!fleeing && b.stateT <= 0) || (fleeing && b.stateT <= 0 && safe)) {
+            if (fleeing && !safe) {
+              // cornered at the leash edge with the player still close — bolt again
+              this.retargetFlee(b, player.x, player.z)
+              b.stateT = 1.5 + Math.random()
+              this.voice(b, player.x, player.z, yaw)
+            } else {
+              b.state = 'idle'
+              b.stateT = 2.5 + Math.random() * 5
+              this.play(b, b.idles[0] ?? null)
+            }
           } else {
             const step = Math.min(speed * dt, d)
-            const nx = b.inst.group.position.x + (tx / d) * step
-            const nz = b.inst.group.position.z + (tz / d) * step
+            const nx = pos.x + (tx / d) * step
+            const nz = pos.z + (tz / d) * step
             // heading: the pack faces +Z, same convention as the players
             const want = Math.atan2(tx, tz)
             let dr = want - b.ry
             while (dr > Math.PI) dr -= Math.PI * 2
             while (dr < -Math.PI) dr += Math.PI * 2
-            b.ry += dr * Math.min(1, dt * 5)
+            b.ry += dr * Math.min(1, dt * (fleeing ? 7 : 5))
             b.inst.group.rotation.y = b.ry
             b.inst.group.position.set(nx, this.physics.groundHeight(nx, nz, 40), nz)
           }
@@ -308,5 +523,8 @@ export class WildlifeSystem {
     this.beasts = []
     this.props = []
     this.used = []
+    this.cityPool = []
+    this.farmPool = []
+    this.gravePool = []
   }
 }
