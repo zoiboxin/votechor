@@ -1,5 +1,14 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 @import "tw-animate-css";
+
+/* task 100 — restrict the Tailwind v4 source scan: automatic detection walks the
+ * whole project tree and OOMs in this sandbox (68 MB user uploads, 24 MB GLBs,
+ * 63 MB turbopack cache — the scanner's traversal spikes past 3 GB RSS and the
+ * kernel kills the PostCSS loader, which surfaced as a Turbopack "Failed to
+ * write app endpoint /page" panic + GET / 500). source(none) + an explicit
+ * @source scan ONLY src/ — every class in the game lives there, so utilities
+ * resolve exactly as before, minus the pathological traversal. */
+@source "../../src";
 
 @custom-variant dark (&:is(.dark *));
 

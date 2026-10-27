@@ -482,6 +482,14 @@ export const BODY_CATALOG: CosmeticItem[] = [
     desc: 'Kid-proportioned human — big head, shorts, big sneaker energy.',
     unlock: { type: 'free' },
   },
+  {
+    id: 'adventurer',
+    kind: 'body',
+    label: 'Adventurer',
+    emoji: '🎒',
+    desc: 'Imported rigged explorer — baked hair, boots & satchel, 24 pro animations.',
+    unlock: { type: 'free' },
+  },
 ]
 
 const CATALOGS: Record<CosmeticKind, CosmeticItem[]> = {

@@ -55,3 +55,6 @@ server.log
 # agent tool artifacts (local-only)
 tool-results/
 .next-qa
+
+# user uploads (scratch space — huge binaries, never ship or scan)
+/upload/

@@ -93,7 +93,7 @@ export default function CookieBanner() {
                   </p>
                   <p className="mt-1 text-xs font-medium leading-relaxed text-[#1c1a17]/75">
                     No tracking cookies here — with one tap VoteChor stores its 3D character
-                    models (~0.8 MB) in your browser&apos;s local cache. Nothing leaves your
+                    models (~5 MB) in your browser&apos;s local cache. Nothing leaves your
                     device; the game just loads instantly next time and saves your data.
                   </p>
                   <div className="mt-3 flex flex-wrap items-center gap-2">

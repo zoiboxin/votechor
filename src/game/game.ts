@@ -316,6 +316,7 @@ export class Game {
     void this.glbMgr.load('/models/votechor-human-male.glb')
     void this.glbMgr.load('/models/votechor-human-female.glb')
     void this.glbMgr.load('/models/votechor-human-child.glb')
+    void this.glbMgr.load('/models/adventurer.glb')
     this.engine = new Engine(canvas)
     // lightning → white HUD flash + delayed thunder roll
     this.engine.sky.onLightning = () => {

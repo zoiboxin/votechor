@@ -157,7 +157,11 @@ export class GLBAssetManager {
       const group = (asset.skinned ? skeletonClone(asset.scene) : asset.scene.clone(true)) as THREE.Group
       const mixer = new THREE.AnimationMixer(group)
       const clips = new Map<string, THREE.AnimationClip>()
-      for (const c of asset.animations) if (c && typeof c.name === 'string') clips.set(c.name, c)
+      // clip names are lowercased into the lookup: the animation driver's fallback
+      // chains are lowercase by convention, so imported packs (Adventurer 'Idle',
+      // 'Walk', 'Run'…) play through the exact same resolveClip path as the
+      // in-house exports (which are already lowercase — idempotent for them)
+      for (const c of asset.animations) if (c && typeof c.name === 'string') clips.set(c.name.toLowerCase(), c)
       return { group, mixer, clips }
     } catch {
       return null

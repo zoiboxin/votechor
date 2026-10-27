@@ -17,7 +17,7 @@ const CACHE_PREFIX = 'vc-assets-'
 
 export const cacheName = () => `${CACHE_PREFIX}${VC_BUILD}`
 
-/** The small character models (~1.9 MB total) — offered by the banner. */
+/** The small character models (~5 MB total) — offered by the banner. */
 export const SMALL_ASSET_URLS = [
   '/models/votechor-kid.glb',
   '/models/votechor-female.glb',
@@ -26,6 +26,7 @@ export const SMALL_ASSET_URLS = [
   '/models/votechor-human-male.glb',
   '/models/votechor-human-female.glb',
   '/models/votechor-human-child.glb',
+  '/models/adventurer.glb',
 ] as const
 
 /** The 24 MB textured protester hero — offered as an opt-in second step. */

@@ -62,20 +62,24 @@ export function mapToAnimName(s: LocoState): AnimName {
 /** States that play once and hold (driver returns to locomotion when ctx changes). */
 const ONE_SHOT: ReadonlySet<string> = new Set(['land', 'hit', 'recover', 'throw', 'heal', 'jump', 'doubleJump'])
 
-/** Fallback chains — the driver plays the FIRST clip the model actually has. */
+/** Fallback chains — the driver plays the FIRST clip the model actually has.
+ *  Clip names are LOWERCASE by convention: GLBAssetManager.instantiate() lowercases
+ *  every loaded clip name, so imported packs (e.g. the Adventurer's 'Idle'/'Walk')
+ *  resolve through the same chains as the in-house exports. Extra tails only ever
+ *  fire on models that carry those clips — in-house assets resolve earlier entries. */
 export const CLIP_FALLBACK: Record<LocoState, string[]> = {
   idle: ['idle'],
   walk: ['walk'],
   run: ['run'],
   jump: ['jump'],
-  doubleJump: ['doubleJump', 'jump'],
+  doubleJump: ['doublejump', 'jump', 'roll'],
   fall: ['fall', 'jump', 'idle'],
   land: ['land', 'recover', 'idle'],
   slide: ['slide'],
-  hit: ['hit', 'dazed', 'idle'],
+  hit: ['hit', 'dazed', 'hitrecieve', 'hitrecieve_2'],
   detained: ['detained', 'idle'],
   recover: ['recover', 'idle'],
-  celebrate: ['celebrate'],
+  celebrate: ['celebrate', 'wave'],
   throw: ['throw'],
   heal: ['heal'],
 }

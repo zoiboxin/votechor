@@ -63,8 +63,9 @@ export interface AvatarLook {
  *  - 'kid'        the Runner Kid mascot GLB (fixed brand outfit, no wardrobe)
  *  - 'human'      professional SKINNED human, gender-matching (wardrobe pipeline)
  *  - 'human-child' age-appropriate child variant of the human system
+ *  - 'adventurer' imported rigged explorer GLB (baked outfit, 24 pro clips)
  */
-export type BodyModel = 'classic' | 'protester' | 'kid' | 'human' | 'human-child'
+export type BodyModel = 'classic' | 'protester' | 'kid' | 'human' | 'human-child' | 'adventurer'
 
 export const KID_MODEL_URL = '/models/votechor-kid.glb'
 /** The kid is authored ~1.42 m (young protagonist). The cast renders 1.5–1.96 m
@@ -79,13 +80,14 @@ export const HUMAN_CHILD_SCALE = 1.28
 /** Safe read of cosmetics.body → BodyModel (default 'classic'; unknown = classic). */
 export function bodyModelOf(c: unknown): BodyModel {
   const v = (typeof c === 'object' && c !== null ? (c as Record<string, unknown>).body : undefined)
-  return v === 'protester' || v === 'kid' || v === 'human' || v === 'human-child' ? v : 'classic'
+  return v === 'protester' || v === 'kid' || v === 'human' || v === 'human-child' || v === 'adventurer' ? v : 'classic'
 }
 
 /** GLB url for a body model + gender (protester/human families are gender-split).
  *  'human' picks the SKINNED professional system by gender; 'human-child' is one asset. */
 export function resolveGlbUrl(model: BodyModel, gender: 'male' | 'female'): string | null {
   if (model === 'kid') return KID_MODEL_URL
+  if (model === 'adventurer') return '/models/adventurer.glb'
   if (model === 'human') return gender === 'female' ? '/models/votechor-human-female.glb' : '/models/votechor-human-male.glb'
   if (model === 'human-child') return '/models/votechor-human-child.glb'
   if (model === 'protester') return gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
@@ -221,13 +223,24 @@ function disposeObject(root: THREE.Object3D) {
   })
 }
 
-function tintGroup(group: THREE.Object3D, pal: AvatarPalette) {
+/** task 100 — third tint path: MATERIAL-name → palette key, for imported GLBs whose
+ *  meshes carry generic exporter names (Cube063…). Scoped per-model so existing
+ *  families are untouched: only the adventurer's bare-skin material personalizes. */
+const ADVENTURER_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'skin' }
+
+function tintGroup(group: THREE.Object3D, pal: AvatarPalette, materialMap?: Record<string, keyof AvatarPalette>) {
   group.traverse((o) => {
     const m = o as THREE.Mesh
     if (!m.isMesh || typeof m.name !== 'string') return
     const solidKey = RIGGED_MAP[m.name]
     const tex = TEXTURED_MAP[m.name]
-    if (!solidKey && !tex) return
+    let matKey: keyof AvatarPalette | undefined
+    if (!solidKey && !tex && materialMap) {
+      const mm = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material | undefined
+      const mName = mm && (mm as THREE.Material).name
+      if (mName) matKey = materialMap[mName]
+    }
+    if (!solidKey && !tex && !matKey) return
     const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial | undefined
     if (!mat || !(mat as THREE.Material).isMaterial) return
     let base = pristine.get(m)
@@ -238,8 +251,10 @@ function tintGroup(group: THREE.Object3D, pal: AvatarPalette) {
       ;(m.material as THREE.Material).dispose() // drop the previous tint clone
     }
     const clone = base.clone() as THREE.MeshStandardMaterial
-    const target = new THREE.Color(pal[solidKey ?? tex.key] as string)
-    if (solidKey) {
+    const target = new THREE.Color(pal[(solidKey ?? tex?.key ?? matKey)!] as string)
+    if (solidKey || matKey) {
+      // solid REPLACE — both the rigged family and the adventurer's materials are
+      // plain colors in the same linear working space, no baked reference needed
       clone.color.copy(target)
     } else {
       // luminance-normalized multiply: factor = target / bakedRef (per channel,
@@ -579,6 +594,18 @@ export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook, model: 
   for (const d of doomed) { d.parent?.remove(d); disposeObject(d) }
 
   if (model === 'kid') return // fixed outfit — tint/scale/attachments are baked into the asset
+
+  if (model === 'adventurer') {
+    // task 100 — the Adventurer ships fully dressed (baked hair, shirt, boots,
+    // satchel): no bone attachments. Only the skin tone personalizes, plus the
+    // FACING FIX: the pack models +Z while the VoteChor cast faces −Z, so the
+    // asset's top-level nodes are yawed π (group.rotation.y is overwritten with
+    // the gameplay heading every frame — the flip must live on an inner node;
+    // absolute set → idempotent across re-styles).
+    tintGroup(group, look.palette, ADVENTURER_MATERIAL_MAP)
+    for (const child of group.children) child.rotation.y = Math.PI
+    return
+  }
 
   // 1. tint (normalized multiply on the textured family, solid replace on the rigged one)
   tintGroup(group, look.palette)
