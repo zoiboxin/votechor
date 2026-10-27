@@ -2659,3 +2659,30 @@ Stage Summary:
 - v104: adventurer facing fixed at the root cause (removed inverted flip; pack is +Z-native like every other character). Remote players inherit the fix via the same applyAvatarLook path.
 - Known-environment notes from the QA run: OFFLINE badge + 0 FPS readings are the sandbox's game-server/headless limitations, unrelated to this fix.
 - Files touched: src/game/avatar-look.ts (π flip removed + proof comment), src/lib/build-version.ts (v104).
+
+---
+Task ID: 106
+Agent: Z.ai Code (main)
+Task: Add Beach character (user-uploaded Beach.glb) + strafe/kick/punch/roll/death animation system with keybinds
+
+Work Log:
+- Inspected upload/Beach.glb (2.6MB): same pack family as the Adventurer (identical __fit → Scene → CharacterArmature graph, 62 joints, same 24 clips incl. Death / Kick_Left|Right / Punch_Left|Right / Roll / Run_Left|Right|Back / Wave; materials Skin, LightBrown, Red_Dark, Eyebrows, Eye, Hair, Earrings, White).
+- FACING PROOF from the binary (v104 lesson applied): eyes z=+0.13..0.16, eyebrows z=+0.14..0.17, sandals extend to z=+0.29 → NATIVE +Z facing = the game convention (ry = atan2(vel.x, vel.z)) → NO flip needed. Scale matches the cast (Head bind y=1.587). Clips do not target top nodes.
+- Beach registration: copied to public/models/beach.glb; BodyModel += 'beach' (avatar-look.ts: type, bodyModelOf, resolveGlbUrl, BEACH_MATERIAL_MAP {Skin:'skin'} tint-only path in applyAvatarLook); CharacterSelect button (🏖️ Beach, HD badge) + equip toast; game.ts boot preload; asset-cache SMALL_ASSET_URLS (cookie-banner local caching).
+- ANIMATION SYSTEM (task 105/106):
+  - AnimName += 'kick'|'punch'|'dead' (shared/types.ts) — server room.ts ANIMS whitelist updated too, so remote players SEE kick/punch/death (state-name sync only, no bone streaming).
+  - LocoState += runLeft/runRight/runBack/kick/punch/dead; CLIP_FALLBACK chains (run_left/run_right/run_back; kick_left→kick_right→punch; punch_left→…; death→hitrecieve→dazed) so in-house casts resolve gracefully (verified in bun: house dead→dazed, house runLeft→run, house kick→null→driver falls to idle).
+  - directionalRun(velX, velZ, facingRy) — UE-blendspace-style turn lean: during sharp turns the smoothed heading lags velocity and the strafe/backward clips play the catch-up; falls back to plain run when clips are missing. Fixed an initial left/right swap via the dot(v, right) = −sin(rel) identity (verified in bun: facing −Z + vel +X → runRight).
+  - Local player: render() applies directionalRun when loco==='run'. Remotes: same call using dead-reckoned r.vx/r.vz + displayed rotation.
+  - ONE_SHOT += kick/punch/dead (clamp-and-hold); CYCLING += directional variants (stride-phase handover); FADE_INTO + driver retiming updated; FacialRig EXPRESSIONS filled for all 6 new states (dead = closed eyes) — was the only tsc error, now clean.
+- KEYBINDS: DEFAULT_KEYBINDS += kick 'KeyR', punch 'KeyX' (+ KEYBIND_LABELS in SettingsPanel so rebinding/clash detection covers them; input.ts OneShot + bind wiring; game.ts handleOneShot cases play the clips 0.85s/0.75s + whoosh SFX; HowToPlay controls list updated). Keys chosen after checking usage: T=quick messages, so R/X are free.
+- EMOTE WHEEL: kick (🦵) + punch (🥊) added to EMOTE_CATALOG (free unlock) + EMOTE_ANIMS — reachable via G wheel AND synced to remotes through the existing game:emote relay.
+- DEATH ANIMATION: player.damage() on HP<=0 now plays the model's Death clip and holds it through the whole 4s KO window (animOverride 'dead', dazedDuration+0.5). Applies to zombie mauls, police lathi, hard falls — the existing dazed→recover-at-50HP loop is untouched (character gets back up). Procedural rig's default case = idle (no crash for classic bodies).
+- VERIFIED in browser (agent-browser, v105 bundle, 60 FPS): Beach spawns correctly dressed (white tank, red trunks, sandals, earrings); W shows the BACK running away (Z−8→−10, mid-stride); S turns and walks toward the camera (Z−10→−9.5); R = clear mid-KICK pose (leg raised, arms balancing); X = boxing-stance PUNCH (fists up, torso twisted).
+- Unit-verified in bun: clip resolution for both imported packs + in-house fallbacks; directionalRun angle mapping (incl. NaN/zero-velocity safety); mapToAnimName network mapping (runLeft→run, kick→kick, dead→dead).
+- HONEST LIMIT: the zombie-death visual could not be exercised end-to-end in the headless sandbox — SwiftShader runs the fixed-step sim at ~2% real time (3.5m of travel in 22s of held sprint), so reaching the horde is impractical. The death path shares the entire verified kick/punch pipeline (same animOverride → driver → clip resolution; 'death' clip proven present + resolving in both packs); recommend a quick real-device check: let a zombie in the wild eat your HP to 0.
+- Dev-server game server (:3002, bun --hot) auto-reloaded the room.ts change.
+
+Stage Summary:
+- v105: Beach character live + full combat/action animation layer (kick R, punch X, roll = double-jump clip, directional strafe/back run lean for locals AND remotes, Death clip on KO). Server whitelist synced. All app code typechecks + lints clean; pre-existing skills/ tsc errors unrelated.
+- Files: shared/types.ts, anim.ts, player.ts, game.ts, avatar-look.ts, input.ts, game-store.ts, cosmetics.ts, SettingsPanel.tsx, HowToPlay.tsx, CharacterSelect.tsx, facial-rig.ts, asset-cache.ts, mini-services/game-server/room.ts, public/models/beach.glb (new).

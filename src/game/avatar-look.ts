@@ -64,8 +64,9 @@ export interface AvatarLook {
  *  - 'human'      professional SKINNED human, gender-matching (wardrobe pipeline)
  *  - 'human-child' age-appropriate child variant of the human system
  *  - 'adventurer' imported rigged explorer GLB (baked outfit, 24 pro clips)
+ *  - 'beach'      imported rigged beach-vacationer GLB (same pack family, 24 pro clips)
  */
-export type BodyModel = 'classic' | 'protester' | 'kid' | 'human' | 'human-child' | 'adventurer'
+export type BodyModel = 'classic' | 'protester' | 'kid' | 'human' | 'human-child' | 'adventurer' | 'beach'
 
 export const KID_MODEL_URL = '/models/votechor-kid.glb'
 /** The kid is authored ~1.42 m (young protagonist). The cast renders 1.5–1.96 m
@@ -80,7 +81,7 @@ export const HUMAN_CHILD_SCALE = 1.28
 /** Safe read of cosmetics.body → BodyModel (default 'classic'; unknown = classic). */
 export function bodyModelOf(c: unknown): BodyModel {
   const v = (typeof c === 'object' && c !== null ? (c as Record<string, unknown>).body : undefined)
-  return v === 'protester' || v === 'kid' || v === 'human' || v === 'human-child' || v === 'adventurer' ? v : 'classic'
+  return v === 'protester' || v === 'kid' || v === 'human' || v === 'human-child' || v === 'adventurer' || v === 'beach' ? v : 'classic'
 }
 
 /** GLB url for a body model + gender (protester/human families are gender-split).
@@ -88,6 +89,7 @@ export function bodyModelOf(c: unknown): BodyModel {
 export function resolveGlbUrl(model: BodyModel, gender: 'male' | 'female'): string | null {
   if (model === 'kid') return KID_MODEL_URL
   if (model === 'adventurer') return '/models/adventurer.glb'
+  if (model === 'beach') return '/models/beach.glb'
   if (model === 'human') return gender === 'female' ? '/models/votechor-human-female.glb' : '/models/votechor-human-male.glb'
   if (model === 'human-child') return '/models/votechor-human-child.glb'
   if (model === 'protester') return gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
@@ -227,6 +229,11 @@ function disposeObject(root: THREE.Object3D) {
  *  meshes carry generic exporter names (Cube063…). Scoped per-model so existing
  *  families are untouched: only the adventurer's bare-skin material personalizes. */
 const ADVENTURER_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'skin' }
+
+/** task 106 — the Beach pack shares the Adventurer's material scheme: 'Skin' covers
+ *  every bare-skin region (head/arms/legs/bare feet), clothes are Red_Dark/White/
+ *  LightBrown and stay baked. Only skin tone personalizes. */
+const BEACH_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'skin' }
 
 function tintGroup(group: THREE.Object3D, pal: AvatarPalette, materialMap?: Record<string, keyof AvatarPalette>) {
   group.traverse((o) => {
@@ -606,6 +613,18 @@ export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook, model: 
     // faces −Z" diagnosis was wrong — the v103 inner-node π flip inverted an
     // already-correct model (W faced the camera, S faced away while backpedaling).
     tintGroup(group, look.palette, ADVENTURER_MATERIAL_MAP)
+    return
+  }
+
+  if (model === 'beach') {
+    // task 106 — the Beach pack is the Adventurer's sibling (same __fit → Scene →
+    // CharacterArmature graph, same 62-joint rig, same 24 clips incl. Death /
+    // Kick_Left|Right / Punch_Left|Right / Roll / Run_Left|Right|Back). Verified
+    // from the binary: eyes at z=+0.13..0.16, sandals extend to z=+0.29 →
+    // NATIVE +Z facing = the VoteChor convention, so NO flip (the v104 lesson).
+    // Scale matches too (Head bind y=1.587 ≈ 1.83 m cast height). Fully dressed
+    // (red trunks, white top, earrings, baked hair) — skin tint only.
+    tintGroup(group, look.palette, BEACH_MATERIAL_MAP)
     return
   }
 

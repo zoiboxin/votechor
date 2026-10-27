@@ -282,6 +282,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
       : id === 'human' ? 'Citizen HD on — skinned body, blinking face, real gait'
       : id === 'human-child' ? 'Junior Citizen on — big head, big sneaker energy'
       : id === 'adventurer' ? 'Adventurer equipped — boots laced, satchel packed!'
+      : id === 'beach' ? 'Beach mode on — sandals laced, vacation vibes deployed!'
       : 'Runner Kid equipped — the mascot hits the streets!', 'squad')
   }
 
@@ -516,6 +517,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                       { id: 'human', emoji: '🧑', label: 'Citizen HD', desc: 'Skinned human — smooth joints, blinking, real gait', badge: 'HD' },
                       { id: 'human-child', emoji: '🧒', label: 'Junior Citizen', desc: 'Kid-proportioned human — same skeleton', badge: 'HD' },
                       { id: 'adventurer', emoji: '🎒', label: 'Adventurer', desc: 'Imported rigged explorer — baked kit, 24 pro animations', badge: 'HD' },
+                      { id: 'beach', emoji: '🏖️', label: 'Beach', desc: 'Imported rigged vacationer — baked kit, 24 pro animations', badge: 'HD' },
                       { id: 'protester', emoji: '🎽', label: 'Protester GLB', desc: 'High-Fi body · outfit tint + gear ride along', badge: 'HI-FI' },
                       { id: 'kid', emoji: '🧢', label: 'Runner Kid', desc: 'The VoteChor mascot — fixed brand kit', badge: 'MASCOT' },
                     ].map((opt) => {

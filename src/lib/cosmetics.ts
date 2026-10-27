@@ -171,6 +171,22 @@ export const EMOTE_CATALOG: CosmeticItem[] = [
     unlock: { type: 'level', level: 2 },
   },
   {
+    id: 'kick',
+    kind: 'emote',
+    label: 'Kick',
+    emoji: '🦵',
+    desc: 'Aerated protest kick — committee not included.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'punch',
+    kind: 'emote',
+    label: 'Punch',
+    emoji: '🥊',
+    desc: 'Air punch for justice. Zero paperwork.',
+    unlock: { type: 'free' },
+  },
+  {
     id: 'flex',
     kind: 'emote',
     label: 'Flex',

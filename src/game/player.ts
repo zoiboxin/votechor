@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { CharacterRig } from './character'
 import { MOVE, DAMAGE, archetypeById, WORLD_DISC } from './shared/constants'
 import { policeUniformColors } from '../lib/cosmetics'
-import { pickLoco, mapToAnimName } from './anim'
+import { pickLoco, mapToAnimName, directionalRun } from './anim'
 import type { GLBAnimDriver, LocoState } from './anim'
 import type { GLBInstance } from './glb'
 import { SecondaryMotion } from './secondary-motion'
@@ -349,6 +349,13 @@ export class PlayerController {
       this.health = 0
       this.state = 'dazed'
       this.dazedTimer = DAMAGE.dazedDuration
+      // task 105 — HP eaten to zero (zombie maul, police lathi, hard fall) plays
+      // the model's Death clip (imported packs ship one) and holds the collapsed
+      // pose through the whole KO window; models without a death clip fall back
+      // to HitRecieve/dazed via CLIP_FALLBACK. The existing dazed → recover-at-50
+      // loop is untouched — the character simply gets back up afterwards.
+      this.animOverride = 'dead'
+      this.animOverrideTimer = DAMAGE.dazedDuration + 0.5
       this.onDazed?.()
       return true // became dazed
     }
@@ -419,6 +426,10 @@ export class PlayerController {
       recoverTimer: this.recoverTimer,
       jumpsUsed: this.jumpsUsed,
     })
+    // task 105 — directional run: while the smoothed heading catches up to a sharp
+    // turn, the strafe/backward clips play the lean-in (UE blendspace feel); the
+    // helper falls back to 'run' when the model has no directional clips.
+    if (loco === 'run') loco = directionalRun(this.vel.x, this.vel.z, this.ry)
     // emote / forced one-shot override (celebrate, throw, heal, …)
     if (this.animOverride && this.animOverrideTimer > 0) {
       // legacy AnimName overrides map onto the closest LocoState so BOTH

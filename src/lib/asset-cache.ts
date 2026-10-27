@@ -27,6 +27,7 @@ export const SMALL_ASSET_URLS = [
   '/models/votechor-human-female.glb',
   '/models/votechor-human-child.glb',
   '/models/adventurer.glb',
+  '/models/beach.glb',
 ] as const
 
 /** The 24 MB textured protester hero — offered as an opt-in second step. */

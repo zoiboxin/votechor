@@ -424,6 +424,7 @@ export const DEFAULT_KEYBINDS: Record<string, string> = {
   jump: 'Space', sprint: 'ShiftLeft', slide: 'KeyC', interact: 'KeyE',
   throw: 'KeyQ', emote: 'KeyG', map: 'KeyM', squad: 'Tab', pause: 'Escape',
   gift: 'KeyF', heal: 'KeyH', shout: 'KeyV',
+  kick: 'KeyR', punch: 'KeyX', // task 105 — combat one-shots (model clips)
 }
 
 /**

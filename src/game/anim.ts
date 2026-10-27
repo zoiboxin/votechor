@@ -14,6 +14,30 @@ import type { AnimName } from './shared/types'
 export type LocoState =
   | 'idle' | 'walk' | 'run' | 'jump' | 'doubleJump' | 'fall' | 'land'
   | 'slide' | 'hit' | 'detained' | 'recover' | 'celebrate' | 'throw' | 'heal'
+  | 'runLeft' | 'runRight' | 'runBack'
+  | 'kick' | 'punch' | 'dead'
+
+/**
+ * task 105 — directional run variant from the velocity-vs-facing relative angle
+ * (UE 8-way blendspace practice). The cast faces its movement heading, so during
+ * steady travel the angle ≈ 0 and the plain run plays; during SHARP turns the
+ * smoothed heading lags the velocity, and the strafe/backward clips (Adventurer
+ * & Beach packs ship Run_Left/Run_Right/Run_Back) play through the catch-up so
+ * turns read as leaning into the run instead of an ice-slide. Models without
+ * those clips fall back to the plain run via CLIP_FALLBACK. Pure — unit-safe.
+ */
+export function directionalRun(velX: number, velZ: number, facingRy: number): LocoState {
+  if (!Number.isFinite(velX) || !Number.isFinite(velZ)) return 'run'
+  if (Math.hypot(velX, velZ) < 0.5) return 'run'
+  const rel = Math.atan2(velX, velZ) - facingRy
+  const a = Math.atan2(Math.sin(rel), Math.cos(rel)) // wrap to −π…π
+  if (a > 2.5 || a < -2.5) return 'runBack' // ≳143° — catching up from behind
+  // dot(velocity, character-right) = −sin(rel) → NEGATIVE rel = strafing right
+  // (verified: facing −Z, vel +X → rel=−π/2 → the character's own right)
+  if (a < -0.45) return 'runRight'
+  if (a > 0.45) return 'runLeft'
+  return 'run'
+}
 
 export interface AnimContext {
   grounded: boolean
@@ -55,12 +79,16 @@ export function mapToAnimName(s: LocoState): AnimName {
     case 'land': return 'land'
     case 'recover': return 'recover'
     case 'hit': return 'dazed'
+    case 'runLeft': case 'runRight': case 'runBack': return 'run' // network keeps the plain gait
     default: return s
   }
 }
 
 /** States that play once and hold (driver returns to locomotion when ctx changes). */
-const ONE_SHOT: ReadonlySet<string> = new Set(['land', 'hit', 'recover', 'throw', 'heal', 'jump', 'doubleJump'])
+const ONE_SHOT: ReadonlySet<string> = new Set(['land', 'hit', 'recover', 'throw', 'heal', 'jump', 'doubleJump', 'kick', 'punch', 'dead'])
+
+/** Cycling gait states whose stride phase should hand over seamlessly. */
+const CYCLING: ReadonlySet<string> = new Set(['walk', 'run', 'runLeft', 'runRight', 'runBack'])
 
 /** Fallback chains — the driver plays the FIRST clip the model actually has.
  *  Clip names are LOWERCASE by convention: GLBAssetManager.instantiate() lowercases
@@ -82,6 +110,14 @@ export const CLIP_FALLBACK: Record<LocoState, string[]> = {
   celebrate: ['celebrate', 'wave'],
   throw: ['throw'],
   heal: ['heal'],
+  // task 105 — directional gaits + combat one-shots + KO (imported packs ship
+  // them; in-house casts resolve the fallback and keep their current look)
+  runLeft: ['run_left', 'run'],
+  runRight: ['run_right', 'run'],
+  runBack: ['run_back', 'run'],
+  kick: ['kick_left', 'kick_right', 'punch_left', 'punch_right'],
+  punch: ['punch_left', 'punch_right', 'kick_left', 'kick_right'],
+  dead: ['death', 'hitrecieve', 'dazed', 'idle'],
 }
 
 /** Clip timeScale calibration: design speeds the exported clips were authored for. */
@@ -109,10 +145,13 @@ const FADE_INTO: Record<LocoState, number> = {
   celebrate: 0.25,
   throw: 0.12,
   heal: 0.25,
+  runLeft: 0.15,
+  runRight: 0.15,
+  runBack: 0.15,
+  kick: 0.08,
+  punch: 0.08,
+  dead: 0.12,
 }
-
-/** Cycling gait states whose stride phase should hand over seamlessly. */
-const CYCLING: ReadonlySet<string> = new Set(['walk', 'run'])
 
 export class GLBAnimDriver {
   private current: THREE.AnimationAction | null = null
@@ -152,7 +191,7 @@ export class GLBAnimDriver {
     // smoothly in update() so speed changes (boost pickups, landings) never pop
     // the stride rate. The smoothed value is applied to the new action below.
     if (state === 'walk') this.timeScaleTarget = THREE.MathUtils.clamp(ctx.hSpeed / WALK_DESIGN_SPEED, 0.72, 1.6)
-    else if (state === 'run') this.timeScaleTarget = THREE.MathUtils.clamp(ctx.hSpeed / RUN_DESIGN_SPEED, 0.8, 1.45)
+    else if (CYCLING.has(state)) this.timeScaleTarget = THREE.MathUtils.clamp(ctx.hSpeed / RUN_DESIGN_SPEED, 0.8, 1.45) // run + directional variants
     else this.timeScaleTarget = 1
 
     if (this.currentState === state && this.current === next) {

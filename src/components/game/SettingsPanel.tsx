@@ -15,6 +15,7 @@ const KEYBIND_LABELS: Record<string, string> = {
   jump: 'Jump', sprint: 'Sprint', slide: 'Slide', interact: 'Interact / Revive',
   throw: 'Throw Item', gift: 'Gift / Baton (police)', emote: 'Emote Wheel', map: 'Big Map', squad: 'Squad Panel', pause: 'Pause',
   heal: 'Quick Heal (food / medkit)', shout: 'Shout / Whistle',
+  kick: 'Kick', punch: 'Punch',
 }
 
 function prettyKey(code: string | undefined): string {

@@ -45,6 +45,14 @@ const EXPRESSIONS: Record<LocoState, ExprTarget> = {
   celebrate: { browLift: 0.6, browFurrow: 0, jawOpen: 0.5, squint: 0 },
   throw: { browLift: 0, browFurrow: 0.45, jawOpen: 0.12, squint: 0.28 },
   heal: { browLift: 0.3, browFurrow: 0, jawOpen: 0.38, squint: 0.45 },
+  // task 105 — directional gaits share the run's exertion; combat one-shots read
+  // determined; the KO holds a slack, closed-eyed face
+  runLeft: { browLift: 0, browFurrow: 0.3, jawOpen: 0.18, squint: 0.18 },
+  runRight: { browLift: 0, browFurrow: 0.3, jawOpen: 0.18, squint: 0.18 },
+  runBack: { browLift: 0.2, browFurrow: 0.25, jawOpen: 0.14, squint: 0.12 },
+  kick: { browLift: 0, browFurrow: 0.55, jawOpen: 0.35, squint: 0.4 },
+  punch: { browLift: 0, browFurrow: 0.55, jawOpen: 0.3, squint: 0.45 },
+  dead: { browLift: 0, browFurrow: 0.1, jawOpen: 0.15, squint: 1 },
 }
 
 const LID_OPEN = -1.2

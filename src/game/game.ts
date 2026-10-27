@@ -37,7 +37,7 @@ import { useGameStore, registerUIActions, GLB_CHARACTERS_ENABLED, type MatchSumm
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
 import { GLBAssetManager, type GLBInstance } from './glb'
-import { GLBAnimDriver } from './anim'
+import { GLBAnimDriver, directionalRun } from './anim'
 import { SecondaryMotion } from './secondary-motion'
 import { FacialRig } from './facial-rig'
 import type { LocoState } from './anim'
@@ -110,6 +110,10 @@ const EMOTE_ANIMS: Record<string, AnimName> = {
   cry: 'dazed',
   chant: 'celebrate',
   chai: 'heal',
+  // task 105 — combat taunts: the imported packs (Adventurer/Beach) ship real
+  // Kick/Punch clips; other models resolve their fallback chain gracefully.
+  kick: 'kick',
+  punch: 'punch',
 }
 
 /** Speech-bubble quips when handing a gift over. */
@@ -317,6 +321,7 @@ export class Game {
     void this.glbMgr.load('/models/votechor-human-female.glb')
     void this.glbMgr.load('/models/votechor-human-child.glb')
     void this.glbMgr.load('/models/adventurer.glb')
+    void this.glbMgr.load('/models/beach.glb')
     this.engine = new Engine(canvas)
     // lightning → white HUD flash + delayed thunder roll
     this.engine.sky.onLightning = () => {
@@ -1998,6 +2003,17 @@ export class Game {
       case 'jump': this.pendingOneShot = 'jump'; break
       case 'slide': this.pendingOneShot = 'slide'; break
       case 'throw': this.doThrow(); break
+      // task 105 — combat one-shots (R / X): cosmetic kick/punch with the model's
+      // real clips (Adventurer/Beach), fallback chains cover the rest of the cast.
+      // No damage/no stamina — pure protest swagger, so combat balance is untouched.
+      case 'kick':
+      case 'punch': {
+        const p = this.player
+        if (!p || p.isDetained || p.isDazed) break
+        p.playAnim(a as AnimName, a === 'kick' ? 0.85 : 0.75)
+        AudioManager.play('throw') // whoosh — reuse the swing voice
+        break
+      }
       case 'emote': store.toggleEmoteWheel(); break
       case 'map': store.toggleMap(); break
       case 'squad':
@@ -3127,7 +3143,11 @@ export class Game {
       // High-Fi backend for remotes: the GLB mirrors the interpolated transform and
       // plays the SAME networked anim state (no bone streaming — state names only)
       if (r.glb?.driver) {
-        const loco: LocoState = r.detained ? 'detained' : r.anim === 'dazed' ? 'hit' : (r.anim as LocoState)
+        let loco: LocoState = r.detained ? 'detained' : r.anim === 'dazed' ? 'hit' : (r.anim as LocoState)
+        // task 105 — directional runs for remotes too: the displayed heading lerps
+        // toward the networked one, so during turns the velocity-vs-facing angle
+        // picks the strafe/backward clip exactly like the local player
+        if (loco === 'run' && r.rig) loco = directionalRun(r.vx, r.vz, r.rig.group.rotation.y)
         r.glb.driver.play(loco, {
           grounded: true, vy: 0, hSpeed,
           sliding: false, dazed: r.anim === 'dazed', detained: r.detained,
