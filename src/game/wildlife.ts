@@ -1,23 +1,33 @@
-// VoteChor wildlife — task 108: the 10 GLB animal species from the user's
-// "Characters & Animals" pack now live in three HABITATS (per the user's brief):
-//   • DOMESTIC (cow, bull, donkey, horse, shiba-inu) — herds at the city street
-//     margins + the countryside farm belt. These REPLACE the old procedural
-//     traffic cows (world-def veh_cow1..6 and the street-animal cow spots).
-//   • GRAVEYARD (fox, husky) — haunting the Vanodyan Kabristan fence ring and
-//     the three forgotten-grave clusters of the far wild.
-//   • JUNGLE (deer, stag, wolf) — rejection-sampled wild spots, reshuffled every
-//     session.
-// PANIC-FLEE (the core of this task): every beast has a species temperament
-// radius — the moment the player steps inside it, the beast bolts (Gallop
-// clip), keeps RE-AIMING its escape vector while it is still chased (so the
-// player can never corner it), and only settles once the threat is gone.
-// Domestic beasts are habituated (small panic radius, slower flight, leashed
-// to their pasture); wild ones are skittish (big radius, fast, long flight).
-// A spatial panic voice (moo/bark) sells the moment.
+// VoteChor wildlife — task 109 reshuffle (user brief: "keep dogs cats inside
+// city, cow/horse/donkey near city, wild animals in jungle"), superseding the
+// task-108 graveyard habitat. The 10 GLB species from the user's
+// "Characters & Animals" pack now live in three HABITATS:
+//   • PETS (shiba-inu, husky — the GLB dogs) live IN the city streets, pinned to
+//     the same proven street-animal corners the procedural dogs/cats have used
+//     since v66. (The pack ships no cat GLB — the city's cats remain the
+//     procedural street cats of animal-sim.ts.)
+//   • DOMESTIC herds (cow, bull, donkey, horse) graze BOTH flanks: a city-edge
+//     pasture just off the avenue corridor (walking distance — impossible to
+//     miss) and a farm-belt pasture out in the Zone-B countryside fields.
+//   • JUNGLE (deer, stag, wolf, fox) — rejection-sampled wild spots, reshuffled
+//     every session. The fox moved here from the graveyard (it is a wild animal
+//     in the new grouping); the husky moved into the city (it is a dog).
+// LAZY-START FIX: task 108 gated the build behind a 65 m walk from spawn — but
+// the nearest city sites sit at 55 m, so a player strolling the spawn plaza
+// never saw a single beast start loading. The build now starts on the FIRST
+// match frame: loads stream in sequentially, and the five city/edge species
+// (≈14 MB) are pre-warmed by the cookie-consent cache.
+// PANIC-FLEE (unchanged core): every beast has a species temperament radius —
+// the moment the player steps inside it, the beast bolts (Gallop clip), keeps
+// RE-AIMING its escape vector while it is still chased (so the player can
+// never corner it), and only settles once the threat is gone.
+// Pets and domestic beasts are habituated (small panic radius, slower flight,
+// leashed to their patch); wild ones are skittish (big radius, fast, long
+// flight). A spatial panic voice (moo/bark) sells the moment.
 //
 // Design unchanged from task 107: independent client-side ambience bots driven
 // by the pack's own GLB clips through tiny per-beast mixers; no server/physics
-// coupling (kinematic, ground-sampled); lazily streamed on first approach.
+// coupling (kinematic, ground-sampled).
 //
 // FACING (v104 binary recipe, verified on every animal file): heads/horns
 // extend +Z, canid tails swing −Z — the pack is natively +Z-facing, which is
@@ -29,7 +39,7 @@ import { AudioManager, type SfxName } from './audio'
 import type { GLBAssetManager, GLBAsset, GLBInstance } from './glb'
 import type { PhysicsWorld } from './physics'
 
-type Habitat = 'domestic' | 'graveyard' | 'jungle'
+type Habitat = 'pet' | 'domestic' | 'jungle'
 
 interface BeastDef {
   id: string
@@ -46,53 +56,45 @@ interface BeastDef {
   leash: number
   /** spatial voice played when the panic starts (null = silent species) */
   voice: SfxName | null
+  /** PETS: one member per street corner (count must match the list) */
+  petSites?: Array<[number, number]>
+  /** DOMESTIC: the city-edge pasture [x, z] (just off the avenue corridor) */
+  cityHerd?: [number, number]
+  /** DOMESTIC: the farm-belt pasture [x, z] (Zone-B countryside fields) */
+  farmHerd?: [number, number]
+  /** DOMESTIC: members huddling the city-edge vs farm-belt pasture */
+  cityCount?: number
+  farmCount?: number
 }
 
 const BEASTS: BeastDef[] = [
-  // ---- DOMESTIC: the old street/traffic cows' replacements — city + farm ----
-  { id: 'cow',    url: '/models/cow.glb',       count: 3, speed: 0.9, habitat: 'domestic',  panicR: 4.6, fleeMul: 2.2, leash: 24, voice: 'moo' },
-  { id: 'bull',   url: '/models/bull.glb',      count: 2, speed: 1.0, habitat: 'domestic',  panicR: 5.0, fleeMul: 2.4, leash: 24, voice: 'moo' },
-  { id: 'donkey', url: '/models/donkey.glb',    count: 2, speed: 1.0, habitat: 'domestic',  panicR: 5.4, fleeMul: 2.4, leash: 24, voice: 'moo' },
-  { id: 'horse',  url: '/models/horse.glb',     count: 2, speed: 1.3, habitat: 'domestic',  panicR: 6.0, fleeMul: 2.8, leash: 26, voice: 'moo' },
-  { id: 'shiba',  url: '/models/shiba-inu.glb', count: 2, speed: 1.4, habitat: 'domestic',  panicR: 6.5, fleeMul: 2.8, leash: 22, voice: 'bark' },
-  // ---- GRAVEYARD: scavengers of the Kabristan + the forgotten clusters ----
-  { id: 'fox',    url: '/models/fox.glb',       count: 3, speed: 1.9, habitat: 'graveyard', panicR: 8.5, fleeMul: 2.9, leash: 30, voice: 'bark' },
-  { id: 'husky',  url: '/models/husky.glb',     count: 2, speed: 1.7, habitat: 'graveyard', panicR: 8.0, fleeMul: 2.9, leash: 30, voice: 'bark' },
-  // ---- JUNGLE: the deep wild, random every session ----
-  { id: 'deer',   url: '/models/deer.glb',      count: 4, speed: 1.7, habitat: 'jungle', panicR: 10.5, fleeMul: 3.0, leash: 40, voice: null },
-  { id: 'stag',   url: '/models/stag.glb',      count: 3, speed: 1.5, habitat: 'jungle', panicR: 10.0, fleeMul: 3.0, leash: 40, voice: null },
-  { id: 'wolf',   url: '/models/wolf.glb',      count: 3, speed: 1.8, habitat: 'jungle', panicR: 9.0,  fleeMul: 3.0, leash: 40, voice: null },
-]
-
-// DOMESTIC herd sites. City pool = the exact street margins the old procedural
-// street animals used (all verified ≥4 m off every vehicle lane by the v66
-// route data); farm pool = the Zone-B countryside field belt that continues the
-// ring roads outward. Each species pops ONE site from the pools (alternating
-// city/farm so both zones are always stocked) and huddles its herd there.
-const CITY_MARGINS: Array<{ x: number; z: number }> = [
-  { x: 10,  z: -400 }, // grand avenue east margin (the classic cow spot)
-  { x: -6,  z: -505 }, // Parliament Plaza north edge
-  { x: 8,   z: -62 },  // plaza side, north of Plaza Cross Rd
-  { x: -7,  z: -188 }, // Market Exit margin
-  { x: 10,  z: -462 }, // Colony Cross Rd east margin
-]
-const FARM_BELT: Array<{ x: number; z: number }> = [
-  { x: 120,  z: -240 }, // east countryside field belt
-  { x: -125, z: -215 }, // west countryside field belt
-  { x: 132,  z: -455 }, // SE countryside by the ring road
-  { x: -132, z: -430 }, // SW countryside
-  { x: 62,   z: -588 }, // south fields before the Vanodyan Deep
-]
-
-// GRAVEYARD sites: the Kabristan itself (beasts scavenge just OUTSIDE the
-// grave ring — r+5..r+16) + the three v71 forgotten-grave clusters of the far
-// wild (NW wing, SE wing, far north). Members round-robin across the sites so
-// every session haunts several graveyards at once.
-const GRAVE_SITES: Array<{ x: number; z: number; r: number }> = [
-  { x: GRAVEYARD.x, z: GRAVEYARD.z, r: GRAVEYARD.r }, // Vanodyan Kabristan
-  { x: -330, z: -100, r: 12 }, // NW forgotten graves
-  { x: 300,  z: -620, r: 12 }, // SE forgotten graves
-  { x: -30,  z: 62,   r: 12 }, // far-north forgotten graves
+  // ---- CITY PETS: the GLB dogs live IN the streets, at the same proven
+  //      street-animal corners the procedural dogs/cats have used since v66
+  //      (all ≥4 m off every vehicle lane). No cat GLB ships in the pack —
+  //      the city cats stay procedural (animal-sim.ts).
+  { id: 'shiba', url: '/models/shiba-inu.glb', count: 3, speed: 1.4, habitat: 'pet', panicR: 6.0, fleeMul: 2.8, leash: 20, voice: 'bark',
+    petSites: [[8, -66], [-7, -188], [10, -462]] },       // plaza side · market exit · colony cross
+  { id: 'husky', url: '/models/husky.glb', count: 2, speed: 1.6, habitat: 'pet', panicR: 6.5, fleeMul: 2.8, leash: 22, voice: 'bark',
+    petSites: [[-12, -272], [11, -516]] },                // avenue cross · parliament approach
+  // ---- DOMESTIC HERDS: every species grazes BOTH flanks — a city-edge
+  //      pasture just off the avenue corridor (x ±6..11, between the cross
+  //      streets, outside the zone-D widened asphalt) AND a farm-belt pasture
+  //      out among the Zone-B countryside fields. City first per the brief:
+  //      "cow near horse donkey near city".
+  { id: 'cow',    url: '/models/cow.glb',    count: 4, speed: 0.9, habitat: 'domestic', panicR: 4.6, fleeMul: 2.2, leash: 24, voice: 'moo',
+    cityHerd: [9, -105],   cityCount: 2, farmHerd: [120, -240], farmCount: 2 },
+  { id: 'bull',   url: '/models/bull.glb',   count: 2, speed: 1.0, habitat: 'domestic', panicR: 5.0, fleeMul: 2.4, leash: 24, voice: 'moo',
+    cityHerd: [-9, -145],  cityCount: 1, farmHerd: [-132, -430], farmCount: 1 },
+  { id: 'donkey', url: '/models/donkey.glb', count: 3, speed: 1.0, habitat: 'domestic', panicR: 5.4, fleeMul: 2.4, leash: 24, voice: 'moo',
+    cityHerd: [10, -438],  cityCount: 2, farmHerd: [128, -470], farmCount: 1 },
+  { id: 'horse',  url: '/models/horse.glb',  count: 3, speed: 1.3, habitat: 'domestic', panicR: 6.0, fleeMul: 2.8, leash: 26, voice: 'moo',
+    cityHerd: [9, -240],   cityCount: 2, farmHerd: [62, -588],  farmCount: 1 },
+  // ---- JUNGLE: the deep wild, random every session (the fox is a wild
+  //      animal in this grouping — moved here from the task-108 graveyard) ----
+  { id: 'fox',    url: '/models/fox.glb', count: 3, speed: 1.9, habitat: 'jungle', panicR: 8.5, fleeMul: 2.9, leash: 40, voice: 'bark' },
+  { id: 'deer',   url: '/models/deer.glb', count: 4, speed: 1.7, habitat: 'jungle', panicR: 10.5, fleeMul: 3.0, leash: 40, voice: null },
+  { id: 'stag',   url: '/models/stag.glb', count: 3, speed: 1.5, habitat: 'jungle', panicR: 10.0, fleeMul: 3.0, leash: 40, voice: null },
+  { id: 'wolf',   url: '/models/wolf.glb', count: 3, speed: 1.8, habitat: 'jungle', panicR: 9.0,  fleeMul: 3.0, leash: 40, voice: null },
 ]
 
 const PROPS: Array<{ url: string }> = [
@@ -142,11 +144,9 @@ function nearGraveyard(x: number, z: number, pad = 16): boolean {
   return gx * gx + gz * gz < gr * gr
 }
 
-/** Common hazard exclusions for the anchored habitats (domestic + graveyard):
+/** Common hazard exclusions for the anchored habitats (pets + domestic):
  *  inside the disc, off the Kabristan interior, out of the Bhayanak river band
- *  and the arena exit corridor, and not stacked on a claimed spot. Graveyard
- *  scavengers pass avoidGraveyard=false — they are SUPPOSED to haunt the
- *  Kabristan fence ring. */
+ *  and the arena exit corridor, and not stacked on a claimed spot. */
 function anchoredValid(x: number, z: number, used: Array<{ x: number; z: number }>, minDist: number, avoidGraveyard = true): boolean {
   if (!inDisc(x, z)) return false
   if (avoidGraveyard && nearGraveyard(x, z)) return false
@@ -185,15 +185,6 @@ function pickSpot(used: Array<{ x: number; z: number }>, minDist: number, wildMi
   return null
 }
 
-function shuffled<T>(arr: T[]): T[] {
-  const a = [...arr]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
-}
-
 export class WildlifeSystem {
   readonly group = new THREE.Group()
   private mgr: GLBAssetManager
@@ -201,9 +192,6 @@ export class WildlifeSystem {
   private beasts: Beast[] = []
   private props: Prop[] = []
   private used: Array<{ x: number; z: number }> = []
-  private cityPool: Array<{ x: number; z: number }> = []
-  private farmPool: Array<{ x: number; z: number }> = []
-  private gravePool: Array<{ x: number; z: number; r: number }> = []
   private started = false
   private disposed = false
 
@@ -213,30 +201,39 @@ export class WildlifeSystem {
     this.group.name = 'vc-wildlife'
   }
 
-  /** Idempotent lazy start — task 108: the domestic herds live AT the city
-   *  margins now, so the old wildness-only gate would never open for a city
-   *  session. Start once the player leaves the spawn plaza (0, −8) by 65 m —
-   *  every real match does within its first minute — or wanders into the wild. */
-  ensureStarted(px: number, pz: number): void {
+  /** Idempotent start — task 109 FIX: the old gates (wildness-only, then a
+   *  65 m walk from spawn) starved the CITY sites — the nearest herds sit at
+   *  55 m from spawn, so a player looking around the city beat the gate and
+   *  saw nothing start. The build now fires on the FIRST match frame: loads
+   *  stream in one-by-one (no frame hitch) and the cookie-consent cache has
+   *  already pre-warmed the city/edge species. */
+  ensureStarted(): void {
     if (this.started || this.disposed) return
-    if (wildnessAt(px, pz) < 0.18 && Math.hypot(px, pz + 8) < 65) return
     this.started = true
     void this.build()
   }
 
   private async build(): Promise<void> {
-    // per-session habitat pools (reshuffled every build)
-    this.cityPool = shuffled(CITY_MARGINS)
-    this.farmPool = shuffled(FARM_BELT)
-    this.gravePool = shuffled(GRAVE_SITES)
     for (const def of BEASTS) {
       if (this.disposed) return
       const asset = await this.mgr.load(def.url)
       if (!asset) continue // loader already logged; this species just stays home
-      if (def.habitat === 'domestic') this.spawnDomestic(def, asset)
-      else if (def.habitat === 'graveyard') this.spawnGraveyard(def, asset)
+      if (def.habitat === 'pet') this.spawnPets(def, asset)
+      else if (def.habitat === 'domestic') this.spawnDomestic(def, asset)
       else this.spawnJungle(def, asset)
     }
+    // QA affordance: a one-shot census of what actually spawned (and where),
+    // so "the animals aren't showing" can be diagnosed from __vcDiag directly.
+    try {
+      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
+      w.__vcDiag = w.__vcDiag ?? []
+      w.__vcDiag.push({
+        kind: 'wildlifeCensus',
+        beasts: this.beasts.map((b) => ({ id: b.def.id, x: Math.round(b.inst.group.position.x), z: Math.round(b.inst.group.position.z) })),
+        props: this.props.length,
+        t: Date.now(),
+      })
+    } catch { /* diag is best-effort */ }
     // abandoned landmarks — bigger spacing so they read as intentional set pieces
     for (const p of PROPS) {
       if (this.disposed) return
@@ -255,59 +252,54 @@ export class WildlifeSystem {
     }
   }
 
-  /** DOMESTIC herds: alternate the city-margin and farm-belt pools so both
-   *  zones are always stocked, huddling each species' herd at its own site. */
-  private domesticToggle = false
-  private spawnDomestic(def: BeastDef, asset: GLBAsset): void {
-    let pool: Array<{ x: number; z: number }>
-    if (this.cityPool.length && this.farmPool.length) {
-      this.domesticToggle = !this.domesticToggle
-      pool = this.domesticToggle ? this.cityPool : this.farmPool
-    } else {
-      pool = this.cityPool.length ? this.cityPool : this.farmPool
-    }
-    const site = pool.shift()
-    if (!site) return
-    let last: { x: number; z: number } | null = null
+  /** CITY PETS: one dog per proven street corner, huddled with a little
+   *  sidewalk-side jitter so they don't stand stacked on the exact spot. */
+  private spawnPets(def: BeastDef, asset: GLBAsset): void {
+    const sites = def.petSites ?? []
     for (let n = 0; n < def.count; n++) {
       if (this.disposed) return
+      const site = sites[n % Math.max(1, sites.length)]
+      if (!site) return
       let spot: { x: number; z: number } | null = null
-      for (let t = 0; t < 14 && !spot; t++) {
-        const base = last ?? site
-        const j = last ? 7 : 4
-        const x = base.x + (Math.random() * 2 - 1) * j
-        const z = base.z + (Math.random() * 2 - 1) * j
-        if (anchoredValid(x, z, this.used, 3)) spot = { x, z }
+      for (let t = 0; t < 10 && !spot; t++) {
+        const x = site[0] + (Math.random() * 2 - 1) * 3
+        const z = site[1] + (Math.random() * 2 - 1) * 3
+        if (anchoredValid(x, z, this.used, 2.5)) spot = { x, z }
       }
-      if (!spot) spot = { x: site.x + (Math.random() * 2 - 1) * 4, z: site.z + (Math.random() * 2 - 1) * 4 }
-      last = spot
+      if (!spot) spot = { x: site[0], z: site[1] }
       this.used.push(spot)
-      this.spawnBeast(def, asset, spot, 5 + Math.random() * 4)
+      this.spawnBeast(def, asset, spot, 6 + Math.random() * 4)
     }
   }
 
-  /** GRAVEYARD scavengers: members round-robin across the Kabristan + the
-   *  three forgotten clusters — several haunted graveyards every session. */
-  private spawnGraveyard(def: BeastDef, asset: GLBAsset): void {
-    const baseIdx = Math.floor(Math.random() * this.gravePool.length)
-    for (let n = 0; n < def.count; n++) {
-      if (this.disposed) return
-      const site = this.gravePool[(baseIdx + n) % this.gravePool.length] ?? GRAVE_SITES[0]
-      // the Kabristan (r 44): the fence ring r+5..r+16, just outside the graves;
-      // the small forgotten clusters: anywhere in the patch
-      const rMin = site.r > 20 ? site.r + 5 : 2
-      const rMax = site.r > 20 ? site.r + 16 : site.r
-      let spot: { x: number; z: number } | null = null
-      for (let t = 0; t < 14 && !spot; t++) {
-        const a = Math.random() * Math.PI * 2
-        const r = rMin + Math.random() * (rMax - rMin)
-        const x = site.x + Math.cos(a) * r
-        const z = site.z + Math.sin(a) * r
-        if (anchoredValid(x, z, this.used, 3.5, false)) spot = { x, z }
+  /** DOMESTIC herds: every species splits its members between a CITY-EDGE
+   *  pasture (just off the avenue corridor — impossible to miss on foot) and a
+   *  FARM-BELT pasture out in the Zone-B countryside, so both zones are
+   *  stocked every session (task 109: the old single-site toggle let a whole
+   *  species end up somewhere the player never walks). */
+  private spawnDomestic(def: BeastDef, asset: GLBAsset): void {
+    const groups: Array<{ site: [number, number] | undefined; n: number }> = [
+      { site: def.cityHerd, n: def.cityCount ?? 0 },
+      { site: def.farmHerd, n: def.farmCount ?? 0 },
+    ]
+    for (const g of groups) {
+      if (!g.site || g.n <= 0) continue
+      let last: { x: number; z: number } | null = null
+      for (let n = 0; n < g.n; n++) {
+        if (this.disposed) return
+        let spot: { x: number; z: number } | null = null
+        for (let t = 0; t < 14 && !spot; t++) {
+          const base = last ?? { x: g.site[0], z: g.site[1] }
+          const j = last ? 7 : 4
+          const x = base.x + (Math.random() * 2 - 1) * j
+          const z = base.z + (Math.random() * 2 - 1) * j
+          if (anchoredValid(x, z, this.used, 3)) spot = { x, z }
+        }
+        if (!spot) spot = { x: g.site[0] + (Math.random() * 2 - 1) * 4, z: g.site[1] + (Math.random() * 2 - 1) * 4 }
+        last = spot
+        this.used.push(spot)
+        this.spawnBeast(def, asset, spot, 5 + Math.random() * 4)
       }
-      if (!spot) continue // grave site is jammed this session — skip the member
-      this.used.push(spot)
-      this.spawnBeast(def, asset, spot, 7 + Math.random() * 6)
     }
   }
 
@@ -523,8 +515,5 @@ export class WildlifeSystem {
     this.beasts = []
     this.props = []
     this.used = []
-    this.cityPool = []
-    this.farmPool = []
-    this.gravePool = []
   }
 }

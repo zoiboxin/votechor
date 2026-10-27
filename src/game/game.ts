@@ -154,9 +154,10 @@ export class Game {
   private vehicles!: VehicleSystem
   private items!: ItemSystem
   private animals!: AnimalSystem
-  /** task 108 — GLB habitat wildlife: domestic herds (city margins + farm
-   *  belt), fox/husky graveyard scavengers, jungle wanderers + pack props.
-   *  Lazily streams once the player leaves the spawn plaza; panic-flees. */
+  /** task 108/109 — GLB habitat wildlife: city dogs (shiba/husky) + street
+   *  cats, city-edge + farm-belt domestic herds, jungle wanderers (fox, deer,
+   *  stag, wolf) + pack props. Streams from the FIRST match frame; panics
+   *  and flees when the player gets close. */
   private wildlife!: WildlifeSystem
   private zombies!: ZombieSystem
   private ambience!: JungleAmbience
@@ -2777,10 +2778,11 @@ export class Game {
 
     // street animals + birds — independent bots, frozen with the rest of the sim when paused
     this.animals.update(dt, this.worldTime, this.player.pos, Math.hypot(this.player.vel.x, this.player.vel.z), this.camRig.yaw)
-    // task 108 — habitat wildlife (domestic city/farm herds, graveyard foxes+
-    // huskies, jungle wanderers) with panic-flee bots; yaw feeds the spatial
-    // panic voices (moo/bark)
-    this.wildlife.ensureStarted(this.player.pos.x, this.player.pos.z)
+    // task 108 — habitat wildlife (task 109 reshuffle: city dogs + cats, city-
+    // edge + farm herds, jungle wilds) with panic-flee bots; yaw feeds the
+    // spatial panic voices (moo/bark). Starts on the FIRST frame (no gate —
+    // the old 65 m walk gate starved the city sites).
+    this.wildlife.ensureStarted()
     this.wildlife.update(dt, this.player.pos, this.camRig.yaw)
 
     // v68 — Vanodyan Deep: cicada/bird/growl ambience tracks wildness, the dead hunt

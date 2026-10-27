@@ -132,7 +132,7 @@ export default function HowToPlay({ open, onOpenChange }: { open: boolean; onOpe
             <li>• <b className="font-black text-[#8c1f28]">If you get DETAINED, police confiscate ALL your votes &amp; items.</b> The votes are re-hidden in the city and your gear drops right where you were caught — run back (or send a cellmate) to recover it before it vanishes!</li>
             <li>• Searchlights rotate. Watch the rhythm like cricket. Or traffic.</li>
             <li>• Red dots on the minimap are chasing you. Blue dots are merely disappointed in you.</li>
-            <li>• Cows, bulls, donkeys and horses graze the city margins and the farm belt; foxes and huskies haunt the graveyards; deer, stags and wolves roam the deep jungle. Get too close and they <b className="font-black text-[#2e6e4e]">bolt away</b> — approach slowly if you want a good look.</li>
+            <li>• Dogs and the street cats lounge <b className="font-black text-[#2e6e4e]">inside the city</b>; cows, bulls, donkeys and horses graze the pastures <b className="font-black text-[#2e6e4e]">just off the avenues</b> and out in the <b className="font-black text-[#2e6e4e]">farm belt</b>; foxes, deer, stags and wolves roam the jungle. Get too close and they <b className="font-black text-[#2e6e4e]">bolt away</b> — approach slowly if you want a good look.</li>
             <li>• Reviving squadmates gives more XP than letting them think about their choices.</li>
           </ul>
         </section>
