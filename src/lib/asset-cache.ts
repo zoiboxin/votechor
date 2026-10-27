@@ -52,13 +52,23 @@ export const SMALL_ASSET_URLS = [
   // task 108 — the DOMESTIC wildlife joins the warm-cache offer: the cow/
   // bull/donkey/horse/shiba herds graze the city margins + farm belt, so
   // nearly every session crosses the stream gate that loads them (~14 MB).
-  // The graveyard/jungle species (fox/husky/deer/stag/wolf) stay on-demand —
-  // only wild visitors ever pay for those.
+  // The pure-jungle species (fox/deer/stag/wolf) stay on-demand — only wild
+  // visitors ever pay for those.
   '/models/cow.glb',
   '/models/bull.glb',
   '/models/donkey.glb',
   '/models/horse.glb',
   '/models/shiba-inu.glb',
+  // task 109/110 — the husky is a CITY dog now (not graveyard on-demand), so it
+  // belongs in the warm cache beside the shiba. The forest pack (2.3 MB all-in,
+  // 38 instanced species across the wild band) joins too — tiny files, huge
+  // scenery win, and the wild loads fully dressed on first visit.
+  '/models/husky.glb',
+  '/models/forest/tree_1.glb', '/models/forest/tree_2.glb', '/models/forest/tree_3.glb',
+  '/models/forest/tree_4.glb', '/models/forest/tree_5.glb', '/models/forest/tree_6.glb',
+  '/models/forest/tree_pine_1.glb', '/models/forest/tree_pine_2.glb', '/models/forest/tree_pine_3.glb',
+  '/models/forest/dead_tree_1.glb', '/models/forest/dead_tree_2.glb', '/models/forest/dead_tree_3.glb',
+  '/models/forest/bush_1.glb', '/models/forest/bush_2.glb', '/models/forest/bush_3.glb', '/models/forest/bush_4.glb',
 ] as const
 
 /** The 24 MB textured protester hero — offered as an opt-in second step. */

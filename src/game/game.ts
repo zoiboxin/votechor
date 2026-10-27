@@ -15,6 +15,7 @@ import { NpcSystem, VehicleSystem } from './npcs'
 import { ItemSystem } from './items'
 import { AnimalSystem, type AnimalHandle } from './animals'
 import { WildlifeSystem } from './wildlife'
+import { ForestPack } from './forest'
 import { ZombieSystem } from './zombies'
 import { JungleAmbience, wildnessAt } from './jungle-ambience'
 import { BossClient } from './boss'
@@ -159,6 +160,10 @@ export class Game {
    *  stag, wolf) + pack props. Streams from the FIRST match frame; panics
    *  and flees when the player gets close. */
   private wildlife!: WildlifeSystem
+  /** task 110 — AmiPolyGon forest pack: instanced trees/pines/dead trees/logs/
+   *  bushes/grass scattered across the wild band, graveyard ring and city
+   *  margins. Pure static ambience — built once, no per-frame update. */
+  private forest!: ForestPack
   private zombies!: ZombieSystem
   private ambience!: JungleAmbience
   private wildToastShown = false
@@ -226,6 +231,10 @@ export class Game {
   private carryingBallotId: string | null = null
   private remotePlayers = new Map<string, RemoteEntry>()
   private static MAX_RIGS = 24 // rig budget: nearby protesters get full characters, the rest stay as data dots
+  /** task 110 — sub-budget for bots wearing GLB pack bodies: a skinned 62-joint
+   *  rig costs a multiple of the flat procedural one, so only the 14 nearest
+   *  GLB bots get real rigs; the rest render as impostors (the existing LOD). */
+  private static BOT_GLB_RIG_BUDGET = 14
   private crowd: CrowdLod | null = null // instanced impostors for the rig-less majority
   private lastCrowdSync = 0
   private lastFps = 60
@@ -463,6 +472,9 @@ export class Game {
     // GLB species at random jungle spots + 4 abandoned landmarks.
     this.wildlife = new WildlifeSystem(this.glbMgr, this.physics)
     this.engine.scene.add(this.wildlife.group)
+    // task 110 — forest pack: static instanced vegetation (no update loop)
+    this.forest = new ForestPack(this.glbMgr, this.physics)
+    this.engine.scene.add(this.forest.group)
 
     // v68 — the Vanodyan Dead + their forest's voice (client-local bots + bed)
     this.zombies = new ZombieSystem(this.fx, {
@@ -1271,24 +1283,34 @@ export class Game {
       .sort((a, b) =>
         ((a[1].target.x - px) ** 2 + (a[1].target.z - pz) ** 2) -
         ((b[1].target.x - px) ** 2 + (b[1].target.z - pz) ** 2))
-    const botBudget = Math.max(4, Game.MAX_RIGS - humans.length)
     let created = 0
     // humans first — always rigged
     for (const [id, r] of humans) if (!r.rig && created < 4) { this.attachRig(id, r); created++ }
     for (const [id, r] of humans) if (!r.rig) this.attachRig(id, r)
-    // bots by distance rank
-    let rank = 0
+    // bots by distance rank — task 110: bots now wear GLB pack bodies, and a
+    // skinned 62-joint rig costs far more than the flat procedural one, so GLB
+    // bots get their own tighter budget (the far crowd stays on the impostor
+    // LOD). Classic-rig bots (legacy snapshots) keep the original budget.
+    let glbRigged = 0
+    let classicRigged = 0
     for (const [id, r] of bots) {
-      if (rank < botBudget) {
-        if (!r.rig && created < 4) { this.attachRig(id, r); created++ }
-        else if (!r.rig) this.attachRig(id, r)
+      const isGlb = r.glb !== null || (r.cosmetics !== undefined && bodyModelOf(r.cosmetics) !== 'classic')
+      const withinBudget = isGlb
+        ? glbRigged < Game.BOT_GLB_RIG_BUDGET
+        : classicRigged < Math.max(4, Game.MAX_RIGS - humans.length)
+      if (withinBudget) {
+        if (!r.rig) {
+          if (created < 4) { this.attachRig(id, r); created++ }
+          else this.attachRig(id, r)
+        }
+        if (isGlb) glbRigged++
+        else classicRigged++
       } else if (r.rig) {
         this.detachRemoteGlb(r) // budget eviction — GLB goes with the rig
         this.engine.scene.remove(r.rig.group)
         r.rig.dispose()
         r.rig = null
       }
-      rank++
     }
   }
 
@@ -2784,6 +2806,8 @@ export class Game {
     // the old 65 m walk gate starved the city sites).
     this.wildlife.ensureStarted()
     this.wildlife.update(dt, this.player.pos, this.camRig.yaw)
+    // task 110 — forest pack (static; the first call just kicks the async build)
+    this.forest.ensureStarted()
 
     // v68 — Vanodyan Deep: cicada/bird/growl ambience tracks wildness, the dead hunt
     this.ambience.update(dt, this.worldTime, this.player.pos.x, this.player.pos.z, this.camRig.yaw)
@@ -4305,6 +4329,7 @@ export class Game {
     this.crowd = null
     if (this.animals) { this.animals.dispose(); this.engine?.scene.remove(this.animals.group) }
     if (this.wildlife) { this.wildlife.dispose(); this.engine?.scene.remove(this.wildlife.group) }
+    if (this.forest) { this.forest.dispose(); this.engine?.scene.remove(this.forest.group) }
     if (this.zombies) { this.zombies.dispose(); this.engine?.scene.remove(this.zombies.group) }
     this.ambience?.reset()
     this.input?.dispose()

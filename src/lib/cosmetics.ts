@@ -616,9 +616,29 @@ export function sanitizeCosmetics(raw: unknown): Record<string, string | boolean
   return Object.keys(out).length ? out : undefined
 }
 
+/** task 110 — season-bot body pools. Bots are no longer the flat Classic rig:
+ *  every bot now wears a random GLB human from the Characters & Animals pack,
+ *  gender-matched to its rolled gender, so the crowd reads as a real mixed
+ *  protest instead of 99 clones. Curated for plausibility:
+ *  - CIVILIAN pool (88%): everyday people you'd actually meet at a march.
+ *  - FLAVOR pool (12%): the pack's oddballs (witch, king, astronaut…) — the
+ *    game is a satire, and every crowd deserves a legend. SWAT/Soldier are
+ *    intentionally EXCLUDED: they are police-side bodies (POLICE_BODY_IDS)
+ *    and a protector wearing one would fall back to Classic anyway. */
+export const BOT_BODY_POOLS: Record<'male' | 'female', string[]> = {
+  female: ['casual-female', 'casual2-female', 'worker-female', 'suit-female', 'formal-female', 'adventurer-female'],
+  male: ['hoodie-man', 'worker-man', 'suit-man', 'farmer-man', 'punk-man', 'adventurer'],
+}
+const BOT_BODY_FLAVOR: Record<'male' | 'female', string[]> = {
+  female: ['medieval-female', 'scifi-female', 'witch-female'],
+  male: ['king-man', 'spacesuit-man', 'beach'],
+}
+
 /** Deterministic-ish random free-tier look for season bots — variety without unlock logic.
  *  task 82: hair/outfit/footwear draw from the GENDER's own book so bot crowds
- *  read male/female at a glance. */
+ *  read male/female at a glance. task 110: + a random gender-matched GLB pack
+ *  body — the nearest-rigged bots render as real rigged humans, the far crowd
+ *  stays on the cheap impostor LOD. */
 export function randomFreeCosmetics(rand: () => number = Math.random): Record<string, string | boolean> {
   const pick = (arr: CosmeticItem[]) => {
     const free = arr.filter((i) => i.unlock.type === 'free')
@@ -627,7 +647,9 @@ export function randomFreeCosmetics(rand: () => number = Math.random): Record<st
   const female = rand() < 0.5
   const gender: 'male' | 'female' = female ? 'female' : 'male'
   const hairRoll = rand()
+  const bodyPool = rand() < 0.88 ? BOT_BODY_POOLS[gender] : BOT_BODY_FLAVOR[gender]
   const out: Record<string, string | boolean> = {
+    body: bodyPool[Math.floor(rand() * bodyPool.length)],
     hat: pick(CATALOGS.hat),
     hair: female
       ? (hairRoll < 0.5 ? 'ponytail' : hairRoll < 0.8 ? 'bun' : pick(itemsForKind('hair', gender)))
