@@ -2686,3 +2686,27 @@ Work Log:
 Stage Summary:
 - v105: Beach character live + full combat/action animation layer (kick R, punch X, roll = double-jump clip, directional strafe/back run lean for locals AND remotes, Death clip on KO). Server whitelist synced. All app code typechecks + lints clean; pre-existing skills/ tsc errors unrelated.
 - Files: shared/types.ts, anim.ts, player.ts, game.ts, avatar-look.ts, input.ts, game-store.ts, cosmetics.ts, SettingsPanel.tsx, HowToPlay.tsx, CharacterSelect.tsx, facial-rig.ts, asset-cache.ts, mini-services/game-server/room.ts, public/models/beach.glb (new).
+
+---
+Task ID: 108
+Agent: Z.ai Code (main)
+Task: "check and update when character goes near animal let them run away, also remove old cows and replace with new glb cows and horses, donkey, keep the domestic animals near city and farm, fox and husky near graveyards, other animals in random jungles around the city"
+
+Work Log:
+- Recon: task-107's WildlifeSystem spawned ALL 10 GLB species in the jungle; old cows lived in TWO systems — procedural traffic cows (npcs.ts buildCow + world-def veh_cow1..6 routes, solid AABB, 8-dmg headbutt) and procedural street-animal cows (animal-sim.ts ANIMAL_SPOTS, 5 entries). Dumped all 10 animal GLB clip sets (every species has Gallop/Walk/Eating/Idle + Attack/Death) — flee animation resolves for all.
+- Rewrote src/game/wildlife.ts around 3 habitats: DOMESTIC (cow 3, bull 2, donkey 2, horse 2, shiba 2) — each species pops one site from alternating CITY_MARGIN / FARM_BELT pools (city = the 5 legacy street-animal margins; farm = 5 Zone-B countryside sites); GRAVEYARD (fox 3, husky 2) — round-robin across the Kabristan fence ring (r+5..r+16) + the 3 v71 forgotten-grave clusters (NW -330,-100 / SE 300,-620 / far-north -30,62); JUNGLE (deer 4, stag 3, wolf 3) — unchanged rejection sampling. Per-species temperament: panicR (cow 4.6m → deer 10.5m), fleeMul, home leash (domestic 22-26m, wild 40m), panic voice (cow/bull/donkey/horse moo, canids bark, deer/stag/wolf silent).
+- PANIC-FLEE state machine: player inside panicR → state=flee + Gallop clip (fallback Walk) + spatial voice; escape vector re-aimed every 0.45s while player within panicR+4 (cannot be cornered); target clamped onto home leash; settles to idle only when threat beyond panicR+7 AND burst spent. Removed the old 5.5m spook + 9s cooldown (that let players walk up to standing animals).
+- Removed old cows: world-def veh_cow1..6 routes deleted (traffic now 26: autos/buses/cars/bikes); ANIMAL_SPOTS cow entries deleted (street animals now 5 dogs + 3 cats). Cow machinery in npcs.ts/animals.ts left as harmless dead code (referenced, lint-clean).
+- Lazy gate widened: wildlife.ensureStarted now opens when the player leaves the spawn plaza (0,-8) by 65m OR wildness >= 0.18 — the domestic herds live AT the city margins so the old wildness-only gate would never open for city sessions.
+- game.ts passes camRig.yaw into wildlife.update for spatial panic voices; field comment updated.
+- asset-cache.ts: the 5 domestic GLBs (~14MB) join the cookie-consent warm-cache (they stream in nearly every session); graveyard/jungle species stay on-demand.
+- HowToPlay: removed the "cows chip 8 HP" claim + the Grand Avenue road-cow quip; added habitat/flee guidance line.
+- BUG FOUND IN QA: the Kabristan ring spawned no scavengers — anchoredValid excluded everything within GRAVEYARD.r+16 while the ring targets r+5..r+16 (always rejected). Fix: avoidGraveyard=false param for graveyard placement. Re-verified: fox on the Kabristan ring + clusters.
+- Verified in browser (agent-browser, v108 badge): 26 beasts + 4 props spawn; domestic census cow×3@Parliament Plaza, bull×2@SE farm, donkey×2@Market Exit, horse×2@W farm, shiba×2@Colony Rd; graveyard fox×3+husky×2 across 4 grave sites; jungle deer×4/stag×3/wolf×3. Fox flee: state=flee + Gallop + gap 3.5→6.3m, survived 3 chase rounds (re-aim), leash 29.7/30m. Cow flee: flee + Gallop + moo fired (voiceCd armed). Street animals 0 cows, traffic 0 cows. Screenshots: GLB cow galloping at Parliament Plaza, fox fleeing on the Kabristan trail.
+- KNOWN HEADLESS LIMIT: the settle branch (stateT<=0 && player beyond panicR+7 → idle) could not be watched in real time — SwiftShader runs the sim at ~2% real time; logic verified by code trace; the flee side (same state machine) is browser-proven.
+- lint + tsc clean; committed 746bd03, pushed to main.
+
+Stage Summary:
+- v108: habitat wildlife live — GLB cow/bull/donkey/horse/shiba herds graze city margins + farm belt (old procedural traffic + street cows fully retired), foxes/huskies haunt the Kabristan + forgotten clusters, deer/stag/wolf roam random jungle, ALL beasts panic-flee when the player approaches (Gallop + re-aim + leash + moo/bark).
+- Files: src/game/wildlife.ts (rewritten), src/game/game.ts, src/game/shared/animal-sim.ts, src/game/shared/world-def.ts, src/lib/asset-cache.ts, src/components/game/HowToPlay.tsx, src/lib/build-version.ts (v108).
+- Next up (queue): real-device check of settle-back + herd regroup; junior-citizen quality pass; offline/0-crowd Windows diagnosis (start-windows.bat + net.ts read); unreal-engine-skills research; adventurer stride calibration.
