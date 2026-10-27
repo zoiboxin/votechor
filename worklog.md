@@ -2710,3 +2710,50 @@ Stage Summary:
 - v108: habitat wildlife live — GLB cow/bull/donkey/horse/shiba herds graze city margins + farm belt (old procedural traffic + street cows fully retired), foxes/huskies haunt the Kabristan + forgotten clusters, deer/stag/wolf roam random jungle, ALL beasts panic-flee when the player approaches (Gallop + re-aim + leash + moo/bark).
 - Files: src/game/wildlife.ts (rewritten), src/game/game.ts, src/game/shared/animal-sim.ts, src/game/shared/world-def.ts, src/lib/asset-cache.ts, src/components/game/HowToPlay.tsx, src/lib/build-version.ts (v108).
 - Next up (queue): real-device check of settle-back + herd regroup; junior-citizen quality pass; offline/0-crowd Windows diagnosis (start-windows.bat + net.ts read); unreal-engine-skills research; adventurer stride calibration.
+
+---
+Task ID: 109
+Agent: Z.ai Code (main)
+Task: "check the domestic animals not showing near city or farm, only check the glb files for all types of animals, keep dogs cats inside city, cow near horse donky near city and wild animals in jungle"
+
+Work Log:
+- Recon: confirmed the pack's full GLB animal inventory (cow, bull, donkey, horse, shiba-inu, husky, fox, deer, stag, wolf) — NO cat GLB exists in "Characters and animals.zip", so the city's cats remain the procedural street cats (animal-sim.ts, present since v66); documented honestly.
+- ROOT CAUSE of "domestic animals not showing near city or farm": ensureStarted() gated the wildlife build behind a 65 m walk from spawn (0,-8) — but the nearest city sites sat at 55 m, so a player looking around the city at match start never triggered the build. SECONDARY: task 108's per-species single-site toggle could strand a whole species at one shuffled site the player never visits.
+- FIX 1 (start): ensureStarted() now fires on the FIRST match frame — no gates. Loads stream sequentially (no frame hitch); the 5 city/edge species (~14 MB) are pre-warmed by the cookie-consent cache.
+- FIX 2 (habitats — task-108 graveyard habitat retired per the new grouping):
+  - PETS inside city: shiba x3 at the proven street corners (8,-66 / -7,-188 / 10,-462) + husky x2 at (-12,-272 / 11,-516) — husky moved here from the graveyard (it is a dog).
+  - DOMESTIC herds split BOTH flanks: cow x2 city (9,-105) + x2 farm (120,-240); bull x1 city (-9,-145) + x1 farm (-132,-430); donkey x2 city (10,-438) + x1 farm (128,-470); horse x2 city (9,-240) + x1 farm (62,-588). City-edge pastures verified off the spine asphalt, clear of the four cross roads and the quadrant-loop lanes.
+  - JUNGLE wild: deer x4, stag x3, wolf x3 + fox x3 (moved here from the graveyard), task-107 rejection sampling unchanged.
+- Added a one-shot __vcDiag 'wildlifeCensus' (species + coords) so future "animals aren't showing" reports are console-diagnosable.
+- game.ts call site updated (ensureStarted() zero-arg) + field doc; HowToPlay habitat line rewritten; VC_BUILD v108 -> v109.
+- VERIFIED in browser (agent-browser, V109 badge): census = 30 beasts, 0 glbAssetError. Screenshots: GLB cows grazing at the Purani Sadak edge; bull+cow among the Zone-B crop-field fences. Panic-flee re-verified: cow at 4.6 m -> state=flee; plaza shiba at ~3 m -> fled to 12.1 m.
+- lint + tsc clean; committed fcbccc2, pushed to main.
+- NOTE: v109 is a client-bundle change — the Windows box must git pull + REBUILD the frontend + hard-refresh, or the site keeps serving the old bundle.
+- (Entry re-appended in a later session — the two earlier append attempts died on broken tool sessions after the push.)
+
+Stage Summary:
+- v109: habitat wildlife matches the user's grouping exactly — GLB dogs + procedural street cats INSIDE the city, cow/bull/donkey/horse herds on city-edge pastures AND the farm belt, fox/deer/stag/wolf in the random jungle, all panic-fleeing. Wildlife streams from the first frame so the city is stocked before the player can reach it.
+- Files: src/game/wildlife.ts, src/game/game.ts, src/components/game/HowToPlay.tsx, src/lib/build-version.ts (v109).
+- Next up (queue): real-device check; junior-citizen quality pass; offline/0-crowd Windows diagnosis; unreal-engine-skills research; adventurer stride calibration; add husky GLB to asset-cache SMALL_ASSET_URLS.
+
+---
+Task ID: 110
+Agent: Z.ai Code (main)
+Task: "change bots with glb random male female characters, also check attached zip file unzip understand this is forest pack update game with this, understand prompt replace classic bots with glb improve it so game will be more professional"
+
+Work Log:
+- Unzipped upload/AmiPolyGon_Forest_Free_Pack.zip -> 38 GLB environment models ONLY (trees x6, pines x3, dead trees x3, trunks x4, logs x4, sticks x3, bushes x4, grass x11 — 2.3 MB total; NO characters in the pack, verified). Measured heights from GLB accessors: trees ~6-7 m, pines ~6 m, bushes 1.3 m, grass 0.5 m, logs/trunks 0.5-0.7 m.
+- BOTS -> GLB (the core ask): randomFreeCosmetics() (src/lib/cosmetics.ts) never set a `body` field, so ALL season bots rendered the flat Classic rig. Now every bot rolls a gender-matched GLB pack body: BOT_BODY_POOLS civilians (88%: casual-female/casual2-female/worker-female/suit-female/formal-female/adventurer-female vs hoodie-man/worker-man/suit-man/farmer-man/punk-man/adventurer) + BOT_BODY_FLAVOR oddballs (12%: witch/king/spacesuit/scifi/beach/medieval — satire survives). SWAT/Soldier excluded (POLICE_BODY_IDS — protectors would fall back to Classic).
+- Client perf guard: new Game.BOT_GLB_RIG_BUDGET = 14 in ensureRemoteRigs — bots wearing GLB bodies get their own tighter rig budget (skinned 62-joint rigs >> flat procedural cost); classic-bot budget path preserved; budget eviction still drops rig+GLB together. Far crowd remains the 3-draw-call impostor LOD.
+- FOREST: new src/game/forest.ts ForestPack — per-species InstancedMesh batching (each pack model = 1 mesh + 1 material, verified from GLB JSON). 1323 instances across 38 species in ~38 draw calls, seeded mulberry32 RNG (stable per session), ground-snapped, zero per-frame cost.
+  - Habitats: DEEP (wildness>=0.55): pines 70x3, dead trees 18x3, trunks 16x4, logs 12x4, sticks 45x3; FRINGE (0.18-0.55): broadleaf trees 26-34x6, bushes 30x4, grass 26x11, logs 8x4; GRAVEYARD ring (r+6..r+30): dead trees 10x3; CITY margins (sidewalk corridor x +/-10.5-15.5, z -60..-540): bushes 12-14x4, grass 10x11 — NO city trees (buildings own the skyline).
+  - placeable() rejects: spine corridor |x|<13.5 (z 40..-566), cross streets z -78/-198/-286/-452 +/-9 (|x|<176), ring roads ||x|-166|<13, river band, arena exit, spawn plaza r14, grave interior r+4.
+- Wired into game.ts (field + init + ensureStarted tick + dispose); asset-cache: husky (city dog now) + 21 forest GLBs join the cookie warm cache; VC_BUILD v109 -> v110.
+- VERIFIED in browser (agent-browser, V110, game server restarted on :3002 for a fresh season): 99 remotes joined; 45+ bots carried GLB bodies with 13 unique ids; glbRigged = EXACTLY 14 (budget cap proven); suit-female bot "AntiCommittee" rendered + name-tagged next to the player (screenshot); bots show DETAINED states (season sim alive). Forest: 38/38 species, 1323 instances, 0 glbAssetError, forestCensus diag fired; screenshots: GLB trees lining the fringe roadside + big trunked trees and a fallen log in the deep wild. OFFLINE badge + high ping = known headless watchdog artifact (data streamed throughout).
+- lint + tsc clean; committed e2b643d, pushed to main.
+- DEPLOY NOTE: client + server change — Windows box: git pull, rebuild frontend; the game server hot-reloads via bun --hot but a restart is recommended so seasons re-roll with the new body pools.
+
+Stage Summary:
+- v110: the crowd reads professional — season bots are random rigged GLB male/female humans (14 nearest fully animated, impostor LOD beyond), and the wild band gained 1323 instanced AmiPolyGon plants (pines, broadleaf trees, dead trees, logs, trunks, sticks, bushes, grass) in three habitat bands + the graveyard ring, at ~38 draw calls.
+- Files: src/lib/cosmetics.ts, src/game/game.ts, src/game/forest.ts (NEW), src/lib/asset-cache.ts, src/lib/build-version.ts, public/models/forest/*.glb (38 new).
+- Next up (queue): junior-citizen quality pass; offline/0-crowd Windows diagnosis (start-windows.bat + net.ts + cloudflared WSS); unreal-engine-skills research; adventurer stride calibration; forest density tuning if the user wants thicker woods; offline NPC police could later wear swat-man/soldier-female GLB (kept procedural this round — uniform authority + detain/lathi anim wiring).
