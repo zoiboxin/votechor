@@ -17,7 +17,10 @@ const CACHE_PREFIX = 'vc-assets-'
 
 export const cacheName = () => `${CACHE_PREFIX}${VC_BUILD}`
 
-/** The small character models (~5 MB total) — offered by the banner. */
+/** The character models — offered by the banner. task 107: the 18-body
+ *  Characters & Animals pack joins the warm-cache offer (~50 MB all-in; the
+ *  jungle's wildlife/props stream on first wild visit and cache themselves
+ *  through fetchAssetBuffer on the way). */
 export const SMALL_ASSET_URLS = [
   '/models/votechor-kid.glb',
   '/models/votechor-female.glb',
@@ -28,6 +31,24 @@ export const SMALL_ASSET_URLS = [
   '/models/votechor-human-child.glb',
   '/models/adventurer.glb',
   '/models/beach.glb',
+  '/models/casual-female.glb',
+  '/models/casual2-female.glb',
+  '/models/adventurer-female.glb',
+  '/models/formal-female.glb',
+  '/models/medieval-female.glb',
+  '/models/scifi-female.glb',
+  '/models/soldier-female.glb',
+  '/models/suit-female.glb',
+  '/models/witch-female.glb',
+  '/models/worker-female.glb',
+  '/models/hoodie-man.glb',
+  '/models/farmer-man.glb',
+  '/models/king-man.glb',
+  '/models/punk-man.glb',
+  '/models/spacesuit-man.glb',
+  '/models/suit-man.glb',
+  '/models/swat-man.glb',
+  '/models/worker-man.glb',
 ] as const
 
 /** The 24 MB textured protester hero — offered as an opt-in second step. */

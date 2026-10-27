@@ -14,6 +14,7 @@ import { CrowdLod, type CrowdEntry } from './crowd'
 import { NpcSystem, VehicleSystem } from './npcs'
 import { ItemSystem } from './items'
 import { AnimalSystem, type AnimalHandle } from './animals'
+import { WildlifeSystem } from './wildlife'
 import { ZombieSystem } from './zombies'
 import { JungleAmbience, wildnessAt } from './jungle-ambience'
 import { BossClient } from './boss'
@@ -153,6 +154,8 @@ export class Game {
   private vehicles!: VehicleSystem
   private items!: ItemSystem
   private animals!: AnimalSystem
+  /** task 107 — GLB jungle wildlife (10 species, random wild spots) + pack props */
+  private wildlife!: WildlifeSystem
   private zombies!: ZombieSystem
   private ambience!: JungleAmbience
   private wildToastShown = false
@@ -322,6 +325,16 @@ export class Game {
     void this.glbMgr.load('/models/votechor-human-child.glb')
     void this.glbMgr.load('/models/adventurer.glb')
     void this.glbMgr.load('/models/beach.glb')
+    // task 107 — the 18-body Characters & Animals pack joins the warm cache so
+    // any wardrobe pick swaps near-instantly (~2.7 MB each, parallel + cached)
+    for (const url of [
+      '/models/casual-female.glb', '/models/casual2-female.glb', '/models/adventurer-female.glb',
+      '/models/formal-female.glb', '/models/medieval-female.glb', '/models/scifi-female.glb',
+      '/models/soldier-female.glb', '/models/suit-female.glb', '/models/witch-female.glb',
+      '/models/worker-female.glb', '/models/hoodie-man.glb', '/models/farmer-man.glb',
+      '/models/king-man.glb', '/models/punk-man.glb', '/models/spacesuit-man.glb',
+      '/models/suit-man.glb', '/models/swat-man.glb', '/models/worker-man.glb',
+    ]) void this.glbMgr.load(url)
     this.engine = new Engine(canvas)
     // lightning → white HUD flash + delayed thunder roll
     this.engine.sky.onLightning = () => {
@@ -441,6 +454,12 @@ export class Game {
       onPetOver: (label) => this.store.notify(`${label} wanders off — feed again to be friends`, 'info'),
     })
     this.engine.scene.add(this.animals.group)
+
+    // task 107 — jungle wildlife + pack props: lazily streams the first time the
+    // player nears the wild (wildness gate inside ensureStarted), spawns the 10
+    // GLB species at random jungle spots + 4 abandoned landmarks.
+    this.wildlife = new WildlifeSystem(this.glbMgr, this.physics)
+    this.engine.scene.add(this.wildlife.group)
 
     // v68 — the Vanodyan Dead + their forest's voice (client-local bots + bed)
     this.zombies = new ZombieSystem(this.fx, {
@@ -2753,6 +2772,9 @@ export class Game {
 
     // street animals + birds — independent bots, frozen with the rest of the sim when paused
     this.animals.update(dt, this.worldTime, this.player.pos, Math.hypot(this.player.vel.x, this.player.vel.z), this.camRig.yaw)
+    // task 107 — jungle wildlife: lazy stream gate + wander/flee bots (same pause gating)
+    this.wildlife.ensureStarted(this.player.pos.x, this.player.pos.z)
+    this.wildlife.update(dt, this.player.pos)
 
     // v68 — Vanodyan Deep: cicada/bird/growl ambience tracks wildness, the dead hunt
     this.ambience.update(dt, this.worldTime, this.player.pos.x, this.player.pos.z, this.camRig.yaw)
@@ -4273,6 +4295,7 @@ export class Game {
     this.crowd?.dispose()
     this.crowd = null
     if (this.animals) { this.animals.dispose(); this.engine?.scene.remove(this.animals.group) }
+    if (this.wildlife) { this.wildlife.dispose(); this.engine?.scene.remove(this.wildlife.group) }
     if (this.zombies) { this.zombies.dispose(); this.engine?.scene.remove(this.zombies.group) }
     this.ambience?.reset()
     this.input?.dispose()

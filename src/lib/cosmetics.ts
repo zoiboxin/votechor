@@ -457,7 +457,41 @@ export const HELD_CATALOG: CosmeticItem[] = [
  * Not part of the six equipment slots — the wardrobe renders it as its own
  * top section. Police duty always marches in the Classic rig.
  */
+/**
+ * task 107 — body catalog, FEMALE-FIRST per the customize-page redesign:
+ * "1 · Choose Your Character" renders THIS list, labeled with the actual GLB
+ * file names (Casual_Female, Farmer_Man, …). All 18 pack bodies are the same
+ * 62-joint family as the Adventurer/Beach (24 pro clips → kick/punch/roll/
+ * strafe/death just work), fully dressed, skin-tint only. 'beach' is added
+ * here too — it shipped in task 106 but was never registered, so the server
+ * sanitizer silently dropped it on save (fixed). Police duty always renders
+ * the Classic rig; the 'body' slot validates like every other catalog.
+ */
 export const BODY_CATALOG: CosmeticItem[] = [
+  // ---- the imported Characters & Animals pack — females first (task 107) ----
+  { id: 'casual-female', kind: 'body', label: 'Casual_Female', emoji: '👚', desc: 'Comfy tee & jeans — the everyday marcher.', unlock: { type: 'free' } },
+  { id: 'casual2-female', kind: 'body', label: 'Casual2_Female', emoji: '👗', desc: 'Second casual cut — orange & blond energy.', unlock: { type: 'free' } },
+  { id: 'adventurer-female', kind: 'body', label: 'Adventurer_Female', emoji: '🧭', desc: 'Trail-ready explorer — boots, satchel, 24 pro animations.', unlock: { type: 'free' } },
+  { id: 'formal-female', kind: 'body', label: 'Formal_Female', emoji: '💼', desc: 'Committee-hearing formal — red suit, gold trim.', unlock: { type: 'free' } },
+  { id: 'medieval-female', kind: 'body', label: 'Medieval_Female', emoji: '🏹', desc: 'Vanodyan ranger — leather, steel & longbow vibes.', unlock: { type: 'free' } },
+  { id: 'scifi-female', kind: 'body', label: 'SciFi_Female', emoji: '🤖', desc: 'Future-cadet blues — protest in 3025.', unlock: { type: 'free' } },
+  { id: 'soldier-female', kind: 'body', label: 'Soldier_Female', emoji: '🪖', desc: 'Field-kit soldier — duty boots & brim.', unlock: { type: 'free' } },
+  { id: 'suit-female', kind: 'body', label: 'Suit_Female', emoji: '👩‍💼', desc: 'Boardroom rebel — black blazer, briefcase energy.', unlock: { type: 'free' } },
+  { id: 'witch-female', kind: 'body', label: 'Witch_Female', emoji: '🧙', desc: 'Pointy hat, purple robes — spells for the cause.', unlock: { type: 'free' } },
+  { id: 'worker-female', kind: 'body', label: 'Worker_Female', emoji: '👷‍♀️', desc: 'High-vis vest — builds barricades on lunch break.', unlock: { type: 'free' } },
+  // ---- earlier imported one-offs ----
+  { id: 'beach', kind: 'body', label: 'Beach', emoji: '🏖️', desc: 'Vacationer — sandals laced, 24 pro animations.', unlock: { type: 'free' } },
+  { id: 'adventurer', kind: 'body', label: 'Adventurer', emoji: '🎒', desc: 'Imported rigged explorer — baked kit, 24 pro animations.', unlock: { type: 'free' } },
+  // ---- the pack's men ----
+  { id: 'hoodie-man', kind: 'body', label: 'Casual_Hoodie_Man', emoji: '🧥', desc: 'Hood up, face unknown — shadow of the movement.', unlock: { type: 'free' } },
+  { id: 'farmer-man', kind: 'body', label: 'Farmer_Man', emoji: '🌾', desc: 'Field boots & rolled sleeves — feeds the march.', unlock: { type: 'free' } },
+  { id: 'king-man', kind: 'body', label: 'King_Man', emoji: '👑', desc: 'Crowned & caped — leads by decree.', unlock: { type: 'free' } },
+  { id: 'punk-man', kind: 'body', label: 'Punk_Man', emoji: '🎸', desc: 'Spiked, tattooed, loud — three chords for freedom.', unlock: { type: 'free' } },
+  { id: 'spacesuit-man', kind: 'body', label: 'Spacesuit_Man', emoji: '👨‍🚀', desc: 'Sealed EVA suit — protests in a vacuum.', unlock: { type: 'free' } },
+  { id: 'suit-man', kind: 'body', label: 'Suit_Man', emoji: '👔', desc: 'Grey-flannel lobbyist turned believer.', unlock: { type: 'free' } },
+  { id: 'swat-man', kind: 'body', label: 'Swat_Man', emoji: '🛡️', desc: 'Visor down, vest on — ready for anything.', unlock: { type: 'free' } },
+  { id: 'worker-man', kind: 'body', label: 'Worker_Man', emoji: '👷', desc: 'Yellow hard-hat — union strong.', unlock: { type: 'free' } },
+  // ---- in-house bodies ----
   {
     id: 'classic',
     kind: 'body',
@@ -496,14 +530,6 @@ export const BODY_CATALOG: CosmeticItem[] = [
     label: 'Junior Citizen',
     emoji: '🧒',
     desc: 'Kid-proportioned human — big head, shorts, big sneaker energy.',
-    unlock: { type: 'free' },
-  },
-  {
-    id: 'adventurer',
-    kind: 'body',
-    label: 'Adventurer',
-    emoji: '🎒',
-    desc: 'Imported rigged explorer — baked hair, boots & satchel, 24 pro animations.',
     unlock: { type: 'free' },
   },
 ]
@@ -578,8 +604,9 @@ export function sanitizeCosmetics(raw: unknown): Record<string, string | boolean
   if (gear && CATALOGS.gear.some((i) => i.id === gear)) out.gear = gear
   const held = str(src.held, 24)
   if (held && CATALOGS.held.some((i) => i.id === held)) out.held = held
-  // task 95 — character body (classic rig / protester GLB / runner kid GLB)
-  const body = str(src.body, 12)
+  // task 95 — character body (classic rig / protester GLB / runner kid GLB /
+  // task 107 pack bodies — kebab-case ids run long, cap raised 12 → 24)
+  const body = str(src.body, 24)
   if (body && CATALOGS.body.some((i) => i.id === body)) out.body = body
   if (typeof src.glasses === 'boolean') out.glasses = src.glasses
   const skin = str(src.skinTone, 9)

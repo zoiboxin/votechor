@@ -8,7 +8,7 @@ import { useGameStore, uiActions, type Profile } from '@/lib/game-store'
 import { ARCHETYPES, ACHIEVEMENTS } from '@/game/shared/constants'
 import {
   HAT_CATALOG, HAIR_CATALOG, FACE_CATALOG, BUILD_CATALOG, OUTFIT_CATALOG, FOOTWEAR_CATALOG, GEAR_CATALOG, HELD_CATALOG,
-  POLICE_OUTFIT_CATALOG, POLICE_HAT_CATALOG,
+  POLICE_OUTFIT_CATALOG, POLICE_HAT_CATALOG, BODY_CATALOG,
   SKIN_TONES, unlockLabel, anyItemIsUnlocked, itemsForKind, itemFitsGender, genderDefaultFor,
   type CosmeticItem, type CosmeticKind,
 } from '@/lib/cosmetics'
@@ -46,24 +46,6 @@ const DEFAULTS: Record<CosmeticKind, string> = {
   policeOutfit: 'khaki', policeHat: 'peak', body: 'classic',
 }
 
-function cssMiniPreview(a: Archetype) {
-  return (
-    <div className="relative mx-auto flex h-24 w-24 items-end justify-center overflow-hidden rounded-xl border-2 border-[#1c1a17]/60"
-      style={{ background: `linear-gradient(180deg, ${a.colors.accent}55 0%, ${a.colors.shirt}33 100%)` }}>
-      <div className="absolute bottom-0 flex gap-1.5">
-        <div className="h-5 w-3.5 rounded-b-md" style={{ background: a.colors.pants }} />
-        <div className="h-5 w-3.5 rounded-b-md" style={{ background: a.colors.pants }} />
-      </div>
-      <div className="absolute bottom-4 h-10 w-11 rounded-t-lg border border-[#1c1a17]/40" style={{ background: a.colors.shirt }}>
-        <div className="absolute left-1/2 top-1.5 h-4 w-1.5 -translate-x-1/2 rounded" style={{ background: a.colors.accent }} />
-      </div>
-      <div className="absolute bottom-[3.75rem] h-9 w-9 rounded-full border-2 border-[#1c1a17]/50" style={{ background: a.colors.skin }}>
-        <div className="absolute inset-x-0 top-0 h-2.5 rounded-t-full" style={{ background: a.colors.hair }} />
-      </div>
-    </div>
-  )
-}
-
 export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const profile = useGameStore((s) => s.profile)
   const setProfile = useGameStore((s) => s.setProfile)
@@ -84,7 +66,10 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const [glasses, setGlasses] = useState(profile?.cosmetics?.glasses ?? false)
   const [skinTone, setSkinTone] = useState(profile?.cosmetics?.skinTone ?? '')
   const [signText, setSignText] = useState(profile?.cosmetics?.signText ?? '')
-  const [body, setBody] = useState<string>(profile?.cosmetics?.body ?? 'classic')
+  // task 107 — FEMALE-FIRST: the customize page opens on Casual_Female (the first
+  // card of step 1). Existing profiles keep their saved body; only absent bodies
+  // (new profiles) fall through to the female-first default.
+  const [body, setBody] = useState<string>(profile?.cosmetics?.body ?? 'casual-female')
   const [role, setRole] = useState<'protector' | 'police'>(profile?.role === 'police' ? 'police' : 'protector')
   const [saving, setSaving] = useState(false)
   const [unlockedCodes, setUnlockedCodes] = useState<Set<string>>(new Set())
@@ -114,6 +99,18 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
       window.removeEventListener('focus', load)
       clearInterval(iv)
     }
+  }, [])
+
+  // task 107 — female-first default for NEW profiles: persist Casual_Female once
+  // so the game, the join payload and every remote see the same body step 1 shows.
+  // Only fires when a real profile exists and cosmetics.body was never saved
+  // (existing picks stay untouched; profile-less guests just see the page default).
+  useEffect(() => {
+    if (!profile || profile.cosmetics?.body) return
+    uiActions().updateCosmetics({ body: 'casual-female' })
+    setProfile({ ...profile, cosmetics: { ...profile.cosmetics, body: 'casual-female' } })
+    void persist({ body: 'casual-female' })
+    // run once per mount — profile loads later must not overwrite a user's choice
   }, [])
 
   const level = profile?.level ?? 1
@@ -276,6 +273,8 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     uiActions().updateCosmetics({ body: id })
     if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, body: id } })
     void persist({ body: id })
+    // task 107 — pack bodies share one toast voice, keyed off the catalog label
+    const bLabel = BODY_CATALOG.find((x) => x.id === id)?.label ?? id
     notify(
       id === 'classic' ? 'Classic Rig on — your full customized look is front and center'
       : id === 'protester' ? 'High-Fi body on — your outfit tint + gear ride the GLB'
@@ -283,7 +282,8 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
       : id === 'human-child' ? 'Junior Citizen on — big head, big sneaker energy'
       : id === 'adventurer' ? 'Adventurer equipped — boots laced, satchel packed!'
       : id === 'beach' ? 'Beach mode on — sandals laced, vacation vibes deployed!'
-      : 'Runner Kid equipped — the mascot hits the streets!', 'squad')
+      : id === 'kid' ? 'Runner Kid equipped — the mascot hits the streets!'
+      : `${bLabel} equipped — 24 pro animations ready!`, 'squad')
   }
 
   const randomize = () => {
@@ -366,42 +366,86 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
 
       <div className="vc-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-5 px-4 py-5">
-          {/* Archetype grid */}
+          {/* task 107 — STEP 1: the GLB cast, labeled with the real file names,
+              females first (default Casual_Female). Archetype perks live on as a
+              compact personality strip below the grid. */}
           <section aria-label="Characters">
-            <div className="mb-2 flex items-baseline gap-2">
+            <div className="mb-2 flex flex-wrap items-baseline gap-2">
               <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">1 · Choose Your Character</h3>
-              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">{ARCHETYPES.length} rebels with quirks</span>
+              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">
+                {BODY_CATALOG.length} bodies · GLB file names · 24 pro animations each
+              </span>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {ARCHETYPES.map((a, i) => {
-                const active = a.id === archetype
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              {BODY_CATALOG.map((b, i) => {
+                const active = b.id === body
+                const lockedForPolice = police && b.id !== 'classic'
+                const badge = b.id === 'classic' ? 'RIG'
+                  : b.id === 'protester' ? 'HI-FI'
+                  : b.id === 'kid' ? 'MASCOT'
+                  : 'HD'
                 return (
                   <motion.button
-                    key={a.id}
-                    initial={{ opacity: 0, y: 14 }}
+                    key={b.id}
+                    initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.04 }}
-                    onClick={() => chooseArchetype(a.id)}
-                    className={`relative rounded-2xl border-2 p-3 text-left transition-all duration-150 ${
-                      active
-                        ? 'border-[#8c1f28] bg-[#f2c14e]/40 shadow-[5px_5px_0_#8c1f28]'
-                        : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
+                    transition={{ delay: Math.min(i * 0.02, 0.3) }}
+                    onClick={() => chooseBody(b.id)}
+                    aria-pressed={active}
+                    disabled={lockedForPolice}
+                    className={`relative rounded-2xl border-2 p-2.5 text-left transition-all duration-150 ${
+                      lockedForPolice
+                        ? 'cursor-not-allowed border-dashed border-[#1c1a17]/30 bg-[#efe6c8]/50 opacity-60'
+                        : active
+                          ? 'border-[#8c1f28] bg-[#f2c14e]/40 shadow-[5px_5px_0_#8c1f28]'
+                          : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
                     }`}
                   >
-                    {active && (
+                    {active && !lockedForPolice && (
                       <span className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1c1a17] bg-[#2e6e4e] text-[#f5efdc]">
                         <Check className="h-3.5 w-3.5" strokeWidth={3} />
                       </span>
                     )}
-                    {cssMiniPreview(a)}
-                    <div className="mt-2 text-sm font-black uppercase tracking-tight text-[#1c1a17]">{a.name}</div>
-                    <div className="mt-0.5 text-[11px] font-semibold leading-snug text-[#1c1a17]/70">{a.desc}</div>
-                    <div className="mt-2 flex items-start gap-1 rounded-lg bg-[#2e6e4e]/15 px-2 py-1 text-[10px] font-bold text-[#2e6e4e]">
-                      <Gem className="mt-0.5 h-3 w-3 shrink-0" /> {a.perk}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl leading-none">{b.emoji}</span>
+                      <span className="text-xs font-black uppercase leading-tight tracking-tight text-[#1c1a17]">{b.label}</span>
+                      <span className="ml-auto shrink-0 rounded-full border border-[#2e6e4e]/50 bg-[#2e6e4e]/10 px-1.5 py-px text-[8px] font-black uppercase tracking-wider text-[#2e6e4e]">{badge}</span>
+                    </div>
+                    <div className="mt-1.5 text-[10px] font-semibold leading-snug text-[#1c1a17]/65">
+                      {lockedForPolice ? 'Officer duty marches in the Classic rig' : b.desc}
                     </div>
                   </motion.button>
                 )
               })}
+            </div>
+            {/* Personality — the archetype perks (gameplay) ride ANY body */}
+            <div className="mt-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#efe6c8]/50 p-2.5">
+              <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Personality</span>
+                <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">archetype perks ride any body — tap to switch</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {ARCHETYPES.map((a) => {
+                  const active = a.id === archetype
+                  return (
+                    <button
+                      key={a.id}
+                      onClick={() => chooseArchetype(a.id)}
+                      aria-pressed={active}
+                      className={`flex items-center gap-1.5 rounded-xl border-2 px-2 py-1.5 text-left transition-all ${
+                        active
+                          ? 'border-[#8c1f28] bg-[#f2c14e]/60 shadow-[2px_2px_0_#8c1f28]'
+                          : 'border-[#1c1a17]/40 bg-[#f5efdc] hover:-translate-y-0.5'
+                      }`}
+                      title={a.perk}
+                    >
+                      <span className="h-5 w-5 shrink-0 rounded-full border border-[#1c1a17]/40" style={{ background: a.colors.shirt }} />
+                      <span className="text-[10px] font-black uppercase tracking-tight text-[#1c1a17]">{a.name}</span>
+                      <Gem className="h-3 w-3 shrink-0 text-[#2e6e4e]" />
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           </section>
 
@@ -505,53 +549,13 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                 <div className="vc-dots overflow-hidden rounded-xl border-2 border-[#1c1a17]/50 bg-gradient-to-b from-[#cfe0e8] to-[#efe6c8]">
                   <CharacterPreview look={look} className="h-[300px] w-full" />
                 </div>
-                {/* task 95 — Character Body: procedural rig vs High-Fi GLB bodies */}
-                <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Character Body</span>
-                    <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">how everyone sees you</span>
-                  </div>
-                  <div className="grid gap-2">
-                    {[
-                      { id: 'classic', emoji: '🧍', label: 'Classic Rig', desc: 'Full wardrobe — every slot renders', badge: '' },
-                      { id: 'human', emoji: '🧑', label: 'Citizen HD', desc: 'Skinned human — smooth joints, blinking, real gait', badge: 'HD' },
-                      { id: 'human-child', emoji: '🧒', label: 'Junior Citizen', desc: 'Kid-proportioned human — same skeleton', badge: 'HD' },
-                      { id: 'adventurer', emoji: '🎒', label: 'Adventurer', desc: 'Imported rigged explorer — baked kit, 24 pro animations', badge: 'HD' },
-                      { id: 'beach', emoji: '🏖️', label: 'Beach', desc: 'Imported rigged vacationer — baked kit, 24 pro animations', badge: 'HD' },
-                      { id: 'protester', emoji: '🎽', label: 'Protester GLB', desc: 'High-Fi body · outfit tint + gear ride along', badge: 'HI-FI' },
-                      { id: 'kid', emoji: '🧢', label: 'Runner Kid', desc: 'The VoteChor mascot — fixed brand kit', badge: 'MASCOT' },
-                    ].map((opt) => {
-                      const active = body === opt.id
-                      const lockedForPolice = police && opt.id !== 'classic'
-                      return (
-                        <button
-                          key={opt.id}
-                          onClick={() => chooseBody(opt.id)}
-                          aria-pressed={active}
-                          disabled={lockedForPolice}
-                          className={`rounded-xl border-2 px-3 py-2 text-left transition-all ${
-                            active
-                              ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
-                              : lockedForPolice
-                                ? 'cursor-not-allowed border-dashed border-[#1c1a17]/30 bg-[#efe6c8]/50 opacity-60'
-                                : 'border-[#1c1a17]/50 bg-white/60 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5'
-                          }`}
-                        >
-                          <span className="flex items-center gap-2">
-                            <span className="text-base leading-none">{opt.emoji}</span>
-                            <span className="text-sm font-black uppercase tracking-tight text-[#1c1a17]">{opt.label}</span>
-                            {opt.badge && (
-                              <span className="rounded-full border border-[#8c1f28]/50 bg-[#8c1f28]/10 px-1.5 py-px text-[8px] font-black uppercase tracking-wider text-[#8c1f28]">{opt.badge}</span>
-                            )}
-                            {active && <Check className="ml-auto h-4 w-4 text-[#2e6e4e]" strokeWidth={3} />}
-                          </span>
-                          <span className="mt-0.5 block text-[9px] font-semibold leading-tight text-[#1c1a17]/60">
-                            {lockedForPolice ? 'Officer duty marches in the Classic rig' : opt.desc}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
+                {/* task 107 — the Character Body picker moved to STEP 1 (the big
+                    GLB file-name grid up top). Sidebar stays lean: preview + build
+                    + skin tones; police see their uniform note here. */}
+                <div className="rounded-xl border-2 border-dashed border-[#1c1a17]/30 bg-[#efe6c8]/40 px-3 py-2">
+                  <span className="block text-[10px] font-black uppercase tracking-wide text-[#1c1a17]/60">
+                    {police ? '🚓 Officer duty marches in the Classic rig — pick a body for protest days in step 1' : 'Character body is picked in step 1 above — the preview follows it live'}
+                  </span>
                 </div>
                 {/* Build — male / female selection (round 23) */}
                 <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">

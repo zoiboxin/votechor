@@ -65,8 +65,10 @@ export interface AvatarLook {
  *  - 'human-child' age-appropriate child variant of the human system
  *  - 'adventurer' imported rigged explorer GLB (baked outfit, 24 pro clips)
  *  - 'beach'      imported rigged beach-vacationer GLB (same pack family, 24 pro clips)
+ *  - PACK_BODIES  the 18 additional rigged humans from the user's Characters &
+ *                 Animals pack (task 107) — same 62-joint family, same 24 clips
  */
-export type BodyModel = 'classic' | 'protester' | 'kid' | 'human' | 'human-child' | 'adventurer' | 'beach'
+export type BodyModel = 'classic' | 'protester' | 'kid' | 'human' | 'human-child' | 'adventurer' | 'beach' | PackBodyId
 
 export const KID_MODEL_URL = '/models/votechor-kid.glb'
 /** The kid is authored ~1.42 m (young protagonist). The cast renders 1.5–1.96 m
@@ -78,10 +80,56 @@ export const KID_SCALE = 1.12
  *  to the 1.5–1.96 m cast without breaking the camera. */
 export const HUMAN_CHILD_SCALE = 1.28
 
-/** Safe read of cosmetics.body → BodyModel (default 'classic'; unknown = classic). */
+// ---------- task 107 — the user's "Characters & Animals" GLB pack ----------
+/**
+ * 18 additional rigged humans (ids = kebab-case GLB file names, exactly how the
+ * customize page labels them). Every file is the SAME family as the Adventurer /
+ * Beach: __fit → CharacterArmature, 62-joint skin, and the identical 24-clip set
+ * (Idle/Walk/Run/Run_Back/Run_Left/Run_Right/Death/Kick_Left|Right/Punch_Left|
+ * Right/Roll/Wave/…), so the whole loco + combat + death layer from tasks 105/106
+ * (strafe lean, kick R, punch X, roll double-jump, Death-on-KO) covers them with
+ * ZERO extra wiring.
+ * FACING — binary proof with the v104 recipe (JSON+BIN chunk parse, face-feature
+ * z-signs): every file keeps eyes/brows at z>0 and toes/footwear extending to
+ * z=+0.26..+0.32 → NATIVE +Z facing = the VoteChor heading convention
+ * (ry = atan2(vel.x, vel.z)) → NO flip on any of them. Heights sit 1.83–2.05 m
+ * raw (the Witch's 2.05 includes the hat) — inside the cast's range.
+ * tint: whether the Skin material takes the wardrobe skin tone (the Spacesuit
+ * is fully sealed — no Skin material — so tinting it would be a no-op anyway).
+ */
+export const PACK_BODIES = {
+  'casual-female': { url: '/models/casual-female.glb', tint: true },
+  'casual2-female': { url: '/models/casual2-female.glb', tint: true },
+  'adventurer-female': { url: '/models/adventurer-female.glb', tint: true },
+  'formal-female': { url: '/models/formal-female.glb', tint: true },
+  'medieval-female': { url: '/models/medieval-female.glb', tint: true },
+  'scifi-female': { url: '/models/scifi-female.glb', tint: true },
+  'soldier-female': { url: '/models/soldier-female.glb', tint: true },
+  'suit-female': { url: '/models/suit-female.glb', tint: true },
+  'witch-female': { url: '/models/witch-female.glb', tint: true },
+  'worker-female': { url: '/models/worker-female.glb', tint: true },
+  'hoodie-man': { url: '/models/hoodie-man.glb', tint: true },
+  'farmer-man': { url: '/models/farmer-man.glb', tint: true },
+  'king-man': { url: '/models/king-man.glb', tint: true },
+  'punk-man': { url: '/models/punk-man.glb', tint: true },
+  'spacesuit-man': { url: '/models/spacesuit-man.glb', tint: false },
+  'suit-man': { url: '/models/suit-man.glb', tint: true },
+  'swat-man': { url: '/models/swat-man.glb', tint: true },
+  'worker-man': { url: '/models/worker-man.glb', tint: true },
+} as const
+
+export type PackBodyId = keyof typeof PACK_BODIES
+
+/** Safe read of cosmetics.body → BodyModel (default 'classic'; unknown = classic).
+ *  NOTE: the customize page defaults NEW profiles to 'casual-female' (female-first,
+ *  task 107) — this function's 'classic' fallback only covers bodies that were
+ *  never saved (season bots etc.), which must stay the light procedural rig. */
 export function bodyModelOf(c: unknown): BodyModel {
   const v = (typeof c === 'object' && c !== null ? (c as Record<string, unknown>).body : undefined)
-  return v === 'protester' || v === 'kid' || v === 'human' || v === 'human-child' || v === 'adventurer' || v === 'beach' ? v : 'classic'
+  if (typeof v !== 'string') return 'classic'
+  if (v === 'protester' || v === 'kid' || v === 'human' || v === 'human-child' || v === 'adventurer' || v === 'beach') return v
+  if (v in PACK_BODIES) return v as PackBodyId
+  return 'classic'
 }
 
 /** GLB url for a body model + gender (protester/human families are gender-split).
@@ -90,6 +138,7 @@ export function resolveGlbUrl(model: BodyModel, gender: 'male' | 'female'): stri
   if (model === 'kid') return KID_MODEL_URL
   if (model === 'adventurer') return '/models/adventurer.glb'
   if (model === 'beach') return '/models/beach.glb'
+  if (model in PACK_BODIES) return PACK_BODIES[model as PackBodyId].url
   if (model === 'human') return gender === 'female' ? '/models/votechor-human-female.glb' : '/models/votechor-human-male.glb'
   if (model === 'human-child') return '/models/votechor-human-child.glb'
   if (model === 'protester') return gender === 'female' ? '/models/votechor-female.glb' : '/models/votechor-male-skinned.glb'
@@ -234,6 +283,11 @@ const ADVENTURER_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'sk
  *  every bare-skin region (head/arms/legs/bare feet), clothes are Red_Dark/White/
  *  LightBrown and stay baked. Only skin tone personalizes. */
 const BEACH_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'skin' }
+
+/** task 107 — the whole Characters & Animals humanoid pack personalizes exactly
+ *  like the Adventurer/Beach: only the 'Skin' material takes the skin tone,
+ *  everything else (clothes, hair, armor, vests, crowns) stays baked. */
+const PACK_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'skin' }
 
 function tintGroup(group: THREE.Object3D, pal: AvatarPalette, materialMap?: Record<string, keyof AvatarPalette>) {
   group.traverse((o) => {
@@ -625,6 +679,18 @@ export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook, model: 
     // Scale matches too (Head bind y=1.587 ≈ 1.83 m cast height). Fully dressed
     // (red trunks, white top, earrings, baked hair) — skin tint only.
     tintGroup(group, look.palette, BEACH_MATERIAL_MAP)
+    return
+  }
+
+  if (model in PACK_BODIES) {
+    // task 107 — the 18-body Characters & Animals pack: same 62-joint rig family
+    // as the Adventurer/Beach (identical 24-clip set → every loco/combat/death
+    // state chain just works). Binary facing proof (v104 recipe): face features
+    // and toes at z>0 on ALL 18 files → native +Z → NO flip. Fully dressed like
+    // the Adventurer (hair/outfit/boots are baked) — skin tint only, no bone
+    // attachments; the Spacesuit takes no tint at all (sealed suit, no Skin mat).
+    const def = PACK_BODIES[model as PackBodyId]
+    tintGroup(group, look.palette, def.tint ? PACK_MATERIAL_MAP : undefined)
     return
   }
 
