@@ -42,7 +42,7 @@ import { GLBAnimDriver, directionalRun } from './anim'
 import { SecondaryMotion } from './secondary-motion'
 import { FacialRig } from './facial-rig'
 import type { LocoState } from './anim'
-import { resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE, HUMAN_CHILD_SCALE, type BodyModel } from './avatar-look'
+import { resolveAvatarLook, applyAvatarLook, bodyModelOf, effectiveBodyOf, resolveGlbUrl, KID_SCALE, HUMAN_CHILD_SCALE, type BodyModel } from './avatar-look'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
 
 /** v51 — soft-escape window: after the LAST chaser drops off, the WANTED badge
@@ -1348,7 +1348,9 @@ export class Game {
   private async attachRemoteGlb(id: string, r: RemoteEntry) {
     if (!GLB_CHARACTERS_ENABLED) return // kill-switch — procedural rigs stay
     if (r.glb || !r.rig) return
-    const model: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
+    // task 108 — police players render their police-side GLB (SWAT / Soldier);
+    // every other body on police duty pins Classic (effectiveBodyOf).
+    const model: BodyModel = effectiveBodyOf(bodyModelOf(r.cosmetics), r.role ?? 'protector')
     if (model === 'classic') return // this protester marches in the procedural rig
     r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, sec: null, facial: null, loading: true }
     const look = resolveAvatarLook(r.cosmetics, r.archetype, r.role ?? 'protector')
@@ -1357,7 +1359,7 @@ export class Game {
     const asset = await this.glbMgr.load(url)
     if (!asset) { r.glb = null; return }
     // entry may have been pruned / rig budget-evicted / body swapped mid-load
-    const stillGlb: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
+    const stillGlb: BodyModel = effectiveBodyOf(bodyModelOf(r.cosmetics), r.role ?? 'protector')
     if (this.remotePlayers.get(id) !== r || !r.rig || stillGlb === 'classic') { r.glb = null; return }
     const inst = this.glbMgr.instantiate(asset)
     if (!inst) { r.glb = null; return }
@@ -1428,10 +1430,11 @@ export class Game {
     void inst; void pal // v83: superseded by applyAvatarLook (wardrobe pipeline) — kept for reference removal in a later pass
   }
 
-  /** Effective body for THIS match — the kill-switch and police duty both pin Classic. */
+  /** Effective body for THIS match — the kill-switch pins Classic; task 108 lets
+   *  police duty wear the police-side GLBs (SWAT / Soldier) via effectiveBodyOf. */
   private resolvedBodyModel(): BodyModel {
-    if (!GLB_CHARACTERS_ENABLED || this.role === 'police') return 'classic'
-    return bodyModelOf(this.store.profile?.cosmetics)
+    if (!GLB_CHARACTERS_ENABLED) return 'classic'
+    return effectiveBodyOf(bodyModelOf(this.store.profile?.cosmetics), this.role)
   }
 
   /**
@@ -1458,7 +1461,7 @@ export class Game {
     }
     // remotes: each wears THEIR chosen body — drop GLBs that must not be there
     for (const [id, r] of this.remotePlayers) {
-      const rm: BodyModel = r.role === 'police' ? 'classic' : bodyModelOf(r.cosmetics)
+      const rm: BodyModel = effectiveBodyOf(bodyModelOf(r.cosmetics), r.role ?? 'protector')
       if (rm === 'classic') { this.detachRemoteGlb(r); continue }
       if (!r.glb && r.rig) void this.attachRemoteGlb(id, r)
     }

@@ -120,6 +120,61 @@ export const PACK_BODIES = {
 
 export type PackBodyId = keyof typeof PACK_BODIES
 
+// ---------- task 108 — gender + side classification (customize-page filters) ----------
+/**
+ * The customize page's new flow is: 1 · pick gender → 2 · pick side →
+ * 3 · pick a character filtered by BOTH. These helpers are the single source of
+ * truth for which body belongs to which bucket — the wardrobe UI, the in-game
+ * body resolution and the remote-attach path all read them.
+ *
+ * GENDER:
+ *  - ids ending '-female' / '-man' are the pack's literal gender
+ *  - 'adventurer' / 'beach' are male-authored one-off imports
+ *  - everything else ('classic', 'protester', 'human', 'human-child', 'kid')
+ *    is gender-FLEXIBLE: it renders as the currently chosen gender (the
+ *    protester/human families are gender-split GLBs; classic is procedural),
+ *    so it shows in BOTH tabs.
+ */
+export function bodyGenderOf(id: string): 'male' | 'female' | 'any' {
+  if (id.endsWith('-female')) return 'female'
+  if (id.endsWith('-man') || id === 'adventurer' || id === 'beach') return 'male'
+  return 'any'
+}
+
+/**
+ * SIDE — the pack's uniformed characters stay under the POLICE badge, exactly
+ * as the user asked ("keep character swat, soldier under police"): the Police
+ * step shows only Classic (uniform tabs) + these two; the Protector step shows
+ * everything else. Both sides of the check live here so UI and game agree.
+ */
+export const POLICE_BODY_IDS: ReadonlySet<string> = new Set(['swat-man', 'soldier-female'])
+
+/**
+ * Effective body for a match, role-aware (replaces the old "police always
+ * marches Classic" pin): police players now render their police-side GLB
+ * (SWAT / Soldier), while anything else on the police side falls back to the
+ * Classic rig (uniform tabs still tint it). A police-side body saved on a
+ * protector profile also falls back to Classic — the uniform belongs to the
+ * police side only.
+ */
+export function effectiveBodyOf(model: BodyModel, role: 'protector' | 'police'): BodyModel {
+  const isPoliceBody = POLICE_BODY_IDS.has(model)
+  if (isPoliceBody) return role === 'police' ? model : 'classic'
+  if (role === 'police') return 'classic'
+  return model
+}
+
+/** Wardrobe defaults for the auto-swap rules (task 108): switching gender or
+ *  side to a state where the current body doesn't fit lands on these. */
+export const GENDER_DEFAULT_BODY: Record<'male' | 'female', string> = {
+  male: 'hoodie-man',
+  female: 'casual-female',
+}
+export const POLICE_DEFAULT_BODY: Record<'male' | 'female', string> = {
+  male: 'swat-man',
+  female: 'soldier-female',
+}
+
 /** Safe read of cosmetics.body → BodyModel (default 'classic'; unknown = classic).
  *  NOTE: the customize page defaults NEW profiles to 'casual-female' (female-first,
  *  task 107) — this function's 'classic' fallback only covers bodies that were

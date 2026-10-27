@@ -14,6 +14,9 @@ import {
 } from '@/lib/cosmetics'
 import { ArrowLeft, Check, Dices, Gem, Lock, Save, Shield, Siren, Unlock } from 'lucide-react'
 import { motion } from 'framer-motion'
+import {
+  POLICE_BODY_IDS, bodyGenderOf, effectiveBodyOf, GENDER_DEFAULT_BODY, POLICE_DEFAULT_BODY, type BodyModel,
+} from '@/game/avatar-look'
 import CharacterPreview, { type PreviewLook } from './CharacterPreview'
 import type { Archetype } from '@/game/shared/types'
 
@@ -46,6 +49,18 @@ const DEFAULTS: Record<CosmeticKind, string> = {
   policeOutfit: 'khaki', policeHat: 'peak', body: 'classic',
 }
 
+/** task 108 — does this body belong to this gender tab AND side? The single
+ *  filter behind the step-3 grid, the step-1 cast counts and every auto-swap:
+ *  gender-specific bodies only fit their own tab; SWAT / Soldier fit only the
+ *  Police side; Classic fits both sides; everything else is a citizen body. */
+const fitsGenderAndSide = (id: string, g: 'male' | 'female', r: 'protector' | 'police') => {
+  const bg = bodyGenderOf(id)
+  if (bg !== 'any' && bg !== g) return false
+  const isPoliceBody = POLICE_BODY_IDS.has(id)
+  if (r === 'police') return id === 'classic' || isPoliceBody
+  return !isPoliceBody
+}
+
 export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const profile = useGameStore((s) => s.profile)
   const setProfile = useGameStore((s) => s.setProfile)
@@ -54,7 +69,14 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const [archetype, setArchetype] = useState(profile?.archetype ?? 'student')
   const [hat, setHat] = useState(profile?.cosmetics?.hat ?? 'none')
   const [hair, setHair] = useState(profile?.cosmetics?.hair ?? 'default')
-  const [gender, setGender] = useState<'male' | 'female'>(profile?.cosmetics?.gender === 'female' ? 'female' : 'male')
+  // task 108 — STEP 1 is the gender tab. Initial tab: the saved BODY's own
+  // gender when it pins one (pack file ids), else the saved gender, else
+  // FEMALE (the female-first default from task 107).
+  const [gender, setGender] = useState<'male' | 'female'>(() => {
+    const bg = bodyGenderOf(profile?.cosmetics?.body ?? '')
+    if (bg === 'female' || bg === 'male') return bg
+    return profile?.cosmetics?.gender === 'male' ? 'male' : 'female'
+  })
   const [policeOutfit, setPoliceOutfit] = useState(profile?.cosmetics?.policeOutfit ?? 'khaki')
   const [policeHat, setPoliceHat] = useState(profile?.cosmetics?.policeHat ?? 'peak')
   const [face, setFace] = useState(profile?.cosmetics?.face ?? 'clean')
@@ -213,9 +235,15 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     if (nextHair !== hair) setHair(nextHair)
     if (nextOutfit !== outfit) setOutfit(nextOutfit)
     if (nextFootwear !== footwear) setFootwear(nextFootwear)
-    uiActions().updateCosmetics({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear })
-    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear } })
-    void persist({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear })
+    // task 108 — the body follows the tab: a gender-specific body from the other
+    // tab lands on the side-aware default (police → SWAT/Soldier, citizens otherwise).
+    const nextBody = fitsGenderAndSide(body, next, role) ? body
+      : role === 'police' ? POLICE_DEFAULT_BODY[next] : GENDER_DEFAULT_BODY[next]
+    const bodyChanged = nextBody !== body
+    if (bodyChanged) setBody(nextBody)
+    uiActions().updateCosmetics({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear, ...(bodyChanged ? { body: nextBody } : {}) })
+    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear, ...(bodyChanged ? { body: nextBody } : {}) } })
+    void persist({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear, ...(bodyChanged ? { body: nextBody } : {}) })
   }
 
   const chooseArchetype = (id: string) => {
@@ -239,10 +267,24 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const chooseRole = (next: 'protector' | 'police') => {
     if (next === role) return
     setRole(next)
-    setProfile(profile ? { ...profile, role: next } : profile)
+    // task 108 — the body follows the side: entering Police lands on the gender's
+    // uniformed body (SWAT / Soldier) when a citizen body was equipped; leaving
+    // Police hands the kit back for the gender's citizen default.
+    const nextBody = fitsGenderAndSide(body, gender, next) ? body
+      : next === 'police' ? POLICE_DEFAULT_BODY[gender] : GENDER_DEFAULT_BODY[gender]
+    const bodyChanged = nextBody !== body
+    if (bodyChanged) {
+      setBody(nextBody)
+      uiActions().updateCosmetics({ body: nextBody })
+    }
+    setProfile(profile
+      ? { ...profile, role: next, cosmetics: { ...profile.cosmetics, ...(bodyChanged ? { body: nextBody } : {}) } }
+      : profile)
     try { localStorage.setItem('votechor_role', next) } catch { /* private browsing */ }
     notify(next === 'police'
-      ? 'Badge accepted — you report for duty next match. Keep the lathi polite.'
+      ? (bodyChanged
+        ? `Badge accepted — reporting for duty in the ${nextBody === 'swat-man' ? 'SWAT' : 'Soldier'} kit. Keep the lathi polite.`
+        : 'Badge accepted — you report for duty next match. Keep the lathi polite.')
       : 'Welcome back to the people’s side — the protest missed you.', 'info')
     ;(async () => {
       setSaving(true)
@@ -250,7 +292,8 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
         await fetch('/api/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-vc-token': token() ?? '' },
-          body: JSON.stringify({ role: next }),
+          // the API replaces the stored cosmetics object — post the FULL look
+          body: JSON.stringify({ role: next, ...(bodyChanged ? { cosmetics: { ...currentLook(), body: nextBody } } : {}) }),
         })
       } catch { /* local-only */ } finally { setSaving(false) }
     })()
@@ -292,6 +335,10 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
       return pool[Math.floor(Math.random() * pool.length)]?.id ?? catalog[0].id
     }
     const rg = gender === 'female' ? 'male' : 'female'
+    // task 108 — the body follows the rolled gender + the current side
+    const bodyPool = BODY_CATALOG.filter((b) => fitsGenderAndSide(b.id, rg, role))
+    const rbody = bodyPool[Math.floor(Math.random() * bodyPool.length)]?.id ?? GENDER_DEFAULT_BODY[rg]
+    setBody(rbody)
     const rh = pickFree(HAT_CATALOG); setHat(rh)
     // task 82: hair / outfit / footwear roll from the NEW gender's own book
     const rhair = pickFree(itemsForKind('hair', rg)); setHair(rhair)
@@ -308,15 +355,16 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     const tone = SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)].hex
     setSkinTone(tone)
     setGender(rg)
-    uiActions().updateCosmetics({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone })
-    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone } })
-    void persist({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone })
+    uiActions().updateCosmetics({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone, body: rbody })
+    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone, body: rbody } })
+    void persist({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone, body: rbody })
     notify('Stylist rolled a fresh fit — democracy never looked better', 'squad')
   }
 
   const police = role === 'police'
-  // task 95 — police duty always renders the Classic rig (the GLB bodies are protester wear)
-  const bodyShown = police ? 'classic' : body
+  // task 108 — police duty renders the Classic rig OR the police-side GLBs
+  // (SWAT / Soldier); a citizen body saved on a police profile falls back to Classic.
+  const bodyShown = effectiveBodyOf(body as BodyModel, role)
   const look: PreviewLook = useMemo(() => ({
     archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText: signText.trim(),
     skinTone: skinTone || undefined,
@@ -326,6 +374,12 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     body: bodyShown,
   }), [archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText, skinTone, gender, hair, police, policeOutfit, policeHat, bodyShown])
 
+  // task 108 — step-3 grid: characters filtered by the step-1 gender tab AND
+  // the step-2 side (SWAT / Soldier live under the Police badge only).
+  const visibleBodies = useMemo(
+    () => BODY_CATALOG.filter((b) => fitsGenderAndSide(b.id, gender, role)),
+    [gender, role],
+  )
   const sel = ARCHETYPES.find((a) => a.id === archetype) ?? ARCHETYPES[0]
   const visibleSlots = police ? [...SLOTS, ...POLICE_SLOTS] : SLOTS
   const activeTab = visibleSlots.find((s) => s.kind === tab) ?? visibleSlots[0]
@@ -366,90 +420,65 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
 
       <div className="vc-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-5 px-4 py-5">
-          {/* task 107 — STEP 1: the GLB cast, labeled with the real file names,
-              females first (default Casual_Female). Archetype perks live on as a
-              compact personality strip below the grid. */}
-          <section aria-label="Characters">
+          {/* task 108 — STEP 1: the gender tab. It decides which half of the cast
+              step 3 shows (male-only vs female-only) and which uniformed body the
+              police side lands on. */}
+          <section aria-label="Choose your look">
             <div className="mb-2 flex flex-wrap items-baseline gap-2">
-              <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">1 · Choose Your Character</h3>
-              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">
-                {BODY_CATALOG.length} bodies · GLB file names · 24 pro animations each
-              </span>
+              <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">1 · Choose Your Look</h3>
+              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">male cast or female cast — step 3 follows this tab</span>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-              {BODY_CATALOG.map((b, i) => {
-                const active = b.id === body
-                const lockedForPolice = police && b.id !== 'classic'
-                const badge = b.id === 'classic' ? 'RIG'
-                  : b.id === 'protester' ? 'HI-FI'
-                  : b.id === 'kid' ? 'MASCOT'
-                  : 'HD'
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(['male', 'female'] as const).map((g, gi) => {
+                const active = gender === g
+                const castCount = BODY_CATALOG.filter((b) => fitsGenderAndSide(b.id, g, role)).length
                 return (
                   <motion.button
-                    key={b.id}
-                    initial={{ opacity: 0, y: 10 }}
+                    key={g}
+                    initial={{ opacity: 0, y: 14 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: Math.min(i * 0.02, 0.3) }}
-                    onClick={() => chooseBody(b.id)}
+                    transition={{ delay: 0.05 * gi }}
+                    onClick={() => chooseGender(g)}
                     aria-pressed={active}
-                    disabled={lockedForPolice}
-                    className={`relative rounded-2xl border-2 p-2.5 text-left transition-all duration-150 ${
-                      lockedForPolice
-                        ? 'cursor-not-allowed border-dashed border-[#1c1a17]/30 bg-[#efe6c8]/50 opacity-60'
-                        : active
-                          ? 'border-[#8c1f28] bg-[#f2c14e]/40 shadow-[5px_5px_0_#8c1f28]'
-                          : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
+                    className={`relative rounded-2xl border-2 p-4 text-left transition-all duration-150 ${
+                      active
+                        ? 'border-[#8c1f28] bg-[#f2c14e]/50 shadow-[5px_5px_0_#8c1f28]'
+                        : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
                     }`}
                   >
-                    {active && !lockedForPolice && (
-                      <span className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1c1a17] bg-[#2e6e4e] text-[#f5efdc]">
+                    {active && (
+                      <span className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1c1a17] bg-[#8c1f28] text-[#f5efdc]">
                         <Check className="h-3.5 w-3.5" strokeWidth={3} />
                       </span>
                     )}
-                    <div className="flex items-center gap-2">
-                      <span className="text-xl leading-none">{b.emoji}</span>
-                      <span className="text-xs font-black uppercase leading-tight tracking-tight text-[#1c1a17]">{b.label}</span>
-                      <span className="ml-auto shrink-0 rounded-full border border-[#2e6e4e]/50 bg-[#2e6e4e]/10 px-1.5 py-px text-[8px] font-black uppercase tracking-wider text-[#2e6e4e]">{badge}</span>
+                    <div className="flex items-center gap-2.5">
+                      <span className={`flex h-11 w-11 items-center justify-center rounded-xl border-2 text-lg font-black ${active ? 'border-[#8c1f28] bg-[#8c1f28] text-[#f5efdc]' : 'border-[#1c1a17]/60 bg-[#f2c14e] text-[#1c1a17]'}`}>
+                        {g === 'male' ? '♂' : '♀'}
+                      </span>
+                      <div>
+                        <div className="text-base font-black uppercase tracking-tight text-[#1c1a17]">{g === 'male' ? 'Male' : 'Female'}</div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8c1f28]">
+                          {g === 'male' ? 'The men’s cast' : 'The women’s cast'}
+                        </div>
+                      </div>
+                      <span className="ml-auto rounded-full border border-[#1c1a17]/30 bg-[#efe6c8]/70 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-[#1c1a17]/60">
+                        {castCount} bodies
+                      </span>
                     </div>
-                    <div className="mt-1.5 text-[10px] font-semibold leading-snug text-[#1c1a17]/65">
-                      {lockedForPolice ? 'Officer duty marches in the Classic rig' : b.desc}
-                    </div>
+                    <p className="mt-2 text-[11px] font-semibold leading-snug text-[#1c1a17]/75">
+                      {g === 'male'
+                        ? 'Casual Hoodie, Farmer, King, Punk, Spacesuit, Suit, SWAT, Worker, Adventurer & Beach — the men’s GLB cast.'
+                        : 'Casual, Casual 2, Adventurer, Formal, Medieval, SciFi, Soldier, Suit, Witch & Worker — the women’s GLB cast.'}
+                    </p>
                   </motion.button>
                 )
               })}
             </div>
-            {/* Personality — the archetype perks (gameplay) ride ANY body */}
-            <div className="mt-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#efe6c8]/50 p-2.5">
-              <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Personality</span>
-                <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">archetype perks ride any body — tap to switch</span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {ARCHETYPES.map((a) => {
-                  const active = a.id === archetype
-                  return (
-                    <button
-                      key={a.id}
-                      onClick={() => chooseArchetype(a.id)}
-                      aria-pressed={active}
-                      className={`flex items-center gap-1.5 rounded-xl border-2 px-2 py-1.5 text-left transition-all ${
-                        active
-                          ? 'border-[#8c1f28] bg-[#f2c14e]/60 shadow-[2px_2px_0_#8c1f28]'
-                          : 'border-[#1c1a17]/40 bg-[#f5efdc] hover:-translate-y-0.5'
-                      }`}
-                      title={a.perk}
-                    >
-                      <span className="h-5 w-5 shrink-0 rounded-full border border-[#1c1a17]/40" style={{ background: a.colors.shirt }} />
-                      <span className="text-[10px] font-black uppercase tracking-tight text-[#1c1a17]">{a.name}</span>
-                      <Gem className="h-3 w-3 shrink-0 text-[#2e6e4e]" />
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
           </section>
 
-          {/* Choose your side: Protector vs Police */}
+          {/* task 108 — STEP 2: the side. The SWAT / Soldier kits live under the
+              Police badge (pick them in step 3 after choosing Police); Protector
+              shows every citizen body. */}
           <section aria-label="Choose your side">
             <div className="mb-2 flex items-baseline gap-2">
               <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">2 · Choose Your Side</h3>
@@ -525,8 +554,90 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                   <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">Arrest powers (E)</span>
                   <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">Officer immunity</span>
                   <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">+40 XP / arrest</span>
+                  <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">🛡 SWAT · 🪖 Soldier kits</span>
                 </div>
               </motion.button>
+            </div>
+          </section>
+
+          {/* task 108 — STEP 3: the character cast, filtered by the step-1 gender
+              tab AND the step-2 side. Cards keep the real GLB file names (task 107);
+              the SWAT / Soldier bodies render only under the Police side. Archetype
+              perks live on as the personality strip below the grid. */}
+          <section aria-label="Characters">
+            <div className="mb-2 flex flex-wrap items-baseline gap-2">
+              <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">3 · Choose Your Character</h3>
+              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">
+                {gender === 'male' ? '♂ male cast' : '♀ female cast'} · {police ? '🚓 police side' : '🛡 protector side'} · {visibleBodies.length} bodies · GLB file names · 24 pro animations each
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              {visibleBodies.map((b, i) => {
+                const active = b.id === body
+                const badge = b.id === 'classic' ? 'RIG'
+                  : b.id === 'protester' ? 'HI-FI'
+                  : b.id === 'kid' ? 'MASCOT'
+                  : POLICE_BODY_IDS.has(b.id) ? 'POLICE'
+                  : 'HD'
+                return (
+                  <motion.button
+                    key={b.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: Math.min(i * 0.02, 0.3) }}
+                    onClick={() => chooseBody(b.id)}
+                    aria-pressed={active}
+                    className={`relative rounded-2xl border-2 p-2.5 text-left transition-all duration-150 ${
+                      active
+                        ? 'border-[#8c1f28] bg-[#f2c14e]/40 shadow-[5px_5px_0_#8c1f28]'
+                        : 'border-[#1c1a17]/70 bg-[#f5efdc] shadow-[4px_4px_0_#1c1a17] hover:-translate-y-0.5 hover:shadow-[5px_6px_0_#1c1a17]'
+                    }`}
+                  >
+                    {active && (
+                      <span className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1c1a17] bg-[#2e6e4e] text-[#f5efdc]">
+                        <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                      </span>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl leading-none">{b.emoji}</span>
+                      <span className="text-xs font-black uppercase leading-tight tracking-tight text-[#1c1a17]">{b.label}</span>
+                      <span className={`ml-auto shrink-0 rounded-full border px-1.5 py-px text-[8px] font-black uppercase tracking-wider ${POLICE_BODY_IDS.has(b.id) ? 'border-[#3d5a80]/50 bg-[#3d5a80]/10 text-[#3d5a80]' : 'border-[#2e6e4e]/50 bg-[#2e6e4e]/10 text-[#2e6e4e]'}`}>{badge}</span>
+                    </div>
+                    <div className="mt-1.5 text-[10px] font-semibold leading-snug text-[#1c1a17]/65">
+                      {b.desc}
+                    </div>
+                  </motion.button>
+                )
+              })}
+            </div>
+            {/* Personality — the archetype perks (gameplay) ride ANY body */}
+            <div className="mt-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#efe6c8]/50 p-2.5">
+              <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Personality</span>
+                <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">archetype perks ride any body — tap to switch</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {ARCHETYPES.map((a) => {
+                  const active = a.id === archetype
+                  return (
+                    <button
+                      key={a.id}
+                      onClick={() => chooseArchetype(a.id)}
+                      aria-pressed={active}
+                      className={`flex items-center gap-1.5 rounded-xl border-2 px-2 py-1.5 text-left transition-all ${
+                        active
+                          ? 'border-[#8c1f28] bg-[#f2c14e]/60 shadow-[2px_2px_0_#8c1f28]'
+                          : 'border-[#1c1a17]/40 bg-[#f5efdc] hover:-translate-y-0.5'
+                      }`}
+                      title={a.perk}
+                    >
+                      <span className="h-5 w-5 shrink-0 rounded-full border border-[#1c1a17]/40" style={{ background: a.colors.shirt }} />
+                      <span className="text-[10px] font-black uppercase tracking-tight text-[#1c1a17]">{a.name}</span>
+                      <Gem className="h-3 w-3 shrink-0 text-[#2e6e4e]" />
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           </section>
 
@@ -534,7 +645,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
           <section aria-label="Wardrobe" className="rounded-2xl border-2 border-[#1c1a17]/80 bg-[#f5efdc] p-4 shadow-[4px_4px_0_#1c1a17]">
             <div className="mb-3 flex flex-wrap items-baseline gap-2">
               <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">
-                {police ? '3 · Dress The Officer' : '3 · Dress The Protester'}
+                {police ? '4 · Dress The Officer' : '4 · Dress The Protester'}
               </h3>
               <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">drag the figure to spin</span>
               {police && (
@@ -554,42 +665,13 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                     + skin tones; police see their uniform note here. */}
                 <div className="rounded-xl border-2 border-dashed border-[#1c1a17]/30 bg-[#efe6c8]/40 px-3 py-2">
                   <span className="block text-[10px] font-black uppercase tracking-wide text-[#1c1a17]/60">
-                    {police ? '🚓 Officer duty marches in the Classic rig — pick a body for protest days in step 1' : 'Character body is picked in step 1 above — the preview follows it live'}
+                    {police
+                      ? '🚓 Police side: the Classic uniform or the SWAT / Soldier kit — picked in step 3'
+                      : 'Character body is picked in step 3 — the preview follows it live'}
                   </span>
                 </div>
-                {/* Build — male / female selection (round 23) */}
-                <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Build</span>
-                    <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">silhouette · lips · hair fit</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => chooseGender('male')}
-                      aria-pressed={gender === 'male'}
-                      className={`rounded-xl border-2 px-2 py-2 text-left transition-all ${
-                        gender === 'male'
-                          ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
-                          : 'border-[#1c1a17]/50 bg-white/60 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5'
-                      }`}
-                    >
-                      <span className="block text-sm font-black uppercase tracking-tight text-[#1c1a17]">♂ Male</span>
-                      <span className="block text-[9px] font-semibold leading-tight text-[#1c1a17]/60">Broad marcher build</span>
-                    </button>
-                    <button
-                      onClick={() => chooseGender('female')}
-                      aria-pressed={gender === 'female'}
-                      className={`rounded-xl border-2 px-2 py-2 text-left transition-all ${
-                        gender === 'female'
-                          ? 'border-[#8c1f28] bg-[#f2c14e] shadow-[3px_3px_0_#8c1f28]'
-                          : 'border-[#1c1a17]/50 bg-white/60 shadow-[2px_2px_0_#1c1a17]/40 hover:-translate-y-0.5'
-                      }`}
-                    >
-                      <span className="block text-sm font-black uppercase tracking-tight text-[#1c1a17]">♀ Female</span>
-                      <span className="block text-[9px] font-semibold leading-tight text-[#1c1a17]/60">Lean marcher build</span>
-                    </button>
-                  </div>
-                </div>
+                {/* task 108 — the old sidebar gender picker moved to STEP 1 (the
+                    Male/Female tab up top); the wardrobe Build tab keeps silhouettes. */}
                 <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Skin Tone</span>

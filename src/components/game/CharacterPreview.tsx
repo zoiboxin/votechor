@@ -186,10 +186,13 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
       retargetFaceCam()
 
       // ---- task 95: GLB bodies (protester / kid) load async and REPLACE the rig body ----
+      // task 108 — police side may wear the police-side GLBs (SWAT / Soldier);
+      // every other GLB body stays citizen-only, mirroring effectiveBodyOf in-game.
       const model = bodyModelOf({ body: l.body })
-      if (model !== 'classic' && !l.police) {
+      const policeBodyOk = model === 'swat-man' || model === 'soldier-female'
+      if (model !== 'classic' && (!l.police || policeBodyOk)) {
         const token = glbToken
-        const avatarLook = resolveAvatarLook(toCosmetics(l), l.archetype, 'protector')
+        const avatarLook = resolveAvatarLook(toCosmetics(l), l.archetype, l.police ? 'police' : 'protector')
         const url = resolveGlbUrl(model, avatarLook.gender)
         if (url) {
           void previewGlbMgr.load(url).then((asset) => {
