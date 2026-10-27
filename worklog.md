@@ -2639,3 +2639,23 @@ Stage Summary:
 - VoteChor now has FIVE playable GLB/procedural bodies (Classic / Citizen HD / Junior Citizen / Adventurer / Protester GLB / Runner Kid mascot) — the new Adventurer is an imported, fully rigged 62-bone character with 24 professional clips playing through the same animation driver, tinted by skin tone, facing-corrected, synced via the existing cosmetics.body pipeline (join payload → remotes), precached by the cookie-consent banner, and covered by the automated suites.
 - Reusable lessons: (1) imported GLB packs may face +Z — flip INNER top-level nodes (never group.rotation.y, the controller owns it); (2) lowercase clip names at instantiate() makes the fallback-chain system accept any pack's casing; (3) Tailwind v4 auto source-detection can OOM on asset-heavy trees — `source(none)` + explicit `@source` is the documented escape hatch; (4) GLB bind-pose bounds require IBM-weighted skinning math, raw vertex bounds can lie.
 - Next Task ID: 103 (queued: Windows-deploy OFFLINE/0-crowd diagnosis (start-windows.bat + net.ts + cloudflared WSS); client prediction/reconciliation; distance-tiered bot sync; profile save/load race; online dropTaken UX; in-game Share panel with the IG creatives; hreflang/en-hi; /about route; season-bot 'human' cosmetic variety).
+
+---
+Task ID: 105
+Agent: Z.ai Code (main)
+Task: Fix adventurer character facing 180° bug (W faced camera, S faced away while backpedaling)
+
+Work Log:
+- Reproduced from user report: W/Up made the adventurer face the screen; S/Down made it look forward while walking backward — a textbook 180° heading inversion unique to the adventurer (all other characters face correctly).
+- Read the heading pipeline: player.ts `targetRy = Math.atan2(vel.x, vel.z)` + `glb.inst.group.rotation.y = ry` (local, player.ts:442) and remotes (game.ts:3138) — this convention rotates the model's NATIVE +Z axis toward the movement vector, so the game expects +Z-facing models at ry=0.
+- Inspected v103's "inner-node pi facing fix" (avatar-look.ts:606 `child.rotation.y = Math.PI` on the adventurer group children) — it flips the already-correct model.
+- Proved the pack's native facing from the GLB binary (not guesswork): parsed public/models/adventurer.glb chunks with correct BIN offset (binStart = 20+jsonLen+8): eyes z=+0.13..0.16, eyebrows z=+0.14..0.17, boots extend to z=+0.29 (toes forward), satchel planes at z=−0.26 (on the back), bind-pose Head y=1.587 → the model NATIVELY FACES +Z — identical to the game convention. The v103 comment ("cast faces −Z") was wrong.
+- Confirmed animation clips do NOT target the top-level nodes (Scene/__fit/CharacterArmature; Idle animates 56 bones but none of those three), so a flip on them would persist — meaning the fix wasn't being overridden; it was simply inverted.
+- FIX: removed the π flip in applyAvatarLook()'s adventurer branch (tint only), documented the geometry proof in the comment (task 100/104).
+- Bumped VC_BUILD v103 → v104; lint clean.
+- Verified in-browser (agent-browser): spawned Play Solo with adventurer equipped — W/Up runs away from camera showing the BACK (Z−8 → −8.5, mid-stride, walk clip playing); S/Down turns and walks toward the camera facing it (Z−8.5 → −9.5) matching the game's face-movement-direction convention; A strafes left in profile (X0 → X−1). All three correct.
+
+Stage Summary:
+- v104: adventurer facing fixed at the root cause (removed inverted flip; pack is +Z-native like every other character). Remote players inherit the fix via the same applyAvatarLook path.
+- Known-environment notes from the QA run: OFFLINE badge + 0 FPS readings are the sandbox's game-server/headless limitations, unrelated to this fix.
+- Files touched: src/game/avatar-look.ts (π flip removed + proof comment), src/lib/build-version.ts (v104).

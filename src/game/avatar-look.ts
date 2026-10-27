@@ -596,14 +596,16 @@ export function applyAvatarLook(group: THREE.Object3D, look: AvatarLook, model: 
   if (model === 'kid') return // fixed outfit — tint/scale/attachments are baked into the asset
 
   if (model === 'adventurer') {
-    // task 100 — the Adventurer ships fully dressed (baked hair, shirt, boots,
-    // satchel): no bone attachments. Only the skin tone personalizes, plus the
-    // FACING FIX: the pack models +Z while the VoteChor cast faces −Z, so the
-    // asset's top-level nodes are yawed π (group.rotation.y is overwritten with
-    // the gameplay heading every frame — the flip must live on an inner node;
-    // absolute set → idempotent across re-styles).
+    // task 100/104 — the Adventurer ships fully dressed (baked hair, shirt,
+    // boots, satchel): no bone attachments. Only the skin tone personalizes.
+    // FACING (verified from the binary, task 104): the pack NATIVELY faces +Z —
+    // eyes/eyebrows sit at z=+0.13..0.17, boots extend to z=+0.29, satchel rides
+    // at z=−0.26 (on the back). That is EXACTLY the VoteChor convention: heading
+    // ry = atan2(vel.x, vel.z) rotates the model's +Z axis toward the movement
+    // vector, so no flip is needed. The earlier "pack faces +Z but the cast
+    // faces −Z" diagnosis was wrong — the v103 inner-node π flip inverted an
+    // already-correct model (W faced the camera, S faced away while backpedaling).
     tintGroup(group, look.palette, ADVENTURER_MATERIAL_MAP)
-    for (const child of group.children) child.rotation.y = Math.PI
     return
   }
 
