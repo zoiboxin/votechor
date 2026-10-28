@@ -2757,3 +2757,41 @@ Stage Summary:
 - v110: the crowd reads professional — season bots are random rigged GLB male/female humans (14 nearest fully animated, impostor LOD beyond), and the wild band gained 1323 instanced AmiPolyGon plants (pines, broadleaf trees, dead trees, logs, trunks, sticks, bushes, grass) in three habitat bands + the graveyard ring, at ~38 draw calls.
 - Files: src/lib/cosmetics.ts, src/game/game.ts, src/game/forest.ts (NEW), src/lib/asset-cache.ts, src/lib/build-version.ts, public/models/forest/*.glb (38 new).
 - Next up (queue): junior-citizen quality pass; offline/0-crowd Windows diagnosis (start-windows.bat + net.ts + cloudflared WSS); unreal-engine-skills research; adventurer stride calibration; forest density tuning if the user wants thicker woods; offline NPC police could later wear swat-man/soldier-female GLB (kept procedural this round — uniform authority + detain/lathi anim wiring).
+
+---
+Task ID: 111 (late entry — shipped in commit 994d853; the session that landed it was cut before the worklog append)
+Agent: Z.ai Code (main)
+Task: "change police with swat commando and police glb" — authority-NPC GLB ranks + bot-cosmetics hole
+
+Work Log:
+- All 33 world police NPCs wore the pack's police-side GLBs rolled into three ranks (baked SWAT Swat_Man, baked commando Soldier_Female, khaki-tinted officers via a MATERIAL-name uniform map — 34/21/45 mix, mixed gender).
+- GLB parented under the rig group with a vcGlbBody flag so setBodyVisible + far-LOD inherited; brain-state-driven GLBAnimDriver with a 45m 15Hz anim LOD; arrest 'throw' fell back to the pack's punch/kick one-shots.
+- Fixed the 61/99-bot classic-rig hole: AOI-discovered season bots never carried cosmetics (payload economy), so they now derive a deterministic FNV-1a/mulberry32 id look (gender/body/skin; real cosmetics always win).
+- NPC GLB teardown in Game.dispose; VC_BUILD v111.
+- SUPERSEDED by Task 112 (cartoon rebuild) — kept for the record.
+
+Stage Summary:
+- v111 shipped the GLB police ranks + bot cosmetic determinism; v112 retired the GLB layer per the user's weight/perf report. The deterministic bot-id look (gender/skin) survives in botCosmeticsFromId.
+
+---
+Task ID: 112
+Agent: Z.ai Code (main)
+Task: "remove all .glb and keep the game same as cartoon for kids make it smooth and light weight after adding glb files game looks heavy and slow understand prompt improve and update"
+
+Work Log:
+- RECON: mapped every GLB touchpoint (109 MB across 86 files in public/models): character bodies (avatar-look/PACK_BODIES/protester/human/kid), wildlife (10 species + 4 props), forest pack (38 species), police GLBs (npcs.ts task-111 ranks), bot body pools (cosmetics.ts), boot preload list, cookie warm cache, CharacterSelect/Preview UI, kill-switch flag.
+- WILDLIFE REBUILT (procedural cartoon): same 30 beasts, same v109 habitats (shiba x3 + husky x2 city corners, cow/bull/donkey/horse city-edge+farm-belt herds, fox/deer/stag/wolf jungle), same panic-flee state machine (panic radius, re-aim, leash, spatial moo/bark, census). Each beast is now ~12 meshes from FOUR shared unit geometries (box / hip-origin box / sphere / cone) + one flat-shaded Lambert material cache: leg-swing (diagonal pairs), body bob, gallop pitch, head-dip grazing, tail wag, cartoon eyes. Distance LOD kept (hide >190m, skip anim math >140m). The 4 GLB landmark props retired.
+- FOREST REBUILT (procedural instanced): same deep/fringe/city/graveyard habitat bands + road/river/plaza placement guards + seeded RNG. 8 merged VERTEX-COLORED species (pine x2, broadleaf, dead tree, log, stick, bush, grass) — each ONE InstancedMesh sharing ONE Lambert material → 435 instances in ~8 draw calls (was 1323 GLB instances / 38 draw calls / 2.3 MB).
+- CHARACTERS: the classic procedural rig is the only body again. Stripped tryAttachHiFi/attachRemoteGlb/applyBodyModel/body-swap watcher/BOT_GLB_RIG_BUDGET/boot preload/glbMgr from game.ts; glb rig + attachGlb/detachGlb + facial/secondary layers from player.ts; the whole task-111 police-GLB machinery from npcs.ts (procedural khaki officers patrol again). Bots: BOT_BODY_POOLS/BOT_BODY_FLAVOR deleted — randomFreeCosmetics rolls pure wardrobe variety (gender-matched hair/outfit books + skin tones); botCosmeticsFromId keeps the deterministic gender/skin fill (body fill gone). Rig budget: single classic 24 (verified 24/99 rigged).
+- COSMETICS/SANITIZE: BODY_CATALOG → single 'classic' item, so legacy saved GLB bodies sanitize away and profiles self-migrate to classic once on the wardrobe mount.
+- UI: CharacterSelect rebuilt cartoon-first — step 3 is now the ARCHETYPE picker (personality + gameplay perks on cards; the GLB grid retired); step-1/2 copy updated; police card no longer advertises SWAT/Soldier kits. CharacterPreview renders the procedural pedestal rig (no GLB branch). CookieBanner retires itself while SMALL_ASSET_URLS/BIG_ASSET_URLS are empty (caching infra kept for future add-ons). SettingsPanel "Character Style" copy updated.
+- DELETED: public/models entirely (86 GLBs, 109 MB — repo weight −33,940 lines), src/game/glb.ts, avatar-look.ts, facial-rig.ts, secondary-motion.ts, tests/glb-test.ts, public/tmp-glbview debug folder. GLB_CHARACTERS_ENABLED flag removed from game-store.
+- VC_BUILD v111 → v112. lint + tsc clean (only the pre-existing skills/ errors remain, documented).
+- VERIFIED in browser (agent-browser, V112 badge): menu clean, consent banner gone; Play Solo 60 FPS at spawn; __vcDiag = wildlifeCensus (30 beasts, 10 species) + forestCensus (8 species, 435 instances), ZERO glbAssetError; shiba panic-flee proven (teleport to 3.4m gap → state=flee, gait phase advancing); cartoon shiba/cows/street dogs + feed prompt on screen; police rig visible + patrol state; 24/99 remotes rigged (budget intact); wardrobe 3-step flow + live cartoon pedestal preview + Face Check; jungle fringe renders procedural pines/trees; 878 DC · 141K tris in the deep wild.
+- KNOWN SANDBOX ARTIFACTS (not regressions): OFFLINE badge + fat ping + 1 FPS screenshots = the headless watchdog + screenshot stall (live chip read 60 FPS at spawn; season data streamed throughout).
+- DEPLOY NOTE: client + shared-code change — Windows box: git pull, rebuild frontend (npm run build), hard refresh. Server side untouched this round (cosmetics pass through).
+
+Stage Summary:
+- v112 is the cartoon-for-kids build: ZERO GLB assets ship (−109 MB, zero model downloads, zero texture decodes, zero skinned meshes), every player/bot/officer is the lightweight procedural rig, and both the wildlife and the forest kept all their behavior while dropping to a handful of draw calls. The wardrobe's step 3 now picks archetypes (perks) instead of GLB files. Commit 34193ad pushed to main.
+- Files: src/game/wildlife.ts (rewritten), src/game/forest.ts (rewritten), src/game/game.ts, src/game/player.ts, src/game/npcs.ts, src/lib/cosmetics.ts, src/lib/game-store.ts, src/lib/asset-cache.ts, src/components/game/CharacterSelect.tsx, CharacterPreview.tsx, CookieBanner.tsx, SettingsPanel.tsx, src/lib/build-version.ts; deleted src/game/glb.ts, avatar-look.ts, facial-rig.ts, secondary-motion.ts, tests/glb-test.ts, public/models/**, public/tmp-glbview.
+- Next up (queue): real-device FPS check on the Windows box (the whole point of this round); junior-citizen cartoon quality pass (now procedural again); offline/0-crowd Windows diagnosis (start-windows.bat + net.ts + cloudflared WSS); unreal-engine-skills research; Beach/adventurer character ideas can return as procedural outfits if the user asks.
