@@ -116,6 +116,8 @@ const G = {
   dressHem: new THREE.TorusGeometry(0.295, 0.018, 6, 12),
   waistBelt: new THREE.TorusGeometry(0.172, 0.024, 6, 12),
   bottleCyl: new THREE.CylinderGeometry(0.042, 0.042, 0.14, 8),
+  // v114 kawaii pass: half-torus arc rotated π at place-time = happy curved smile
+  smile: new THREE.TorusGeometry(0.03, 0.008, 6, 12, Math.PI),
 }
 
 export interface RigOptions {
@@ -184,9 +186,17 @@ function faceMaterialShared(): THREE.MeshStandardMaterial {
   return faceFeatureMat
 }
 
-/** Build (or fetch from cache) the merged face-features geometry for a look. */
-function faceGeometryFor(skinHex: string, hairHex: string, female: boolean): THREE.BufferGeometry {
-  const key = `${skinHex}|${hairHex}|${female ? 'f' : 'm'}`
+/**
+ * Build (or fetch from cache) the merged face-features geometry for a look.
+ * v114 KAWAII PASS — the kid-appeal rewrite:
+ *  · big round sparkly eyes set LOW on the face (baby-face proportions)
+ *  · double catchlight sparkle in every eye
+ *  · rosy cheeks for EVERYONE (strongest on kids, subtle on uncles)
+ *  · tiny snub nose
+ *  · curved happy smile (rose for female, warm brown for male) — no more flat line
+ */
+function faceGeometryFor(skinHex: string, hairHex: string, female: boolean, kid = false): THREE.BufferGeometry {
+  const key = `${skinHex}|${hairHex}|${female ? 'f' : 'm'}|${kid ? 'k' : 'a'}`
   const hit = faceGeoCache.get(key)
   if (hit) return hit
   const parts: THREE.BufferGeometry[] = []
@@ -210,40 +220,40 @@ function faceGeometryFor(skinHex: string, hairHex: string, female: boolean): THR
   for (const side of [1, -1]) {
     place(G.ear, shade(skinHex, -22), side * 0.15, 0.1, -0.008, 0.55, 0.82, 0.62)
   }
-  // eyes — almond white + brown iris + dark pupil + tiny catchlight dot.
-  // Pushed proud of the (now smooth) head sphere so they read at any quality.
+  // eyes — v114 kawaii: big ROUND whites + warm iris + dark pupil + DOUBLE
+  // sparkle, set low on the face (y 0.096 vs old 0.112) for baby-face charm.
+  // Kids get the biggest eyes of all — the CoComelon rule.
+  const eyeS = kid ? 1.5 : female ? 1.32 : 1.24
   for (const side of [1, -1]) {
-    place(G.eye, '#f7f3ea', side * 0.056, 0.112, 0.142, 1, 0.82, 0.5)
-    place(G.iris, '#4a2c16', side * 0.056, 0.112, 0.152, 1, 1, 0.55)
-    place(G.pupil, dark, side * 0.056, 0.112, 0.158, 1, 1, 0.6)
-    place(G.spec, '#ffffff', side * 0.05 + side * -0.008, 0.118, 0.1635)
+    place(G.eye, '#f9f6ee', side * 0.06, 0.096, 0.142, eyeS, eyeS * 0.94, 0.55)
+    place(G.iris, '#4a2c16', side * 0.06, 0.096, 0.157, eyeS * 0.78, eyeS * 0.78, 0.6)
+    place(G.pupil, dark, side * 0.06, 0.096, 0.163, eyeS * 0.62, eyeS * 0.62, 0.65)
+    place(G.spec, '#ffffff', side * 0.052, 0.104, 0.168, eyeS * 0.62, eyeS * 0.62, 1)
+    place(G.spec, '#ffffff', side * 0.069, 0.086, 0.167, eyeS * 0.34, eyeS * 0.34, 1)
   }
-  // brows — task 82 "double eyebrow" fix: the old lash bar sat right under a
-  // two-segment brow arch, stacking TWO dark lines above every eye. One tapered,
-  // tilted bar per side now forms a single clean arch (female: thinner + higher).
+  // brows — task 82 single-arch fix kept; raised a touch to clear the bigger
+  // kawaii eyes (kid brows sit highest, thin and high = innocent face).
   for (const side of [1, -1]) {
-    place(G.brow, shade(hairHex, 6), side * 0.054, 0.151, 0.148, female ? 0.92 : 1.04, female ? 0.78 : 1, 1, side * -0.13)
+    place(G.brow, shade(hairHex, 6), side * 0.054, kid ? 0.158 : 0.156, 0.148, female ? 0.92 : 1.04, female ? 0.78 : 1, 1, side * -0.13)
   }
-  // female-only: soft cheek blush baked as a skin/rose blend (vertex colors only)
-  if (female) {
-    const blushCol = new THREE.Color(skinHex).lerp(new THREE.Color('#d46a6a'), 0.38).getStyle()
-    for (const side of [1, -1]) {
-      place(G.blush, blushCol, side * 0.088, 0.068, 0.118, 1, 0.62, 0.42)
-    }
-  }
-  // nose — bridge + snub tip + nostril hints
-  place(G.noseBridge, shade(skinHex, -16), 0, 0.115, 0.142, 1, 1, 0.85)
-  place(G.nose, shade(skinHex, -26), 0, 0.082, 0.156, 0.9, 1.2, 0.85)
+  // cheeks — v114: rosy blush for EVERYONE (kids strongest, uncles subtlest);
+  // baked as a skin/rose blend so it stays one merged vertex-colored mesh.
+  const blushAmt = kid ? 0.46 : female ? 0.36 : 0.2
+  const blushCol = new THREE.Color(skinHex).lerp(new THREE.Color('#e06a6a'), blushAmt).getStyle()
   for (const side of [1, -1]) {
-    place(G.nostril, shade(skinHex, -60), side * 0.015, 0.072, 0.152, 1, 0.8, 0.7)
+    place(G.blush, blushCol, side * 0.092, kid ? 0.05 : 0.058, 0.117, kid ? 1.12 : 1, 0.6, 0.42)
   }
-  // mouth — fuller two-tone lips for female, thinner shaded line for male
-  if (female) {
-    place(G.lip, '#a34e5e', 0, 0.043, 0.149, 1, 0.6, 0.8)
-    place(G.lip, '#c96a76', 0, 0.029, 0.15, 0.94, 0.8, 0.85)
-  } else {
-    place(G.mouth, shade(skinHex, -48), 0, 0.04, 0.149, 1, 1, 0.8)
+  // nose — v114: tinier snub button (baby proportions) + nostril hints
+  place(G.noseBridge, shade(skinHex, -16), 0, 0.108, 0.142, 0.85, 0.8, 0.7)
+  place(G.nose, shade(skinHex, -26), 0, 0.072, 0.154, 0.75, 0.95, 0.75)
+  for (const side of [1, -1]) {
+    place(G.nostril, shade(skinHex, -60), side * 0.013, 0.063, 0.15, 0.9, 0.8, 0.7)
   }
+  // mouth — v114: a happy CURVED smile for everyone (kid widest). Rose tone for
+  // female reads as smiling lips; warm skin-shadow brown for male. The arc is
+  // rotated π so it bows DOWN at the edges (a proper cheerful grin, not a frown).
+  const smileCol = female ? '#b0525e' : shade(skinHex, -55)
+  place(G.smile, smileCol, 0, 0.04, 0.146, kid ? 1.22 : female ? 1.08 : 1, kid ? 1.05 : 0.88, 0.85, Math.PI)
   const merged = mergeGeometries(parts, false) ?? new THREE.BufferGeometry()
   for (const p of parts) p.dispose()
   sharedGeo.add(merged)
@@ -376,12 +386,14 @@ function sleeveGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry
   ])
 }
 
-/** Forearm + fist merged (skin material, arm-pivot space; fist center stays at y -0.46). */
+/** Forearm + fist merged (skin material, arm-pivot space; fist center stays at y -0.46).
+ *  v114: kid builds get chunky little mittens (1.35×) — teddy-bear hands. */
 function forearmGeometry(female: boolean, build: BodyBuild): THREE.BufferGeometry {
   const p = bodyProfile(female, build)
+  const hs = build === 'kid' ? 1.35 : 1.05
   return cachedMerged(`forearm|${female ? 'f' : 'm'}|${build}`, () => [
     xg(new THREE.CylinderGeometry(0.047 * p.armW, 0.038 * p.armW, 0.21, 10), 0, -0.345, 0),
-    xg(G.hand, 0, -0.46, 0, 1.05, 0.9, 1.05),
+    xg(G.hand, 0, -0.46, 0, hs, hs * 0.86, hs),
   ])
 }
 
@@ -571,6 +583,8 @@ export class CharacterRig {
   private alertIndicator: THREE.Sprite | null = null
   private scaleMul: number
   private baseY = 0
+  /** v114: kid rigs bounce higher — set from the build/archetype in the ctor. */
+  private isKidRig = false
 
   constructor(opts: RigOptions) {
     const colors = opts.colors ?? archetypeById(opts.archetype ?? 'student').colors
@@ -589,6 +603,7 @@ export class CharacterRig {
     // build) gets a big-head chibi boost (face/hair/hats all live under headPivot,
     // so one scale reads on every feature) and the whole rig caps at 0.8 height.
     const isKid = build === 'kid' || opts.archetype === 'junior'
+    if (isKid) this.isKidRig = true
 
     // hierarchy: group -> torsoPivot (contains torso, head, arms) ; legs on group
     this.group.add(this.torsoPivot)
@@ -670,7 +685,10 @@ export class CharacterRig {
     // head
     this.headPivot.position.y = 0.62
     this.torsoPivot.add(this.headPivot)
-    if (isKid) this.headPivot.scale.setScalar(1.3)
+    // v114 kawaii pass: subtle chibi boost for EVERYONE (1.07×) — hats, hair and
+    // the face all live under headPivot so one scale keeps them consistent.
+    // Kids keep their full 1.3× big-head boost.
+    this.headPivot.scale.setScalar(isKid ? 1.3 : 1.07)
     const head = new THREE.Mesh(G.head, skinHead)
     head.position.y = 0.1
     head.castShadow = true
@@ -694,8 +712,10 @@ export class CharacterRig {
       const femaleStyle = hairSlot === 'bun' || hairSlot === 'ponytail' || hairSlot === 'long' || hairSlot === 'braid' || hairSlot === 'bob'
       if (femaleStyle) {
         const fringe = new THREE.Mesh(G.fringe, hair)
-        fringe.position.set(0, 0.178, 0.126)
-        fringe.rotation.x = 0.4
+        // v114: lifted to the hairline (bigger kawaii eyes + raised brows left less
+        // clearance — bangs must brush the cap rim, never the eyes)
+        fringe.position.set(0, 0.19, 0.122)
+        fringe.rotation.x = 0.32
         fringe.scale.set(0.95, 0.9, 0.8)
         this.headPivot.add(fringe)
       }
@@ -797,10 +817,24 @@ export class CharacterRig {
           this.headPivot.add(flap)
         }
       }
+      // v114 kid signature: a springy cowlick (ahoge) pair sprouting from the
+      // crown — instant cartoon-kid energy, zero asset cost.
+      if (isKid) {
+        const ahoge = new THREE.Mesh(G.hairSpike, hair)
+        ahoge.position.set(0.012, 0.292, 0.015)
+        ahoge.rotation.z = 0.34
+        ahoge.rotation.x = -0.12
+        ahoge.scale.set(1.3, 1.45, 1.3)
+        const ahoge2 = new THREE.Mesh(G.hairSpike, hair)
+        ahoge2.position.set(-0.048, 0.278, -0.03)
+        ahoge2.rotation.z = -0.52
+        ahoge2.scale.set(0.85, 0.95, 0.85)
+        this.headPivot.add(ahoge, ahoge2)
+      }
     }
 
     // ---- realistic face features: eyes, brows, nose, mouth (one merged mesh) ----
-    const faceFeatures = new THREE.Mesh(faceGeometryFor(colors.skin, colors.hair, isFemale), faceMaterialShared())
+    const faceFeatures = new THREE.Mesh(faceGeometryFor(colors.skin, colors.hair, isFemale, isKid), faceMaterialShared())
     this.headPivot.add(faceFeatures)
 
     if (opts.npcType) {
@@ -1701,7 +1735,11 @@ export class CharacterRig {
           set(this.armR, s * swing * 0.9)
         }
         set(this.armL, this.armBlockL ? 0.15 : -s * swing * 0.9)
-        this.group.position.y = this.baseY + Math.abs(s) * (anim === 'run' ? 0.06 : 0.03)
+        // v114 charm: bouncier step (kids HOP — 1.7× airtime), a jaunty torso
+        // roll with the stride, and a little head-bob that keeps the big eyes up.
+        this.group.position.y = this.baseY + Math.abs(s) * (anim === 'run' ? 0.06 : 0.03) * (this.isKidRig ? 1.7 : 1)
+        this.torsoPivot.rotation.z = s * (anim === 'run' ? 0.055 : 0.032)
+        this.headPivot.rotation.x = Math.sin(p * 2) * 0.026 - 0.015
         break
       }
       case 'jump': {
@@ -1783,6 +1821,10 @@ export class CharacterRig {
       default: { // idle
         this.torsoPivot.rotation.x += (0.03 - this.torsoPivot.rotation.x) * Math.min(1, dt * 6)
         this.headPivot.rotation.x = Math.sin(p * 0.5) * 0.04
+        // v114 charm: gentle breathing (squash-stretch) + a dreamy little sway —
+        // the character visibly LIVES even when standing still.
+        this.torsoPivot.scale.y = 1 + Math.sin(p * 0.9) * 0.016
+        this.torsoPivot.rotation.z = Math.sin(p * 0.45) * 0.018
         set(this.legL, 0); set(this.legR, 0)
         if (!this.armBlockL) {
           set(this.armL, 0.04 + Math.sin(p * 0.8) * 0.03)
@@ -1803,6 +1845,15 @@ export class CharacterRig {
       const headEase = Math.min(1, dt * 10)
       if (anim !== 'idle') this.headPivot.rotation.x += (0 - this.headPivot.rotation.x) * headEase
       this.headPivot.rotation.z += (0 - this.headPivot.rotation.z) * headEase
+    }
+
+    // v114 — same residual-pose hygiene for the NEW charm channels: torso roll +
+    // breathing scale return to neutral in every state that doesn't drive them
+    // (walk/run own rotation.z; idle owns scale.y + rotation.z).
+    if (anim !== 'walk' && anim !== 'run' && anim !== 'idle') {
+      const charmEase = Math.min(1, dt * 10)
+      this.torsoPivot.rotation.z += (0 - this.torsoPivot.rotation.z) * charmEase
+      this.torsoPivot.scale.y += (1 - this.torsoPivot.scale.y) * charmEase
     }
 
     // cloth life: flag ripples, banner sways with the stride

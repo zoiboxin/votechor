@@ -2818,3 +2818,24 @@ Stage Summary:
 - v113: the Junior Citizen kid is back as a pure procedural chibi — big head, small frame, honest kid perks (+5% speed, +20% stamina regen), auto-equipping the new free 'Junior Kid' body build, with kid bots joining the crowd for free. v112's cartoon build re-verified green; the offline/0-crowd chain audited end-to-end and healthy (deployment-side checklist documented).
 - Files: src/lib/cosmetics.ts, src/game/character.ts, src/game/shared/constants.ts, src/components/game/CharacterSelect.tsx, src/lib/build-version.ts (v112 → v113).
 - Next up (queue): real-device FPS check on the Windows box (the point of the cartoon rebuild); kid-size polish pass if the user wants a smaller/taller chibi ratio; Beach/adventurer as procedural outfits if requested; unreal-engine-skills research; police-role kid guard (block kid build on police side for uniform authority).
+
+---
+Task ID: 114
+Agent: Z.ai Code (main)
+Task: "improve character make it look nice so kids like it more" — kawaii pass on the procedural cartoon rig (v114)
+
+Work Log:
+- User feedback after the v112 cartoon rebuild + v113 Junior Kid: make the characters LOOK NICER so kids like them more. Zero new assets — everything is geometry/animation polish on the shared procedural rig (players, bots, police, suspects, boss unaffected).
+- FACE v4 — KAWAII PASS (character.ts faceGeometryFor, cache key now includes the kid flag):
+  · Big ROUND eyes set LOW on the face (y 0.096 vs old 0.112 — baby-face proportions), scale 1.24 male / 1.32 female / 1.5 kid.
+  · DOUBLE catchlight sparkle per eye (main + secondary dot) — the Pixar/CoComelon eye shine.
+  · Rosy cheek blush for EVERYONE (kid 0.46, female 0.36, male subtle 0.20 — was female-only).
+  · Tiny snub nose (0.75× width, baby proportions) + nostril hints kept.
+  · Happy CURVED smile (half-torus arc rotated π) for everyone — replaces the flat mouth line (male) / two-tone lips (female gets a rose smile); kids get the widest grin.
+- CHIBI PROPORTION BOOST: headPivot scale 1.07 for ALL adults (kids keep their 1.3×) — hats/hair/face all live under headPivot so one scale keeps them consistent; subtle friendly big-head read without breaking silhouette.
+- KID SIGNATURE EXTRAS: springy ahoge cowlick pair (hairSpike cones) sprouting from the crown for kid rigs; chunky teddy-bear mittens (hand sphere 1.35×) via forearmGeometry kid branch.
+- CHARM ANIMATION (update()): breathing squash-stretch idle (torso scale.y ±1.6% + dreamy z-sway); jaunty torso roll with the stride (run 0.055 / walk 0.032 rad) + head-bob that keeps the big eyes up; kids HOP 1.7× higher on the run/walk bounce. Residual-pose hygiene extended: torso roll + breathing scale ease back to neutral in every state that doesn't drive them (same pattern as the v88 head-pose scrub).
+- Female fringe lifted to the hairline (y 0.19, tilt 0.32) — bigger eyes + raised brows left less clearance; bangs must brush the cap rim, never the eyes.
+- VERIFIED in browser (agent-browser, V114 badge): wardrobe FACE CHECK close-ups — kid face (big sparkly eyes, strong blush, wide smile, ahoge), adult male (brows + subtle blush + warm-brown smile), female (rose smile, bangs off the brows); in-game Play Solo 60 FPS at spawn, bot rig close-up (Priya) animating walk correctly, slide animation + dust + stamina drain working, camera zoom/rotation checks, 0 console errors, __vcDiag wildlifeCensus 30 beasts / 10 species intact, 6.7K DC · 398K tris healthy. Sandbox 'OFFLINE' badge is the known environment limitation (external game server unreachable from sandbox), not a regression.
+- Files: src/game/character.ts (face v4 + chibi head + ahoge + mittens + charm anims + fringe lift), src/lib/build-version.ts (v113 → v114).
+- Next up (queue): real-device check on the Windows box (pull v114 + rebuild); further kid-appeal ideas if requested (emotewheel sticker faces, pet-follow cosmetic); offline/0-crowd deployment diagnosis still open from Task 113.
