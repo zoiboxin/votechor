@@ -428,14 +428,12 @@ export const DEFAULT_KEYBINDS: Record<string, string> = {
 }
 
 /**
- * task 95 RE-ENABLE — GLB characters are live again. The kill-switch stays exported
- * (one flip returns EVERYTHING to the procedural rig in an emergency), but the
- * body choice itself is per-profile cosmetics.body ('classic' | 'protester' | 'kid'):
- * the wardrobe renders the actual GLB on the pedestal, the choice persists with the
- * account, and the join payload carries it so OTHER PLAYERS see your GLB body too.
- * game.ts gates tryAttachHiFi / attachRemoteGlb / applyBodyModel on this flag.
+ * v112 CARTOON REBUILD — the old GLB_CHARACTERS_ENABLED kill-switch is retired:
+ * the game renders ONE body style, the procedural cartoon rig, for players,
+ * bots and officers alike. Zero GLB assets ship with the build (the wardrobe,
+ * the wildlife and the forest are all procedural), which keeps the client
+ * light, smooth and kid-friendly on low-end devices.
  */
-export const GLB_CHARACTERS_ENABLED = true
 
 const defaultSettings: Settings = {
   masterVolume: 0.8, musicVolume: 0.5, sfxVolume: 0.9,

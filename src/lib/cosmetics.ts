@@ -450,86 +450,18 @@ export const HELD_CATALOG: CosmeticItem[] = [
 ]
 
 /**
- * task 95 — CHARACTER BODY catalog: which BODY renders you in the world.
- *  - classic    the procedural rig (full wardrobe styling — the default)
- *  - protester  High-Fi GLB body (gender-matching, wardrobe applies)
- *  - kid        the VoteChor Runner Kid mascot GLB (fixed brand outfit)
- * Not part of the six equipment slots — the wardrobe renders it as its own
- * top section. Police duty always marches in the Classic rig.
- */
-/**
- * task 107 — body catalog, FEMALE-FIRST per the customize-page redesign:
- * "1 · Choose Your Character" renders THIS list, labeled with the actual GLB
- * file names (Casual_Female, Farmer_Man, …). All 18 pack bodies are the same
- * 62-joint family as the Adventurer/Beach (24 pro clips → kick/punch/roll/
- * strafe/death just work), fully dressed, skin-tint only. 'beach' is added
- * here too — it shipped in task 106 but was never registered, so the server
- * sanitizer silently dropped it on save (fixed). Police duty always renders
- * the Classic rig; the 'body' slot validates like every other catalog.
+ * CHARACTER catalog — v112 CARTOON REBUILD: the GLB body roster is retired.
+ * Every player, bot and officer renders the procedural cartoon rig (full
+ * wardrobe styling). The 'classic' id stays so legacy saved profiles sanitize
+ * cleanly and the wardrobe's slot plumbing keeps working.
  */
 export const BODY_CATALOG: CosmeticItem[] = [
-  // ---- the imported Characters & Animals pack — females first (task 107) ----
-  { id: 'casual-female', kind: 'body', label: 'Casual_Female', emoji: '👚', desc: 'Comfy tee & jeans — the everyday marcher.', unlock: { type: 'free' } },
-  { id: 'casual2-female', kind: 'body', label: 'Casual2_Female', emoji: '👗', desc: 'Second casual cut — orange & blond energy.', unlock: { type: 'free' } },
-  { id: 'adventurer-female', kind: 'body', label: 'Adventurer_Female', emoji: '🧭', desc: 'Trail-ready explorer — boots, satchel, 24 pro animations.', unlock: { type: 'free' } },
-  { id: 'formal-female', kind: 'body', label: 'Formal_Female', emoji: '💼', desc: 'Committee-hearing formal — red suit, gold trim.', unlock: { type: 'free' } },
-  { id: 'medieval-female', kind: 'body', label: 'Medieval_Female', emoji: '🏹', desc: 'Vanodyan ranger — leather, steel & longbow vibes.', unlock: { type: 'free' } },
-  { id: 'scifi-female', kind: 'body', label: 'SciFi_Female', emoji: '🤖', desc: 'Future-cadet blues — protest in 3025.', unlock: { type: 'free' } },
-  { id: 'soldier-female', kind: 'body', label: 'Soldier_Female', emoji: '🪖', desc: 'Field-kit soldier — duty boots & brim.', unlock: { type: 'free' } },
-  { id: 'suit-female', kind: 'body', label: 'Suit_Female', emoji: '👩‍💼', desc: 'Boardroom rebel — black blazer, briefcase energy.', unlock: { type: 'free' } },
-  { id: 'witch-female', kind: 'body', label: 'Witch_Female', emoji: '🧙', desc: 'Pointy hat, purple robes — spells for the cause.', unlock: { type: 'free' } },
-  { id: 'worker-female', kind: 'body', label: 'Worker_Female', emoji: '👷‍♀️', desc: 'High-vis vest — builds barricades on lunch break.', unlock: { type: 'free' } },
-  // ---- earlier imported one-offs ----
-  { id: 'beach', kind: 'body', label: 'Beach', emoji: '🏖️', desc: 'Vacationer — sandals laced, 24 pro animations.', unlock: { type: 'free' } },
-  { id: 'adventurer', kind: 'body', label: 'Adventurer', emoji: '🎒', desc: 'Imported rigged explorer — baked kit, 24 pro animations.', unlock: { type: 'free' } },
-  // ---- the pack's men ----
-  { id: 'hoodie-man', kind: 'body', label: 'Casual_Hoodie_Man', emoji: '🧥', desc: 'Hood up, face unknown — shadow of the movement.', unlock: { type: 'free' } },
-  { id: 'farmer-man', kind: 'body', label: 'Farmer_Man', emoji: '🌾', desc: 'Field boots & rolled sleeves — feeds the march.', unlock: { type: 'free' } },
-  { id: 'king-man', kind: 'body', label: 'King_Man', emoji: '👑', desc: 'Crowned & caped — leads by decree.', unlock: { type: 'free' } },
-  { id: 'punk-man', kind: 'body', label: 'Punk_Man', emoji: '🎸', desc: 'Spiked, tattooed, loud — three chords for freedom.', unlock: { type: 'free' } },
-  { id: 'spacesuit-man', kind: 'body', label: 'Spacesuit_Man', emoji: '👨‍🚀', desc: 'Sealed EVA suit — protests in a vacuum.', unlock: { type: 'free' } },
-  { id: 'suit-man', kind: 'body', label: 'Suit_Man', emoji: '👔', desc: 'Grey-flannel lobbyist turned believer.', unlock: { type: 'free' } },
-  { id: 'swat-man', kind: 'body', label: 'Swat_Man', emoji: '🛡️', desc: 'Visor down, vest on — ready for anything.', unlock: { type: 'free' } },
-  { id: 'worker-man', kind: 'body', label: 'Worker_Man', emoji: '👷', desc: 'Yellow hard-hat — union strong.', unlock: { type: 'free' } },
-  // ---- in-house bodies ----
   {
     id: 'classic',
     kind: 'body',
     label: 'Classic Rig',
     emoji: '🧍',
     desc: 'The full customized protester — every wardrobe slot renders.',
-    unlock: { type: 'free' },
-  },
-  {
-    id: 'protester',
-    kind: 'body',
-    label: 'Protester GLB',
-    emoji: '🎽',
-    desc: 'High-Fi animated body. Your outfit tint + gear ride along.',
-    unlock: { type: 'free' },
-  },
-  {
-    id: 'kid',
-    kind: 'body',
-    label: 'Runner Kid',
-    emoji: '🧢',
-    desc: 'The VoteChor mascot — red cap, backpack, unstoppable.',
-    unlock: { type: 'free' },
-  },
-  {
-    id: 'human',
-    kind: 'body',
-    label: 'Citizen HD',
-    emoji: '🧑',
-    desc: 'Skinned human body — smooth joints, blinking face, real gait.',
-    unlock: { type: 'free' },
-  },
-  {
-    id: 'human-child',
-    kind: 'body',
-    label: 'Junior Citizen',
-    emoji: '🧒',
-    desc: 'Kid-proportioned human — big head, shorts, big sneaker energy.',
     unlock: { type: 'free' },
   },
 ]
@@ -616,29 +548,10 @@ export function sanitizeCosmetics(raw: unknown): Record<string, string | boolean
   return Object.keys(out).length ? out : undefined
 }
 
-/** task 110 — season-bot body pools. Bots are no longer the flat Classic rig:
- *  every bot now wears a random GLB human from the Characters & Animals pack,
- *  gender-matched to its rolled gender, so the crowd reads as a real mixed
- *  protest instead of 99 clones. Curated for plausibility:
- *  - CIVILIAN pool (88%): everyday people you'd actually meet at a march.
- *  - FLAVOR pool (12%): the pack's oddballs (witch, king, astronaut…) — the
- *    game is a satire, and every crowd deserves a legend. SWAT/Soldier are
- *    intentionally EXCLUDED: they are police-side bodies (POLICE_BODY_IDS)
- *    and a protector wearing one would fall back to Classic anyway. */
-export const BOT_BODY_POOLS: Record<'male' | 'female', string[]> = {
-  female: ['casual-female', 'casual2-female', 'worker-female', 'suit-female', 'formal-female', 'adventurer-female'],
-  male: ['hoodie-man', 'worker-man', 'suit-man', 'farmer-man', 'punk-man', 'adventurer'],
-}
-const BOT_BODY_FLAVOR: Record<'male' | 'female', string[]> = {
-  female: ['medieval-female', 'scifi-female', 'witch-female'],
-  male: ['king-man', 'spacesuit-man', 'beach'],
-}
-
-/** Deterministic-ish random free-tier look for season bots — variety without unlock logic.
- *  task 82: hair/outfit/footwear draw from the GENDER's own book so bot crowds
- *  read male/female at a glance. task 110: + a random gender-matched GLB pack
- *  body — the nearest-rigged bots render as real rigged humans, the far crowd
- *  stays on the cheap impostor LOD. */
+/** v112 CARTOON — season-bot look roll. Bots wear the procedural cartoon rig
+ *  (GLB pack bodies retired), so variety comes from the FREE wardrobe itself:
+ *  gender-matched hair/outfit/footwear books, hats, gear, held items, glasses
+ *  and skin tones. The crowd reads as a real mixed protest at zero asset cost. */
 export function randomFreeCosmetics(rand: () => number = Math.random): Record<string, string | boolean> {
   const pick = (arr: CosmeticItem[]) => {
     const free = arr.filter((i) => i.unlock.type === 'free')
@@ -647,9 +560,7 @@ export function randomFreeCosmetics(rand: () => number = Math.random): Record<st
   const female = rand() < 0.5
   const gender: 'male' | 'female' = female ? 'female' : 'male'
   const hairRoll = rand()
-  const bodyPool = rand() < 0.88 ? BOT_BODY_POOLS[gender] : BOT_BODY_FLAVOR[gender]
-  const out: Record<string, string | boolean> = {
-    body: bodyPool[Math.floor(rand() * bodyPool.length)],
+  return {
     hat: pick(CATALOGS.hat),
     hair: female
       ? (hairRoll < 0.5 ? 'ponytail' : hairRoll < 0.8 ? 'bun' : pick(itemsForKind('hair', gender)))
@@ -661,20 +572,18 @@ export function randomFreeCosmetics(rand: () => number = Math.random): Record<st
     footwear: pick(itemsForKind('footwear', gender)),
     gear: pick(CATALOGS.gear),
     held: pick(CATALOGS.held),
+    ...(rand() < 0.3 ? { glasses: true } : {}),
+    ...(rand() < 0.5 ? { skinTone: SKIN_TONES[Math.floor(rand() * SKIN_TONES.length)].hex } : {}),
   }
-  if (rand() < 0.3) out.glasses = true
-  if (rand() < 0.5) out.skinTone = SKIN_TONES[Math.floor(rand() * SKIN_TONES.length)].hex
-  return out
 }
 
-/** task 111 — deterministic look for AOI-discovered season bots. Season bots that
+/** v111 — deterministic look for AOI-discovered season bots. Season bots that
  *  enter a client's view through the 10 Hz AOI broadcast never carry cosmetics
- *  (payload economy: only the join ack + playerjoined carry them), so without
- *  this they rendered as flat Classic rigs — 61 of 99 bots in the field. The
- *  look is a PURE function of the bot id (FNV-1a → mulberry32): every client
- *  derives the identical gender/body/skin for the same bot, zero payload cost,
- *  stable across reconnects within the season. Real networked cosmetics always
- *  win — `base` fields are only FILLED when missing. */
+ *  (payload economy). The look is a PURE function of the bot id (FNV-1a →
+ *  mulberry32): every client derives the identical gender/skin for the same
+ *  bot, zero payload cost, stable across reconnects within the season. Real
+ *  networked cosmetics always win — `base` fields are only FILLED when missing.
+ *  v112: the body fill is gone — every bot marches in the classic cartoon rig. */
 export function botCosmeticsFromId(id: string, base?: Record<string, string | boolean> | null): Record<string, string | boolean> {
   let h = 0x811c9dc5
   for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 0x01000193) }
@@ -686,14 +595,10 @@ export function botCosmeticsFromId(id: string, base?: Record<string, string | bo
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
   const genderRoll = rand()
-  const poolRoll = rand()
-  const bodyRoll = rand()
   const skinRoll = rand()
   const gender: 'male' | 'female' = base?.gender === 'female' ? 'female' : base?.gender === 'male' ? 'male' : genderRoll < 0.5 ? 'female' : 'male'
-  const pool = poolRoll < 0.88 ? BOT_BODY_POOLS[gender] : BOT_BODY_FLAVOR[gender]
   const out: Record<string, string | boolean> = { ...base }
   if (!out.gender) out.gender = gender
-  if (!out.body) out.body = pool[Math.floor(bodyRoll * pool.length)] ?? BOT_BODY_POOLS[gender][0]
   if (!out.skinTone) out.skinTone = SKIN_TONES[Math.floor(skinRoll * SKIN_TONES.length)].hex
   return out
 }

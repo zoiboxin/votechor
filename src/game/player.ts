@@ -3,11 +3,7 @@ import * as THREE from 'three'
 import { CharacterRig } from './character'
 import { MOVE, DAMAGE, archetypeById, WORLD_DISC } from './shared/constants'
 import { policeUniformColors } from '../lib/cosmetics'
-import { pickLoco, mapToAnimName, directionalRun } from './anim'
-import type { GLBAnimDriver, LocoState } from './anim'
-import type { GLBInstance } from './glb'
-import { SecondaryMotion } from './secondary-motion'
-import { FacialRig, type FacialState } from './facial-rig'
+import { pickLoco, mapToAnimName, directionalRun, type LocoState } from './anim'
 import type { AnimName } from './shared/types'
 import type { PhysicsWorld } from './physics'
 
@@ -53,10 +49,6 @@ export class PlayerController {
   onFallRecover: (() => void) | null = null
   /** Numeric-glitch sentinel fired when pos/vel stopped being finite (see applyInput). */
   onNanRecover: ((reason?: 'nan' | 'bounds') => void) | null = null
-  // ---- High-Fi GLB rig (optional — procedural rig stays as the fallback) ----
-  glb: { inst: GLBInstance; driver: GLBAnimDriver; sec: SecondaryMotion | null; facial: FacialRig | null } | null = null
-  /** 0..1 exertion for the facial rig's breathing/blink (set by game.ts from stamina). */
-  fatigue = 0
   /** Last resolved animation state, published to the network (works for BOTH backends). */
   netAnim: AnimName = 'idle'
 
@@ -394,24 +386,6 @@ export class PlayerController {
     this.vel.set(0, 0, 0)
   }
 
-  /** Attach the High-Fi GLB rig (hides the procedural body; both stay positioned). */
-  attachGlb(inst: GLBInstance, driver: GLBAnimDriver, sec: SecondaryMotion | null = null, facial: FacialRig | null = null) {
-    this.glb = { inst, driver, sec, facial }
-    this.glb.driver.snap('idle')
-    this.rig.group.visible = false
-    inst.group.visible = true
-  }
-
-  /** Remove the GLB rig and fall back to the procedural body. */
-  detachGlb() {
-    if (!this.glb) return
-    this.glb.sec?.dispose()
-    this.glb.facial?.dispose()
-    this.glb.driver.dispose()
-    this.glb = null
-    this.rig.group.visible = true
-  }
-
   render(dt: number) {
     const hSpeed = Math.hypot(this.vel.x, this.vel.z)
     // ---- resolve the animation state via the shared state machine ----
@@ -440,24 +414,7 @@ export class PlayerController {
     }
     this.netAnim = mapToAnimName(loco)
 
-    if (this.glb) {
-      // High-Fi backend: keyframed clips with crossfade blending
-      this.glb.driver.play(loco, {
-        grounded: this.grounded, vy: this.vel.y, hSpeed,
-        sliding: this.state === 'sliding', dazed: this.state === 'dazed',
-        detained: this.state === 'detained', landTimer: this.landTimer,
-        recoverTimer: this.recoverTimer, jumpsUsed: this.jumpsUsed,
-      })
-      this.glb.driver.update(dt)
-      this.glb.inst.group.position.copy(this.pos)
-      this.glb.inst.group.rotation.y = this.ry
-      // physics-flavored overlay (lean/bank/squash/gaze) on the keyed pose
-      this.glb.sec?.update(dt, { hSpeed, vy: this.vel.y, grounded: this.grounded })
-      // facial layer (blink/gaze/expressions/breath) — human GLBs only
-      const facialState: FacialState = { loco, hSpeed, grounded: this.grounded, fatigue: this.fatigue }
-      this.glb.facial?.update(dt, facialState)
-    }
-    // procedural backend always updates (it holds the name tag + is the fallback)
+    // procedural backend — the one and only cartoon body
     this.rig.update(dt, this.netAnim, hSpeed)
     this.rig.group.position.copy(this.pos)
     this.rig.group.rotation.y = this.ry

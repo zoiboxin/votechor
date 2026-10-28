@@ -1,49 +1,39 @@
-// VoteChor wildlife — task 109 reshuffle (user brief: "keep dogs cats inside
-// city, cow/horse/donkey near city, wild animals in jungle"), superseding the
-// task-108 graveyard habitat. The 10 GLB species from the user's
-// "Characters & Animals" pack now live in three HABITATS:
-//   • PETS (shiba-inu, husky — the GLB dogs) live IN the city streets, pinned to
-//     the same proven street-animal corners the procedural dogs/cats have used
-//     since v66. (The pack ships no cat GLB — the city's cats remain the
-//     procedural street cats of animal-sim.ts.)
-//   • DOMESTIC herds (cow, bull, donkey, horse) graze BOTH flanks: a city-edge
-//     pasture just off the avenue corridor (walking distance — impossible to
-//     miss) and a farm-belt pasture out in the Zone-B countryside fields.
-//   • JUNGLE (deer, stag, wolf, fox) — rejection-sampled wild spots, reshuffled
-//     every session. The fox moved here from the graveyard (it is a wild animal
-//     in the new grouping); the husky moved into the city (it is a dog).
-// LAZY-START FIX: task 108 gated the build behind a 65 m walk from spawn — but
-// the nearest city sites sit at 55 m, so a player strolling the spawn plaza
-// never saw a single beast start loading. The build now starts on the FIRST
-// match frame: loads stream in sequentially, and the five city/edge species
-// (≈14 MB) are pre-warmed by the cookie-consent cache.
-// PANIC-FLEE (unchanged core): every beast has a species temperament radius —
-// the moment the player steps inside it, the beast bolts (Gallop clip), keeps
-// RE-AIMING its escape vector while it is still chased (so the player can
-// never corner it), and only settles once the threat is gone.
-// Pets and domestic beasts are habituated (small panic radius, slower flight,
-// leashed to their patch); wild ones are skittish (big radius, fast, long
-// flight). A spatial panic voice (moo/bark) sells the moment.
+// VoteChor wildlife — v112 CARTOON REBUILD ("remove all .glb, keep the game
+// cartoon for kids, smooth and lightweight"). The 10 GLB species are GONE:
+// every beast is now a tiny procedural low-poly cartoon animal built from a
+// handful of shared unit geometries (box / sphere / cone) + cached flat
+// materials — zero downloads, zero textures, zero skinned meshes, zero
+// AnimationMixers. A full beast is ~12 meshes of stock geometry, so the whole
+// system costs less GPU memory than ONE of the old GLB files.
 //
-// Design unchanged from task 107: independent client-side ambience bots driven
-// by the pack's own GLB clips through tiny per-beast mixers; no server/physics
-// coupling (kinematic, ground-sampled).
+// Everything the player loved is preserved 1:1:
+//   • HABITATS (v109 grouping): PETS inside the city streets (shiba + husky at
+//     the proven street corners), DOMESTIC herds on BOTH flanks (city-edge
+//     pasture + farm-belt pasture), JUNGLE wanderers (fox/deer/stag/wolf)
+//     rejection-sampled into the wild every session.
+//   • PANIC-FLEE: species temperament radius → bolt + re-aim while chased +
+//     home leash + spatial moo/bark voice.
+//   • Idle/walk/eat life loop — now animated PROCEDURALLY: sinusoid leg
+//     swings (diagonal pairs), body bob, head-dip grazing, tail wag.
+//   • Distance LOD: invisible beyond 190 m, anim math skipped beyond 140 m.
+//   • The one-shot __vcDiag 'wildlifeCensus' for console diagnosis.
 //
-// FACING (v104 binary recipe, verified on every animal file): heads/horns
-// extend +Z, canid tails swing −Z — the pack is natively +Z-facing, which is
-// EXACTLY the VoteChor heading convention (ry = atan2(vx, vz)) → no flip.
+// FACING: beasts face +Z at ry=0 (head at +z, tail at −z) — the same
+// VoteChor heading convention as every character (ry = atan2(vx, vz)).
 import * as THREE from 'three'
 import { GRAVEYARD, WORLD_DISC } from './shared/constants'
 import { wildnessAt } from './jungle-ambience'
 import { AudioManager, type SfxName } from './audio'
-import type { GLBAssetManager, GLBAsset, GLBInstance } from './glb'
 import type { PhysicsWorld } from './physics'
 
 type Habitat = 'pet' | 'domestic' | 'jungle'
 
+type EarStyle = 'round' | 'point' | 'long' | 'none'
+type TailStyle = 'stub' | 'curl' | 'bushy' | 'long'
+type HornStyle = 'none' | 'bovine' | 'antler'
+
 interface BeastDef {
   id: string
-  url: string
   count: number
   /** wander speed (m/s) — plausibly scaled to species size */
   speed: number
@@ -58,77 +48,229 @@ interface BeastDef {
   voice: SfxName | null
   /** PETS: one member per street corner (count must match the list) */
   petSites?: Array<[number, number]>
-  /** DOMESTIC: the city-edge pasture [x, z] (just off the avenue corridor) */
+  /** DOMESTIC: the city-edge pasture [x, z] */
   cityHerd?: [number, number]
-  /** DOMESTIC: the farm-belt pasture [x, z] (Zone-B countryside fields) */
+  /** DOMESTIC: the farm-belt pasture [x, z] */
   farmHerd?: [number, number]
-  /** DOMESTIC: members huddling the city-edge vs farm-belt pasture */
   cityCount?: number
   farmCount?: number
+  // ---- cartoon body spec (meters) ----
+  bodyLen: number
+  bodyW: number
+  bodyH: number
+  legLen: number
+  legW: number
+  headR: number
+  ears: EarStyle
+  tail: TailStyle
+  horns: HornStyle
+  hump?: boolean
+  mane?: boolean
+  palette: { body: string; accent: string; dark: string }
 }
 
 const BEASTS: BeastDef[] = [
-  // ---- CITY PETS: the GLB dogs live IN the streets, at the same proven
+  // ---- CITY PETS: cartoon dogs live IN the streets, at the same proven
   //      street-animal corners the procedural dogs/cats have used since v66
-  //      (all ≥4 m off every vehicle lane). No cat GLB ships in the pack —
-  //      the city cats stay procedural (animal-sim.ts).
-  { id: 'shiba', url: '/models/shiba-inu.glb', count: 3, speed: 1.4, habitat: 'pet', panicR: 6.0, fleeMul: 2.8, leash: 20, voice: 'bark',
-    petSites: [[8, -66], [-7, -188], [10, -462]] },       // plaza side · market exit · colony cross
-  { id: 'husky', url: '/models/husky.glb', count: 2, speed: 1.6, habitat: 'pet', panicR: 6.5, fleeMul: 2.8, leash: 22, voice: 'bark',
-    petSites: [[-12, -272], [11, -516]] },                // avenue cross · parliament approach
+  { id: 'shiba', count: 3, speed: 1.4, habitat: 'pet', panicR: 6.0, fleeMul: 2.8, leash: 20, voice: 'bark',
+    petSites: [[8, -66], [-7, -188], [10, -462]],       // plaza side · market exit · colony cross
+    bodyLen: 0.55, bodyW: 0.26, bodyH: 0.3, legLen: 0.2, legW: 0.07, headR: 0.17,
+    ears: 'point', tail: 'curl', horns: 'none',
+    palette: { body: '#d98e4a', accent: '#f2e3c8', dark: '#3a2e26' } },
+  { id: 'husky', count: 2, speed: 1.6, habitat: 'pet', panicR: 6.5, fleeMul: 2.8, leash: 22, voice: 'bark',
+    petSites: [[-12, -272], [11, -516]],                // avenue cross · parliament approach
+    bodyLen: 0.64, bodyW: 0.28, bodyH: 0.32, legLen: 0.24, legW: 0.08, headR: 0.18,
+    ears: 'point', tail: 'bushy', horns: 'none',
+    palette: { body: '#8a8f98', accent: '#e8e6e0', dark: '#2e3238' } },
   // ---- DOMESTIC HERDS: every species grazes BOTH flanks — a city-edge
-  //      pasture just off the avenue corridor (x ±6..11, between the cross
-  //      streets, outside the zone-D widened asphalt) AND a farm-belt pasture
-  //      out among the Zone-B countryside fields. City first per the brief:
-  //      "cow near horse donkey near city".
-  { id: 'cow',    url: '/models/cow.glb',    count: 4, speed: 0.9, habitat: 'domestic', panicR: 4.6, fleeMul: 2.2, leash: 24, voice: 'moo',
-    cityHerd: [9, -105],   cityCount: 2, farmHerd: [120, -240], farmCount: 2 },
-  { id: 'bull',   url: '/models/bull.glb',   count: 2, speed: 1.0, habitat: 'domestic', panicR: 5.0, fleeMul: 2.4, leash: 24, voice: 'moo',
-    cityHerd: [-9, -145],  cityCount: 1, farmHerd: [-132, -430], farmCount: 1 },
-  { id: 'donkey', url: '/models/donkey.glb', count: 3, speed: 1.0, habitat: 'domestic', panicR: 5.4, fleeMul: 2.4, leash: 24, voice: 'moo',
-    cityHerd: [10, -438],  cityCount: 2, farmHerd: [128, -470], farmCount: 1 },
-  { id: 'horse',  url: '/models/horse.glb',  count: 3, speed: 1.3, habitat: 'domestic', panicR: 6.0, fleeMul: 2.8, leash: 26, voice: 'moo',
-    cityHerd: [9, -240],   cityCount: 2, farmHerd: [62, -588],  farmCount: 1 },
-  // ---- JUNGLE: the deep wild, random every session (the fox is a wild
-  //      animal in this grouping — moved here from the task-108 graveyard) ----
-  { id: 'fox',    url: '/models/fox.glb', count: 3, speed: 1.9, habitat: 'jungle', panicR: 8.5, fleeMul: 2.9, leash: 40, voice: 'bark' },
-  { id: 'deer',   url: '/models/deer.glb', count: 4, speed: 1.7, habitat: 'jungle', panicR: 10.5, fleeMul: 3.0, leash: 40, voice: null },
-  { id: 'stag',   url: '/models/stag.glb', count: 3, speed: 1.5, habitat: 'jungle', panicR: 10.0, fleeMul: 3.0, leash: 40, voice: null },
-  { id: 'wolf',   url: '/models/wolf.glb', count: 3, speed: 1.8, habitat: 'jungle', panicR: 9.0,  fleeMul: 3.0, leash: 40, voice: null },
+  //      pasture just off the avenue corridor AND a farm-belt pasture out
+  //      among the Zone-B countryside fields ("cow near horse donkey near city")
+  { id: 'cow', count: 4, speed: 0.9, habitat: 'domestic', panicR: 4.6, fleeMul: 2.2, leash: 24, voice: 'moo',
+    cityHerd: [9, -105],   cityCount: 2, farmHerd: [120, -240], farmCount: 2,
+    bodyLen: 1.45, bodyW: 0.72, bodyH: 0.8, legLen: 0.5, legW: 0.16, headR: 0.3,
+    ears: 'round', tail: 'long', horns: 'bovine',
+    palette: { body: '#f2ede1', accent: '#e8b4a0', dark: '#4a3a2e' } },
+  { id: 'bull', count: 2, speed: 1.0, habitat: 'domestic', panicR: 5.0, fleeMul: 2.4, leash: 24, voice: 'moo',
+    cityHerd: [-9, -145],  cityCount: 1, farmHerd: [-132, -430], farmCount: 1,
+    bodyLen: 1.5, bodyW: 0.78, bodyH: 0.85, legLen: 0.52, legW: 0.18, headR: 0.32,
+    ears: 'round', tail: 'long', horns: 'bovine', hump: true,
+    palette: { body: '#6b4a35', accent: '#c8a88a', dark: '#2e2118' } },
+  { id: 'donkey', count: 3, speed: 1.0, habitat: 'domestic', panicR: 5.4, fleeMul: 2.4, leash: 24, voice: 'moo',
+    cityHerd: [10, -438],  cityCount: 2, farmHerd: [128, -470], farmCount: 1,
+    bodyLen: 1.2, bodyW: 0.55, bodyH: 0.65, legLen: 0.5, legW: 0.13, headR: 0.26,
+    ears: 'long', tail: 'long', horns: 'none',
+    palette: { body: '#9a948c', accent: '#c5beb2', dark: '#3a352e' } },
+  { id: 'horse', count: 3, speed: 1.3, habitat: 'domestic', panicR: 6.0, fleeMul: 2.8, leash: 26, voice: 'moo',
+    cityHerd: [9, -240],   cityCount: 2, farmHerd: [62, -588],  farmCount: 1,
+    bodyLen: 1.5, bodyW: 0.6, bodyH: 0.75, legLen: 0.68, legW: 0.14, headR: 0.26,
+    ears: 'point', tail: 'long', horns: 'none', mane: true,
+    palette: { body: '#8a5a3a', accent: '#3a2c20', dark: '#241a12' } },
+  // ---- JUNGLE: the deep wild, random every session ----
+  { id: 'fox', count: 3, speed: 1.9, habitat: 'jungle', panicR: 8.5, fleeMul: 2.9, leash: 40, voice: 'bark',
+    bodyLen: 0.52, bodyW: 0.22, bodyH: 0.26, legLen: 0.18, legW: 0.06, headR: 0.14,
+    ears: 'point', tail: 'bushy', horns: 'none',
+    palette: { body: '#d97a3a', accent: '#f2ede1', dark: '#2e2118' } },
+  { id: 'deer', count: 4, speed: 1.7, habitat: 'jungle', panicR: 10.5, fleeMul: 3.0, leash: 40, voice: null,
+    bodyLen: 0.95, bodyW: 0.4, bodyH: 0.5, legLen: 0.5, legW: 0.09, headR: 0.18,
+    ears: 'point', tail: 'stub', horns: 'antler',
+    palette: { body: '#b8875a', accent: '#e8d8c0', dark: '#3a2c20' } },
+  { id: 'stag', count: 3, speed: 1.5, habitat: 'jungle', panicR: 10.0, fleeMul: 3.0, leash: 40, voice: null,
+    bodyLen: 1.15, bodyW: 0.5, bodyH: 0.6, legLen: 0.6, legW: 0.11, headR: 0.22,
+    ears: 'point', tail: 'stub', horns: 'antler',
+    palette: { body: '#8a6540', accent: '#d8c4a0', dark: '#2e2118' } },
+  { id: 'wolf', count: 3, speed: 1.8, habitat: 'jungle', panicR: 9.0, fleeMul: 3.0, leash: 40, voice: null,
+    bodyLen: 0.75, bodyW: 0.3, bodyH: 0.36, legLen: 0.28, legW: 0.09, headR: 0.17,
+    ears: 'point', tail: 'bushy', horns: 'none',
+    palette: { body: '#7a7d85', accent: '#c8c4bc', dark: '#22252a' } },
 ]
 
-const PROPS: Array<{ url: string }> = [
-  { url: '/models/vehicle-pickup.glb' },
-  { url: '/models/vehicle-sports.glb' },
-  { url: '/models/vehicle-truck.glb' },
-  { url: '/models/water-tower.glb' },
-]
+// ---------- shared cartoon kit: FOUR unit geometries + a material cache ----------
+// Every part of every beast is one of these scaled/positioned — nothing is
+// allocated per beast beyond Object3Ds.
+const G_BOX = new THREE.BoxGeometry(1, 1, 1)
+const G_LEG = new THREE.BoxGeometry(1, 1, 1).translate(0, -0.5, 0) // origin at the hip
+const G_SPH = new THREE.SphereGeometry(0.5, 8, 6)
+const G_CONE = new THREE.ConeGeometry(0.5, 1, 6)
+
+const MAT_CACHE = new Map<string, THREE.MeshLambertMaterial>()
+function mat(hex: string): THREE.MeshLambertMaterial {
+  let m = MAT_CACHE.get(hex)
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ color: hex, flatShading: true })
+    MAT_CACHE.set(hex, m)
+  }
+  return m
+}
+
+function part(parent: THREE.Object3D, geo: THREE.BufferGeometry, hex: string,
+  px: number, py: number, pz: number, sx: number, sy: number, sz: number): THREE.Mesh {
+  const m = new THREE.Mesh(geo, mat(hex))
+  m.position.set(px, py, pz)
+  m.scale.set(sx, sy, sz)
+  m.castShadow = false
+  m.receiveShadow = false
+  parent.add(m)
+  return m
+}
+
+interface BeastBody {
+  group: THREE.Group      // world position + heading (faces +Z)
+  bodyG: THREE.Group      // bobs/breathes/pitches
+  headPivot: THREE.Group  // grazing dip
+  tailPivot: THREE.Group | null
+  legs: THREE.Mesh[]      // [FL, FR, BL, BR] — swing around the hip
+  restY: number
+}
+
+/** Build one cartoon beast facing +Z. Head at +z, tail at −z. */
+function buildBeast(def: BeastDef): BeastBody {
+  const p = def.palette
+  const group = new THREE.Group()
+  const bodyG = new THREE.Group()
+  group.add(bodyG)
+  const restY = def.legLen + def.bodyH * 0.5
+  bodyG.position.y = restY
+
+  // torso
+  part(bodyG, G_BOX, p.body, 0, 0, 0, def.bodyW, def.bodyH, def.bodyLen)
+  // bull hump over the shoulders
+  if (def.hump) part(bodyG, G_SPH, p.body, 0, def.bodyH * 0.5, def.bodyLen * 0.22, def.bodyW * 0.7, def.bodyH * 0.5, def.bodyLen * 0.3)
+
+  // head — pivot at the neck so grazing = one rotation
+  const headPivot = new THREE.Group()
+  headPivot.position.set(0, def.bodyH * 0.34, def.bodyLen * 0.5 + def.headR * 0.5)
+  bodyG.add(headPivot)
+  part(headPivot, G_SPH, p.body, 0, def.headR * 0.36, def.headR * 0.55, def.headR * 1.7, def.headR * 1.7, def.headR * 1.8)
+  // snout
+  part(headPivot, G_BOX, p.accent, 0, def.headR * 0.14, def.headR * 1.42, def.headR * 0.9, def.headR * 0.66, def.headR * 0.9)
+  // eyes — the cartoon soul of the whole rebuild
+  const eyeZ = def.headR * 1.15
+  const eyeX = def.headR * 0.52
+  part(headPivot, G_SPH, '#1c1a17', eyeX, def.headR * 0.55, eyeZ, def.headR * 0.16, def.headR * 0.16, def.headR * 0.16)
+  part(headPivot, G_SPH, '#1c1a17', -eyeX, def.headR * 0.55, eyeZ, def.headR * 0.16, def.headR * 0.16, def.headR * 0.16)
+
+  // ears
+  if (def.ears === 'round') {
+    part(headPivot, G_SPH, p.body, def.headR * 0.82, def.headR * 0.85, def.headR * 0.2, def.headR * 0.42, def.headR * 0.5, def.headR * 0.2)
+    part(headPivot, G_SPH, p.body, -def.headR * 0.82, def.headR * 0.85, def.headR * 0.2, def.headR * 0.42, def.headR * 0.5, def.headR * 0.2)
+  } else if (def.ears === 'point') {
+    part(headPivot, G_CONE, p.body, def.headR * 0.58, def.headR * 1.22, 0, def.headR * 0.5, def.headR * 0.85, def.headR * 0.28)
+    part(headPivot, G_CONE, p.body, -def.headR * 0.58, def.headR * 1.22, 0, def.headR * 0.5, def.headR * 0.85, def.headR * 0.28)
+  } else if (def.ears === 'long') {
+    part(headPivot, G_BOX, p.body, def.headR * 0.42, def.headR * 1.5, -def.headR * 0.15, def.headR * 0.26, def.headR * 1.5, def.headR * 0.14)
+    part(headPivot, G_BOX, p.body, -def.headR * 0.42, def.headR * 1.5, -def.headR * 0.15, def.headR * 0.26, def.headR * 1.5, def.headR * 0.14)
+  }
+
+  // horns
+  if (def.horns === 'bovine') {
+    part(headPivot, G_CONE, p.accent, def.headR * 0.72, def.headR * 1.15, def.headR * 0.25, def.headR * 0.28, def.headR * 0.7, def.headR * 0.28).rotation.z = 0.9
+    part(headPivot, G_CONE, p.accent, -def.headR * 0.72, def.headR * 1.15, def.headR * 0.25, def.headR * 0.28, def.headR * 0.7, def.headR * 0.28).rotation.z = -0.9
+  } else if (def.horns === 'antler') {
+    // two-prong antlers: main beam + a tine, per side
+    for (const s of [1, -1]) {
+      const main = part(headPivot, G_CONE, p.accent, s * def.headR * 0.5, def.headR * 1.6, def.headR * 0.1, def.headR * 0.16, def.headR * 1.2, def.headR * 0.16)
+      main.rotation.z = s * 0.42
+      const tine = part(headPivot, G_CONE, p.accent, s * def.headR * 0.92, def.headR * 1.85, def.headR * 0.1, def.headR * 0.12, def.headR * 0.6, def.headR * 0.12)
+      tine.rotation.z = s * 1.15
+    }
+  }
+
+  // mane (horse) — a dark strip along the neck
+  if (def.mane) {
+    part(headPivot, G_BOX, p.accent, 0, def.headR * 1.05, def.headR * 0.05, def.headR * 0.22, def.headR * 0.6, def.headR * 1.5)
+    part(bodyG, G_BOX, p.accent, 0, def.bodyH * 0.5, def.bodyLen * 0.32, def.bodyW * 0.16, def.bodyH * 0.22, def.bodyLen * 0.34)
+  }
+
+  // tail
+  let tailPivot: THREE.Group | null = null
+  if (def.tail !== 'stub') {
+    tailPivot = new THREE.Group()
+    tailPivot.position.set(0, def.bodyH * 0.34, -def.bodyLen * 0.5)
+    bodyG.add(tailPivot)
+    if (def.tail === 'long') {
+      part(tailPivot, G_BOX, p.dark, 0, -def.bodyH * 0.28, -def.headR * 0.3, def.headR * 0.2, def.bodyH * 0.62, def.headR * 0.2)
+    } else if (def.tail === 'bushy') {
+      part(tailPivot, G_SPH, p.body, 0, def.headR * 0.34, -def.headR * 0.85, def.headR * 0.55, def.headR * 0.55, def.headR * 1.5)
+      if (def.id === 'fox') part(tailPivot, G_SPH, p.accent, 0, def.headR * 0.42, -def.headR * 1.5, def.headR * 0.4, def.headR * 0.4, def.headR * 0.7)
+    } else if (def.tail === 'curl') {
+      part(tailPivot, G_SPH, p.accent, 0, def.headR * 0.85, -def.headR * 0.45, def.headR * 0.5, def.headR * 0.5, def.headR * 0.5)
+    }
+  } else {
+    part(bodyG, G_SPH, p.accent, 0, def.bodyH * 0.3, -def.bodyLen * 0.52, def.headR * 0.34, def.headR * 0.34, def.headR * 0.34)
+  }
+
+  // legs — FL, FR, BL, BR (diagonal pairs share a phase)
+  const legs: THREE.Mesh[] = []
+  const hipY = -def.bodyH * 0.5
+  const zx = def.bodyW * 0.5 - def.legW * 0.6
+  const zz = def.bodyLen * 0.5 - def.legW * 0.9
+  for (const [sx, sz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]] as const) {
+    const leg = part(bodyG, G_LEG, p.dark, sx * zx, hipY, sz * zz, def.legW, def.legLen, def.legW)
+    legs.push(leg)
+  }
+
+  return { group, bodyG, headPivot, tailPivot, legs, restY }
+}
 
 type BeastState = 'idle' | 'walk' | 'eat' | 'flee'
 
 interface Beast {
   def: BeastDef
-  inst: GLBInstance
-  idles: THREE.AnimationClip[]
-  walk: THREE.AnimationClip | null
-  gallop: THREE.AnimationClip | null
-  eat: THREE.AnimationClip | null
-  cur: THREE.AnimationAction | null
+  body: BeastBody
   state: BeastState
   stateT: number
   home: { x: number; z: number }
   wanderR: number
   target: { x: number; z: number }
   ry: number
-  y: number
+  /** gait phase — drives legs/bob/tail */
+  phase: number
+  /** current head-dip 0..1 (lerped — grazing eases in/out) */
+  dip: number
   /** panic re-aim countdown (s) — keeps the escape vector fresh while chased */
   reevalT: number
   /** spatial voice cooldown (s) so a long chase does not spam audio nodes */
   voiceCd: number
-}
-
-interface Prop {
-  inst: GLBInstance
 }
 
 function inDisc(x: number, z: number, r = 600): boolean {
@@ -147,9 +289,9 @@ function nearGraveyard(x: number, z: number, pad = 16): boolean {
 /** Common hazard exclusions for the anchored habitats (pets + domestic):
  *  inside the disc, off the Kabristan interior, out of the Bhayanak river band
  *  and the arena exit corridor, and not stacked on a claimed spot. */
-function anchoredValid(x: number, z: number, used: Array<{ x: number; z: number }>, minDist: number, avoidGraveyard = true): boolean {
+function anchoredValid(x: number, z: number, used: Array<{ x: number; z: number }>, minDist: number): boolean {
   if (!inDisc(x, z)) return false
-  if (avoidGraveyard && nearGraveyard(x, z)) return false
+  if (nearGraveyard(x, z)) return false
   if (Math.abs(x) < 46 && z < -564) return false // arena exit + south trail head
   if (Math.abs(x) < 214 && z < -662 && z > -712) return false // river band
   for (const u of used) {
@@ -187,40 +329,30 @@ function pickSpot(used: Array<{ x: number; z: number }>, minDist: number, wildMi
 
 export class WildlifeSystem {
   readonly group = new THREE.Group()
-  private mgr: GLBAssetManager
   private physics: PhysicsWorld
   private beasts: Beast[] = []
-  private props: Prop[] = []
   private used: Array<{ x: number; z: number }> = []
   private started = false
   private disposed = false
 
-  constructor(mgr: GLBAssetManager, physics: PhysicsWorld) {
-    this.mgr = mgr
+  constructor(physics: PhysicsWorld) {
     this.physics = physics
     this.group.name = 'vc-wildlife'
   }
 
-  /** Idempotent start — task 109 FIX: the old gates (wildness-only, then a
-   *  65 m walk from spawn) starved the CITY sites — the nearest herds sit at
-   *  55 m from spawn, so a player looking around the city beat the gate and
-   *  saw nothing start. The build now fires on the FIRST match frame: loads
-   *  stream in one-by-one (no frame hitch) and the cookie-consent cache has
-   *  already pre-warmed the city/edge species. */
+  /** Idempotent start — the build is SYNCHRONOUS now (no GLB streams): all
+   *  30 cartoon beasts pop in on the first match frame at zero network cost. */
   ensureStarted(): void {
     if (this.started || this.disposed) return
     this.started = true
-    void this.build()
+    this.build()
   }
 
-  private async build(): Promise<void> {
+  private build(): void {
     for (const def of BEASTS) {
-      if (this.disposed) return
-      const asset = await this.mgr.load(def.url)
-      if (!asset) continue // loader already logged; this species just stays home
-      if (def.habitat === 'pet') this.spawnPets(def, asset)
-      else if (def.habitat === 'domestic') this.spawnDomestic(def, asset)
-      else this.spawnJungle(def, asset)
+      if (def.habitat === 'pet') this.spawnPets(def)
+      else if (def.habitat === 'domestic') this.spawnDomestic(def)
+      else this.spawnJungle(def)
     }
     // QA affordance: a one-shot census of what actually spawned (and where),
     // so "the animals aren't showing" can be diagnosed from __vcDiag directly.
@@ -229,35 +361,18 @@ export class WildlifeSystem {
       w.__vcDiag = w.__vcDiag ?? []
       w.__vcDiag.push({
         kind: 'wildlifeCensus',
-        beasts: this.beasts.map((b) => ({ id: b.def.id, x: Math.round(b.inst.group.position.x), z: Math.round(b.inst.group.position.z) })),
-        props: this.props.length,
+        beasts: this.beasts.map((b) => ({ id: b.def.id, x: Math.round(b.body.group.position.x), z: Math.round(b.body.group.position.z) })),
+        props: 0,
         t: Date.now(),
       })
     } catch { /* diag is best-effort */ }
-    // abandoned landmarks — bigger spacing so they read as intentional set pieces
-    for (const p of PROPS) {
-      if (this.disposed) return
-      const asset = await this.mgr.load(p.url)
-      if (!asset) continue
-      const inst = this.mgr.instantiate(asset)
-      if (!inst) continue
-      const spot = pickSpot(this.used, 26)
-      if (!spot) { this.mgr.disposeInstance(inst); continue }
-      this.used.push(spot)
-      const y = this.physics.groundHeight(spot.x, spot.z, 40)
-      inst.group.position.set(spot.x, y, spot.z)
-      inst.group.rotation.y = Math.random() * Math.PI * 2
-      this.group.add(inst.group)
-      this.props.push({ inst })
-    }
   }
 
   /** CITY PETS: one dog per proven street corner, huddled with a little
    *  sidewalk-side jitter so they don't stand stacked on the exact spot. */
-  private spawnPets(def: BeastDef, asset: GLBAsset): void {
+  private spawnPets(def: BeastDef): void {
     const sites = def.petSites ?? []
     for (let n = 0; n < def.count; n++) {
-      if (this.disposed) return
       const site = sites[n % Math.max(1, sites.length)]
       if (!site) return
       let spot: { x: number; z: number } | null = null
@@ -268,16 +383,13 @@ export class WildlifeSystem {
       }
       if (!spot) spot = { x: site[0], z: site[1] }
       this.used.push(spot)
-      this.spawnBeast(def, asset, spot, 6 + Math.random() * 4)
+      this.spawnBeast(def, spot, 6 + Math.random() * 4)
     }
   }
 
   /** DOMESTIC herds: every species splits its members between a CITY-EDGE
-   *  pasture (just off the avenue corridor — impossible to miss on foot) and a
-   *  FARM-BELT pasture out in the Zone-B countryside, so both zones are
-   *  stocked every session (task 109: the old single-site toggle let a whole
-   *  species end up somewhere the player never walks). */
-  private spawnDomestic(def: BeastDef, asset: GLBAsset): void {
+   *  pasture and a FARM-BELT pasture so both zones are stocked every session. */
+  private spawnDomestic(def: BeastDef): void {
     const groups: Array<{ site: [number, number] | undefined; n: number }> = [
       { site: def.cityHerd, n: def.cityCount ?? 0 },
       { site: def.farmHerd, n: def.farmCount ?? 0 },
@@ -286,7 +398,6 @@ export class WildlifeSystem {
       if (!g.site || g.n <= 0) continue
       let last: { x: number; z: number } | null = null
       for (let n = 0; n < g.n; n++) {
-        if (this.disposed) return
         let spot: { x: number; z: number } | null = null
         for (let t = 0; t < 14 && !spot; t++) {
           const base = last ?? { x: g.site[0], z: g.site[1] }
@@ -298,16 +409,15 @@ export class WildlifeSystem {
         if (!spot) spot = { x: g.site[0] + (Math.random() * 2 - 1) * 4, z: g.site[1] + (Math.random() * 2 - 1) * 4 }
         last = spot
         this.used.push(spot)
-        this.spawnBeast(def, asset, spot, 5 + Math.random() * 4)
+        this.spawnBeast(def, spot, 5 + Math.random() * 4)
       }
     }
   }
 
   /** JUNGLE wanderers: the task-107 rejection sampling + herd clustering. */
-  private spawnJungle(def: BeastDef, asset: GLBAsset): void {
+  private spawnJungle(def: BeastDef): void {
     let last: { x: number; z: number } | null = null
     for (let n = 0; n < def.count; n++) {
-      if (this.disposed) return
       let spot: { x: number; z: number } | null = null
       if (last && Math.random() < 0.65) {
         for (let t = 0; t < 12 && !spot; t++) {
@@ -320,50 +430,30 @@ export class WildlifeSystem {
       if (!spot) break
       last = spot
       this.used.push(spot)
-      this.spawnBeast(def, asset, spot, 9 + Math.random() * 12)
+      this.spawnBeast(def, spot, 9 + Math.random() * 12)
     }
   }
 
-  private spawnBeast(def: BeastDef, asset: GLBAsset, spot: { x: number; z: number }, wanderR: number): void {
-    const inst = this.mgr.instantiate(asset)
-    if (!inst) return
-    // resolve the species' clip set (names are lowercased by instantiate())
-    const clip = (name: string) => inst.clips.get(name) ?? null
-    const idles = ['idle', 'idle_2', 'idle_headlow', 'idle_2_headlow']
-      .map((n) => clip(n))
-      .filter((c): c is THREE.AnimationClip => !!c)
+  private spawnBeast(def: BeastDef, spot: { x: number; z: number }, wanderR: number): void {
+    const body = buildBeast(def)
     const beast: Beast = {
       def,
-      inst,
-      idles,
-      walk: clip('walk'),
-      gallop: clip('gallop') ?? clip('gallop_jump'),
-      eat: clip('eating'),
-      cur: null,
+      body,
       state: 'idle',
       stateT: 2 + Math.random() * 5,
       home: { x: spot.x, z: spot.z },
       wanderR,
       target: { x: spot.x, z: spot.z },
       ry: Math.random() * Math.PI * 2,
-      y: this.physics.groundHeight(spot.x, spot.z, 40),
+      phase: Math.random() * Math.PI * 2,
+      dip: 0,
       reevalT: 0,
       voiceCd: 0,
     }
-    inst.group.position.set(spot.x, beast.y, spot.z)
-    inst.group.rotation.y = beast.ry
-    this.group.add(inst.group)
+    body.group.position.set(spot.x, this.physics.groundHeight(spot.x, spot.z, 40), spot.z)
+    body.group.rotation.y = beast.ry
+    this.group.add(body.group)
     this.beasts.push(beast)
-    this.play(beast, beast.idles[0] ?? null)
-  }
-
-  private play(b: Beast, c: THREE.AnimationClip | null, fade = 0.3): void {
-    if (!c) return
-    const next = b.inst.mixer.clipAction(c)
-    if (b.cur === next) return
-    next.reset().fadeIn(fade).play()
-    if (b.cur) b.cur.fadeOut(fade)
-    b.cur = next
   }
 
   private retarget(b: Beast): void {
@@ -375,9 +465,9 @@ export class WildlifeSystem {
 
   /** PANIC VECTOR — aim away from the player with a slight random tangent,
    *  then clamp onto the home leash so a flight can never drag a cow three
-   *  districts away (or a fox off its graveyard). */
+   *  districts away (or a fox off its jungle). */
   private retargetFlee(b: Beast, px: number, pz: number): void {
-    const pos = b.inst.group.position
+    const pos = b.body.group.position
     const fx = pos.x - px
     const fz = pos.z - pz
     const l = Math.max(0.001, Math.hypot(fx, fz))
@@ -399,20 +489,20 @@ export class WildlifeSystem {
   private voice(b: Beast, px: number, pz: number, yaw: number): void {
     if (!b.def.voice || b.voiceCd > 0) return
     b.voiceCd = 2.8 + Math.random() * 2.2
-    AudioManager.playAt(b.def.voice, b.inst.group.position.x, b.inst.group.position.z, px, pz, yaw, 46, 1.0)
+    AudioManager.playAt(b.def.voice, b.body.group.position.x, b.body.group.position.z, px, pz, yaw, 46, 1.0)
   }
 
   update(dt: number, player: { x: number; z: number }, yaw = 0): void {
     if (!this.beasts.length) return
     for (const b of this.beasts) {
       const def = b.def
-      const pos = b.inst.group.position
+      const pos = b.body.group.position
       const dx = player.x - pos.x
       const dz = player.z - pos.z
       const distSq = dx * dx + dz * dz
       const far = distSq > 140 * 140
       const hidden = distSq > 190 * 190
-      if (b.inst.group.visible !== !hidden) b.inst.group.visible = !hidden
+      if (b.body.group.visible !== !hidden) b.body.group.visible = !hidden
       if (b.voiceCd > 0) b.voiceCd -= dt
 
       // ---- PANIC: the player stepped inside the species' comfort radius ----
@@ -421,7 +511,6 @@ export class WildlifeSystem {
         b.stateT = 2.2
         b.reevalT = 0
         this.retargetFlee(b, player.x, player.z)
-        this.play(b, b.gallop ?? b.walk, 0.16)
         this.voice(b, player.x, player.z, yaw)
       }
 
@@ -430,18 +519,15 @@ export class WildlifeSystem {
         case 'idle': {
           if (b.stateT <= 0) {
             const roll = Math.random()
-            if (roll < 0.45 && b.walk) {
+            if (roll < 0.45) {
               b.state = 'walk'
               b.stateT = 20 // arrival-based; safety ceiling
               this.retarget(b)
-              this.play(b, b.walk)
-            } else if (roll < 0.72 && b.eat) {
+            } else if (roll < 0.72) {
               b.state = 'eat'
               b.stateT = 3 + Math.random() * 4
-              this.play(b, b.eat)
             } else {
               b.stateT = 3 + Math.random() * 6
-              if (b.idles.length > 1 && Math.random() < 0.5) this.play(b, b.idles[Math.floor(Math.random() * b.idles.length)])
             }
           }
           break
@@ -477,20 +563,18 @@ export class WildlifeSystem {
             } else {
               b.state = 'idle'
               b.stateT = 2.5 + Math.random() * 5
-              this.play(b, b.idles[0] ?? null)
             }
           } else {
             const step = Math.min(speed * dt, d)
             const nx = pos.x + (tx / d) * step
             const nz = pos.z + (tz / d) * step
-            // heading: the pack faces +Z, same convention as the players
+            // heading: beasts face +Z, same convention as the players
             const want = Math.atan2(tx, tz)
             let dr = want - b.ry
             while (dr > Math.PI) dr -= Math.PI * 2
             while (dr < -Math.PI) dr += Math.PI * 2
             b.ry += dr * Math.min(1, dt * (fleeing ? 7 : 5))
-            b.inst.group.rotation.y = b.ry
-            b.inst.group.position.set(nx, this.physics.groundHeight(nx, nz, 40), nz)
+            pos.set(nx, this.physics.groundHeight(nx, nz, 40), nz)
           }
           break
         }
@@ -503,17 +587,36 @@ export class WildlifeSystem {
         }
       }
 
-      // skinning is the cost — freeze the mixer beyond 140 m (pose holds)
-      if (!far) b.inst.mixer.update(dt)
+      // ---- PROCEDURAL CARTOON ANIMATION (skipped beyond 140 m) ----
+      if (!far) {
+        const moving = b.state === 'walk' || b.state === 'flee'
+        const gait = moving ? (b.state === 'flee' ? 11 : 6.5) : 1.6
+        b.phase += dt * gait
+        const swing = b.state === 'flee' ? 0.85 : b.state === 'walk' ? 0.5 : 0
+        const { legs, bodyG, headPivot, tailPivot, restY } = b.body
+        // diagonal pairs: FL+BR together, FR+BL opposite
+        legs[0].rotation.x = Math.sin(b.phase) * swing
+        legs[3].rotation.x = Math.sin(b.phase) * swing
+        legs[1].rotation.x = Math.sin(b.phase + Math.PI) * swing
+        legs[2].rotation.x = Math.sin(b.phase + Math.PI) * swing
+        // body bob + gallop pitch + idle breath
+        const bob = moving ? Math.abs(Math.sin(b.phase)) * 0.05 : Math.sin(b.phase) * 0.012
+        bodyG.position.y = restY + bob
+        bodyG.rotation.x = b.state === 'flee' ? Math.sin(b.phase * 2) * 0.07 : 0
+        // grazing: ease the head down while eating, up otherwise
+        const dipTarget = b.state === 'eat' ? 1 : 0
+        b.dip += (dipTarget - b.dip) * Math.min(1, dt * 3.4)
+        headPivot.rotation.x = b.dip * 0.95 + (moving ? Math.sin(b.phase * 0.5) * 0.05 : 0)
+        // tail: happy wag when calm, streamed straight in a panic
+        if (tailPivot) tailPivot.rotation.y = b.state === 'flee' ? 0 : Math.sin(b.phase * 0.9) * 0.3
+      }
     }
   }
 
   dispose(): void {
     this.disposed = true
-    for (const b of this.beasts) this.mgr.disposeInstance(b.inst)
-    for (const p of this.props) this.mgr.disposeInstance(p.inst)
+    for (const b of this.beasts) this.group.remove(b.body.group)
     this.beasts = []
-    this.props = []
     this.used = []
   }
 }

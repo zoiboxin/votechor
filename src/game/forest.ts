@@ -1,15 +1,15 @@
-// VoteChor forest — task 110: the user's AmiPolyGon Forest Free Pack (38 GLB
-// species: trees, pines, dead trees, trunks, logs, sticks, bushes, grass)
-// scattered across the world as GPU-INSTANCED clusters. Every model is a
-// single mesh + single material (verified from the GLB JSON), so each species
-// becomes ONE InstancedMesh — ~1350 plants in ~38 draw calls total.
+// VoteChor forest — v112 CARTOON REBUILD ("remove all .glb, smooth and
+// lightweight"). The 38 GLB plant models are GONE: every tree/pine/dead tree/
+// log/stick/bush/grass tuft is now a tiny PROCEDURAL low-poly mesh — merged
+// vertex-colored geometry (one shared MeshLambertMaterial across ALL species,
+// flat-shaded cartoon look). Each species renders as ONE InstancedMesh, so the
+// whole forest is ~7 draw calls and ~0 MB of downloads.
 //
-// HABITATS (mirrors the wildlife grouping):
+// HABITATS (unchanged from v110):
 //   • DEEP WILD (wildness ≥ 0.55 — the Vanodyan Deep and the far ring):
 //     pine groves, dead trees, fallen trunks, logs and stick litter.
 //   • FRINGE (0.18 ≤ wildness < 0.55 — where fields thin into forest):
-//     broadleaf trees mixed into the existing woodland, bushes, grass tufts,
-//     the odd log.
+//     broadleaf trees, bushes, grass tufts, the odd log.
 //   • CITY BAND (wildness < 0.18): NO trees (buildings own the skyline) —
 //     low bushes + grass tufts along the open sidewalk margins only.
 //   • GRAVEYARD ring: dead trees haunt the Kabristan fence (r+6..r+30).
@@ -19,9 +19,9 @@
 // plaza and the graveyard interior, and every instance is ground-snapped.
 // A seeded RNG (mulberry32) keeps a session's forest stable once built.
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { GRAVEYARD, WORLD_DISC } from './shared/constants'
 import { wildnessAt } from './jungle-ambience'
-import type { GLBAssetManager, GLBAsset } from './glb'
 import type { PhysicsWorld } from './physics'
 
 /** Deterministic RNG so a built forest stays put for the whole session. */
@@ -35,8 +35,110 @@ function mulberry32(seed: number): () => number {
   }
 }
 
+// ---------- procedural cartoon flora kit ----------
+// One shared flat material for the entire forest (vertex colors carry the
+// palette) — every species is a merged, vertex-colored BufferGeometry.
+const FOREST_MAT = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })
+
+const G_BOX = new THREE.BoxGeometry(1, 1, 1)
+const G_CYL = new THREE.CylinderGeometry(0.5, 0.62, 1, 6)
+const G_CONE = new THREE.ConeGeometry(0.5, 1, 6)
+const G_SPH = new THREE.SphereGeometry(0.5, 7, 5)
+const G_ICO = new THREE.IcosahedronGeometry(0.5, 0)
+
+const _c = new THREE.Color()
+function paint(geo: THREE.BufferGeometry, hex: string): THREE.BufferGeometry {
+  const n = geo.attributes.position.count
+  const colors = new Float32Array(n * 3)
+  _c.set(hex)
+  for (let i = 0; i < n; i++) {
+    colors[i * 3] = _c.r
+    colors[i * 3 + 1] = _c.g
+    colors[i * 3 + 2] = _c.b
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+  return geo
+}
+
+const _m = new THREE.Matrix4()
+const _q = new THREE.Quaternion()
+const _e = new THREE.Euler()
+const _v = new THREE.Vector3()
+const _s = new THREE.Vector3()
+interface Piece {
+  geo: THREE.BufferGeometry
+  hex: string
+  px?: number; py?: number; pz?: number
+  rx?: number; ry?: number; rz?: number
+  sx?: number; sy?: number; sz?: number
+}
+function merge(parts: Piece[]): THREE.BufferGeometry {
+  const geos: THREE.BufferGeometry[] = []
+  for (const p of parts) {
+    const g = p.geo.clone()
+    _q.setFromEuler(_e.set(p.rx ?? 0, p.ry ?? 0, p.rz ?? 0))
+    _v.set(p.px ?? 0, p.py ?? 0, p.pz ?? 0)
+    _s.set(p.sx ?? 1, p.sy ?? 1, p.sz ?? 1)
+    _m.compose(_v, _q, _s)
+    g.applyMatrix4(_m)
+    geos.push(paint(g, p.hex))
+  }
+  const merged = mergeGeometries(geos, false)
+  for (const g of geos) g.dispose()
+  return merged ?? paint(G_BOX.clone(), '#4a6b3a')
+}
+
+/** Species builders — each returns ONE merged geometry (origin at ground). */
+function buildPine(): THREE.BufferGeometry {
+  return merge([
+    { geo: G_CYL, hex: '#6b4a2e', py: 0.55, sx: 0.26, sy: 1.1, sz: 0.26 },
+    { geo: G_CONE, hex: '#3d6b35', py: 1.55, sx: 1.5, sy: 1.9, sz: 1.5 },
+    { geo: G_CONE, hex: '#4a7d3f', py: 2.6, sx: 1.05, sy: 1.5, sz: 1.05 },
+    { geo: G_CONE, hex: '#558d47', py: 3.5, sx: 0.62, sy: 1.1, sz: 0.62 },
+  ])
+}
+function buildTree(): THREE.BufferGeometry {
+  return merge([
+    { geo: G_CYL, hex: '#7a5636', py: 0.9, sx: 0.3, sy: 1.8, sz: 0.3 },
+    { geo: G_SPH, hex: '#5d8f43', py: 2.25, sx: 2.0, sy: 1.7, sz: 2.0 },
+    { geo: G_SPH, hex: '#6b9e4c', py: 2.9, px: 0.55, sz: 1.35, sy: 1.15, sx: 1.35 },
+    { geo: G_SPH, hex: '#527f3c', py: 2.75, px: -0.6, pz: 0.3, sz: 1.15, sy: 1.0, sx: 1.15 },
+  ])
+}
+function buildDeadTree(): THREE.BufferGeometry {
+  return merge([
+    { geo: G_CYL, hex: '#6e6258', py: 1.15, sx: 0.24, sy: 2.3, sz: 0.24, rz: 0.06 },
+    { geo: G_CYL, hex: '#7a6e62', py: 1.9, px: 0.34, sx: 0.1, sy: 1.0, sz: 0.1, rz: -0.85 },
+    { geo: G_CYL, hex: '#7a6e62', py: 2.15, px: -0.3, sx: 0.09, sy: 0.85, sz: 0.09, rz: 0.95 },
+    { geo: G_CYL, hex: '#6e6258', py: 2.75, sx: 0.08, sy: 0.7, sz: 0.08, rz: 0.22 },
+  ])
+}
+function buildLog(): THREE.BufferGeometry {
+  return merge([
+    { geo: G_CYL, hex: '#7a5636', py: 0.22, rz: Math.PI / 2, sx: 0.44, sy: 1.7, sz: 0.44 },
+  ])
+}
+function buildStick(): THREE.BufferGeometry {
+  return merge([
+    { geo: G_CYL, hex: '#6e5a42', py: 0.1, rz: Math.PI / 2, sx: 0.1, sy: 0.85, sz: 0.1, ry: 0.4 },
+  ])
+}
+function buildBush(): THREE.BufferGeometry {
+  return merge([
+    { geo: G_ICO, hex: '#4a7d3f', py: 0.42, sx: 1.1, sy: 0.85, sz: 1.1 },
+    { geo: G_ICO, hex: '#558d47', py: 0.6, px: 0.3, sx: 0.7, sy: 0.6, sz: 0.7 },
+  ])
+}
+function buildGrass(): THREE.BufferGeometry {
+  return merge([
+    { geo: G_CONE, hex: '#6b9e4c', py: 0.16, px: -0.08, sx: 0.16, sy: 0.42, sz: 0.16, rz: 0.14 },
+    { geo: G_CONE, hex: '#7aad57', py: 0.2, sx: 0.18, sy: 0.55, sz: 0.18 },
+    { geo: G_CONE, hex: '#6b9e4c', py: 0.14, px: 0.1, sx: 0.15, sy: 0.38, sz: 0.15, rz: -0.16 },
+  ])
+}
+
 interface SpeciesDef {
-  file: string
+  build: () => THREE.BufferGeometry
   /** [min, max] uniform instance scale */
   scale: [number, number]
   /** instance budget per zone */
@@ -47,48 +149,19 @@ interface SpeciesDef {
 }
 
 const SPECIES: SpeciesDef[] = [
-  // broadleaf trees — the fringe's new woodland species
-  { file: 'tree_1.glb', scale: [0.8, 1.5], fringe: 34 },
-  { file: 'tree_2.glb', scale: [0.8, 1.5], fringe: 34 },
-  { file: 'tree_3.glb', scale: [0.8, 1.5], fringe: 34 },
-  { file: 'tree_4.glb', scale: [0.8, 1.5], fringe: 30 },
-  { file: 'tree_5.glb', scale: [0.8, 1.4], fringe: 26 },
-  { file: 'tree_6.glb', scale: [0.8, 1.4], fringe: 26 },
+  // broadleaf trees — the fringe's woodland
+  { build: buildTree, scale: [0.8, 1.5], fringe: 34 },
   // pines — the deep wild's conifer groves
-  { file: 'tree_pine_1.glb', scale: [0.9, 1.6], deep: 70 },
-  { file: 'tree_pine_2.glb', scale: [0.9, 1.6], deep: 70 },
-  { file: 'tree_pine_3.glb', scale: [0.9, 1.6], deep: 70 },
+  { build: buildPine, scale: [0.9, 1.6], deep: 80 },
+  { build: buildPine, scale: [0.7, 1.3], deep: 60 },
   // the dead — Vanodyan Deep litter + the Kabristan's haunting row
-  { file: 'dead_tree_1.glb', scale: [0.9, 1.5], deep: 18, grave: 10 },
-  { file: 'dead_tree_2.glb', scale: [0.9, 1.5], deep: 18, grave: 10 },
-  { file: 'dead_tree_3.glb', scale: [0.9, 1.5], deep: 18, grave: 10 },
-  { file: 'trunk_1.glb', scale: [1.0, 1.6], deep: 16 },
-  { file: 'trunk_2.glb', scale: [1.0, 1.6], deep: 16 },
-  { file: 'trunk_3.glb', scale: [1.0, 1.6], deep: 16 },
-  { file: 'trunk_4.glb', scale: [1.0, 1.6], deep: 16 },
-  { file: 'log_1.glb', scale: [1.0, 1.7], deep: 12, fringe: 8 },
-  { file: 'log_2.glb', scale: [1.0, 1.7], deep: 12, fringe: 8 },
-  { file: 'log_3.glb', scale: [1.0, 1.7], deep: 12, fringe: 8 },
-  { file: 'log_4.glb', scale: [1.0, 1.7], deep: 12, fringe: 8 },
-  { file: 'stick_1.glb', scale: [1.0, 2.0], deep: 45 },
-  { file: 'stick_2.glb', scale: [1.0, 2.0], deep: 45 },
-  { file: 'stick_3.glb', scale: [1.0, 2.0], deep: 45 },
+  { build: buildDeadTree, scale: [0.9, 1.5], deep: 30, grave: 16 },
+  // ground litter
+  { build: buildLog, scale: [1.0, 1.7], deep: 26, fringe: 10 },
+  { build: buildStick, scale: [1.0, 2.0], deep: 60 },
   // understory — bushes everywhere the ground is soft, grass tufts too
-  { file: 'bush_1.glb', scale: [0.8, 1.4], fringe: 30, city: 14 },
-  { file: 'bush_2.glb', scale: [0.8, 1.4], fringe: 30, city: 14 },
-  { file: 'bush_3.glb', scale: [0.8, 1.4], fringe: 30, city: 12 },
-  { file: 'bush_4.glb', scale: [0.8, 1.4], fringe: 30, city: 12 },
-  { file: 'grass_1.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_2.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_3.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_4.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_5.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_6.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_7.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_8.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_9.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_10.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
-  { file: 'grass_11.glb', scale: [0.8, 1.6], fringe: 26, city: 10 },
+  { build: buildBush, scale: [0.8, 1.4], fringe: 42, city: 16 },
+  { build: buildGrass, scale: [0.8, 1.6], fringe: 48, city: 14 },
 ]
 
 const CROSS_ROAD_Z = [-78, -198, -286, -452]
@@ -118,51 +191,39 @@ function wildBand(x: number, z: number, min: number, max: number): boolean {
 
 export class ForestPack {
   readonly group = new THREE.Group()
-  private mgr: GLBAssetManager
   private physics: PhysicsWorld
   private meshes: THREE.InstancedMesh[] = []
+  private geos: THREE.BufferGeometry[] = []
   private started = false
   private disposed = false
 
-  constructor(mgr: GLBAssetManager, physics: PhysicsWorld) {
-    this.mgr = mgr
+  constructor(physics: PhysicsWorld) {
     this.physics = physics
     this.group.name = 'vc-forest'
   }
 
-  /** Idempotent start — the forest is pure static ambience (no per-frame work),
-   *  so it only needs the one async build on the first match frame. */
+  /** Idempotent start — the build is SYNCHRONOUS now (no GLB streams): the
+   *  whole forest lands on the first match frame, ~7 draw calls total. */
   ensureStarted(): void {
     if (this.started || this.disposed) return
     this.started = true
-    void this.build()
+    this.build()
   }
 
-  private async build(): Promise<void> {
+  private build(): void {
     const rand = mulberry32(0x0ce7110) // deterministic per session
     for (const sp of SPECIES) {
       if (this.disposed) return
-      const asset: GLBAsset | null = await this.mgr.load(`/models/forest/${sp.file}`)
-      if (!asset) continue
-      // every pack model is a single mesh + single material (verified) — pull
-      // them out once; the InstancedMesh shares them across ALL instances
-      let geo: THREE.BufferGeometry | null = null
-      let mat: THREE.Material | null = null
-      asset.scene.traverse((o) => {
-        if (!geo && (o as THREE.Mesh).isMesh) {
-          const m = o as THREE.Mesh
-          geo = m.geometry
-          mat = (Array.isArray(m.material) ? m.material[0] : m.material) ?? null
-        }
-      })
-      if (!geo || !mat) continue
       const zones: Array<{ n: number; sample: () => { x: number; z: number } | null }> = []
       if (sp.deep) zones.push({ n: sp.deep, sample: () => this.sampleIn(0.55, Infinity, rand) })
       if (sp.fringe) zones.push({ n: sp.fringe, sample: () => this.sampleIn(0.18, 0.55, rand) })
       if (sp.grave) zones.push({ n: sp.grave, sample: () => this.sampleGrave(rand) })
       if (sp.city) zones.push({ n: sp.city, sample: () => this.sampleCity(rand) })
       const total = zones.reduce((s, z) => s + z.n, 0)
-      const inst = new THREE.InstancedMesh(geo, mat, total)
+      if (total <= 0) continue
+      const geo = sp.build()
+      this.geos.push(geo)
+      const inst = new THREE.InstancedMesh(geo, FOREST_MAT, total)
       inst.castShadow = false
       inst.receiveShadow = false
       const m4 = new THREE.Matrix4()
@@ -243,8 +304,10 @@ export class ForestPack {
     this.disposed = true
     for (const m of this.meshes) {
       this.group.remove(m)
-      m.dispose() // frees instance buffers only — geometry/material stay in the GLB cache
+      m.dispose()
     }
+    for (const g of this.geos) g.dispose()
     this.meshes = []
+    this.geos = []
   }
 }

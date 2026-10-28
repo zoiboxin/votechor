@@ -2,17 +2,12 @@
 
 // Live WebGL wardrobe preview — renders the ACTUAL in-game body on a slow
 // turntable so what you see is exactly what other protesters will see.
-// task 95: the preview follows the chosen Character Body — the procedural
-// CharacterRig (classic) OR the real GLB bodies (Protester / Runner Kid) with
-// the same resolveAvatarLook → applyAvatarLook pipeline the game uses.
+// v112 CARTOON REBUILD: the GLB body pipeline is retired — the preview always
+// renders the procedural CharacterRig (the same rig the game uses), styled by
+// the full wardrobe.
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { CharacterRig } from '@/game/character'
-import { GLBAssetManager } from '@/game/glb'
-import { GLBAnimDriver } from '@/game/anim'
-import {
-  resolveAvatarLook, applyAvatarLook, bodyModelOf, resolveGlbUrl, KID_SCALE, HUMAN_CHILD_SCALE,
-} from '@/game/avatar-look'
 import { archetypeById } from '@/game/shared/constants'
 import { policeUniformColors } from '@/lib/cosmetics'
 
@@ -34,8 +29,6 @@ export interface PreviewLook {
   police?: boolean
   policeOutfit?: string
   policeHat?: string
-  /** task 95 — chosen character body: 'classic' | 'protester' | 'kid' (absent = classic) */
-  body?: string
 }
 
 function disposeRig(rig: CharacterRig) {
@@ -47,9 +40,6 @@ function disposeRig(rig: CharacterRig) {
     }
   })
 }
-
-// one shared asset manager (caches per URL — the same cache the game uses)
-const previewGlbMgr = new GLBAssetManager()
 
 export default function CharacterPreview({ look, className }: { look: PreviewLook; className?: string }) {
   const mountRef = useRef<HTMLDivElement | null>(null)
@@ -73,7 +63,7 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
     if (!mount) return
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
     renderer.toneMappingExposure = 1.05
@@ -115,13 +105,10 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
     scene.add(stage)
 
     let rig: CharacterRig | null = null
-    // task 95 — live GLB body state (loaded async; procedural rig stays until ready)
-    let glbInst: { group: THREE.Group; mixer: THREE.AnimationMixer; driver: GLBAnimDriver } | null = null
-    let glbToken = 0 // rebuild race guard — stale loads never attach
 
     // camera presets: full-body fit check + close-up face check (round 23).
     // camFace is re-targeted to the body's actual head height on every rebuild —
-    // archetypes scale the whole rig AND the GLB bodies have their own heights.
+    // archetypes scale the whole rig.
     const camFull = { pos: new THREE.Vector3(0.55, 1.35, 2.9), look: new THREE.Vector3(0, 0.95, 0) }
     const camFace = { pos: new THREE.Vector3(0.28, 1.72, 1.18), look: new THREE.Vector3(0, 1.66, 0) }
     const retargetFaceCam = () => {
@@ -134,21 +121,8 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
     const camLook = camFull.look.clone()
     let faceMode = false
 
-    /** Resolve the PreviewLook into the shared AvatarLook pipeline shape. */
-    const toCosmetics = (l: PreviewLook): Record<string, string | boolean> => ({
-      hat: l.hat, hair: l.hair, gender: l.gender, face: l.face, build: l.build,
-      outfit: l.outfit, footwear: l.footwear, gear: l.gear, held: l.held,
-      glasses: l.glasses, ...(l.skinTone ? { skinTone: l.skinTone } : {}), signText: l.signText,
-    })
-
     const buildRig = () => {
       // tear down whatever is on the pedestal
-      glbToken++
-      if (glbInst) {
-        stage.remove(glbInst.group)
-        previewGlbMgr.disposeInstance({ group: glbInst.group, mixer: glbInst.mixer, clips: new Map() })
-        glbInst = null
-      }
       if (rig) {
         stage.remove(rig.group)
         disposeRig(rig)
@@ -184,40 +158,6 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
       headHeightRef.current = 1.7 * (rig.group.scale.y || 1)
       headDistRef.current = rig.group.scale.y || 1
       retargetFaceCam()
-
-      // ---- task 95: GLB bodies (protester / kid) load async and REPLACE the rig body ----
-      // task 108 — police side may wear the police-side GLBs (SWAT / Soldier);
-      // every other GLB body stays citizen-only, mirroring effectiveBodyOf in-game.
-      const model = bodyModelOf({ body: l.body })
-      const policeBodyOk = model === 'swat-man' || model === 'soldier-female'
-      if (model !== 'classic' && (!l.police || policeBodyOk)) {
-        const token = glbToken
-        const avatarLook = resolveAvatarLook(toCosmetics(l), l.archetype, l.police ? 'police' : 'protector')
-        const url = resolveGlbUrl(model, avatarLook.gender)
-        if (url) {
-          void previewGlbMgr.load(url).then((asset) => {
-            if (!asset || token !== glbToken) return // look changed again mid-load
-            const inst = previewGlbMgr.instantiate(asset)
-            if (!inst) return
-            applyAvatarLook(inst.group, avatarLook, model)
-            if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
-            else if (model === 'human-child') inst.group.scale.setScalar(HUMAN_CHILD_SCALE)
-            inst.group.visible = true
-            stage.add(inst.group)
-            const driver = new GLBAnimDriver(inst.mixer, inst.clips)
-            driver.snap('idle')
-            glbInst = { group: inst.group, mixer: inst.mixer, driver }
-            if (rig) rig.group.visible = false // GLB replaces the procedural body
-            // re-target the face camera to the GLB's real head height
-            const box = new THREE.Box3().setFromObject(inst.group)
-            if (Number.isFinite(box.max.y) && box.max.y > 0.5) {
-              headHeightRef.current = box.max.y * 0.93
-              headDistRef.current = 1
-              retargetFaceCam()
-            }
-          })
-        }
-      }
     }
     buildRig()
     rebuildRef.current = buildRig
@@ -266,8 +206,7 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
         }
       }
       stage.rotation.y = spin
-      if (glbInst) glbInst.driver.update(dt)
-      else rig?.update(dt, 'idle', 0)
+      rig?.update(dt, 'idle', 0)
       const t = Math.min(1, dt * 6)
       camPos.lerp(faceMode ? camFace.pos : camFull.pos, t)
       camLook.lerp(faceMode ? camFace.look : camFull.look, t)
@@ -285,7 +224,6 @@ export default function CharacterPreview({ look, className }: { look: PreviewLoo
       renderer.domElement.removeEventListener('pointerdown', onDown)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      if (glbInst) previewGlbMgr.disposeInstance({ group: glbInst.group, mixer: glbInst.mixer, clips: new Map() })
       if (rig) disposeRig(rig)
       pedestal.geometry.dispose()
       ;(pedestal.material as THREE.Material).dispose()

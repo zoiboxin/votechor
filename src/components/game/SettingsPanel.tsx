@@ -228,14 +228,11 @@ export default function SettingsPanel({ open, onOpenChange }: { open: boolean; o
             </div>
             <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Body</div>
-                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Classic Rig / Protester GLB / Runner Kid — picked in the Wardrobe → Character Body (saves to your account &amp; shows to everyone)</div>
+                <div className="text-[11px] font-black uppercase tracking-tight text-[#1c1a17]">Character Style</div>
+                <div className="text-[9px] font-semibold text-[#1c1a17]/50">Cartoon protester, styled by you — Wardrobe → gender, side, archetype &amp; outfit (saves to your account &amp; shows to everyone)</div>
               </div>
-              {/* task 95: the body choice moved to the Wardrobe (Character Body section) —
-                  it persists with the profile cosmetics and broadcasts to the room, so the
-                  picker lives where you can SEE the body on the pedestal. */}
               <span className="rounded-xl border-2 border-[#1c1a17]/60 bg-[#efe6c8] px-3 py-1.5 text-[10px] font-black uppercase tracking-tight text-[#1c1a17]/70">
-                Wardrobe → Body
+                Wardrobe
               </span>
             </div>
             <div className="flex items-center justify-between">

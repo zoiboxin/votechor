@@ -10,10 +10,6 @@ import type { NpcNetState, NpcStateName, WorldDef, AABB } from './shared/types'
 import type { PhysicsWorld } from './physics'
 import { SpeechBubbleSystem, NPC_LINES } from './bubbles'
 import { AudioManager, type SfxName } from './audio'
-import { GLBAssetManager, type GLBInstance } from './glb'
-import { GLBAnimDriver, type LocoState } from './anim'
-import { applyPoliceNpcLook, type AvatarLook, type PackBodyId, type PoliceNpcRank } from './avatar-look'
-import { policeUniformColors } from '@/lib/cosmetics'
 
 // v86 — the offline player's id is always 'me'; used as the pack-join hidden set
 // while a release/escape grace window is active (see propagateChase).
@@ -26,52 +22,6 @@ interface NpcVisual {
   prev: { x: number; z: number; ry: number }
   target: { x: number; z: number; ry: number }
   alertShown: boolean
-  // task 111 — High-Fi GLB body (SWAT / Commando / Officer). The procedural rig
-  // stays as the fallback layer (body hidden once the GLB lands; alert sprite
-  // keeps working — it lives on the rig group, and the GLB is a child of it).
-  glb: { inst: GLBInstance; driver: GLBAnimDriver } | null
-  glbLoading: boolean
-  // distance anim-LOD accumulator (driver updates throttle to ~15Hz beyond 45m)
-  animAcc: number
-}
-
-/** Authority types that wear the police-side GLB bodies (task 111). */
-const AUTHORITY_TYPES: ReadonlySet<string> = new Set(['police', 'security', 'guard'])
-
-/**
- * task 111 — rank roll per authority NPC, the user's "swat, commando and police"
- * mix. Security contracts go full SWAT, gate guards go commando, and the city
- * police force is the blend: 34% SWAT, 21% commando, 45% khaki officers (the
- * officer rank rolls BOTH pack models → the force reads mixed male/female).
- */
-function rollPoliceRank(type: string): { rank: PoliceNpcRank; body: PackBodyId } {
-  if (type === 'security') return { rank: 'swat', body: 'swat-man' }
-  if (type === 'guard') return { rank: 'commando', body: 'soldier-female' }
-  const r = Math.random()
-  if (r < 0.34) return { rank: 'swat', body: 'swat-man' }
-  if (r < 0.55) return { rank: 'commando', body: 'soldier-female' }
-  return Math.random() < 0.5
-    ? { rank: 'officer', body: 'swat-man' }
-    : { rank: 'officer', body: 'soldier-female' }
-}
-
-/** Duty look for a rank: khaki uniform palette for officers, skin/hair from the
- *  NPC color table so each officer keeps the cast's skin variety. */
-function policeNpcLook(type: string, rank: PoliceNpcRank): AvatarLook {
-  const u = policeUniformColors(rank === 'officer' ? 'khaki' : '')
-  const c = NPC_COLORS[type] ?? NPC_COLORS.police
-  return {
-    palette: { shirt: u.shirt, pants: u.pants, skin: c.skin, accent: u.accent, hairColor: c.hair, shoes: '#2a2620' },
-    gender: 'male', // only drives wardrobe attachments — pack bodies take none
-    hat: 'none', hair: 'default', face: 'clean', build: 'regular',
-    outfit: 'classic', footwear: 'boots', gear: 'none', held: 'none',
-    glasses: false,
-  }
-}
-
-/** Grounded AnimContext for NPC GLB drivers (officers never jump/slide). */
-function npcAnimCtx(hSpeed: number) {
-  return { grounded: true, vy: 0, hSpeed, sliding: false, dazed: false, detained: false, landTimer: 0, recoverTimer: 0, jumpsUsed: 0 }
 }
 
 const NPC_COLORS: Record<string, { shirt: string; pants: string; skin: string; hair: string; accent: string }> = {
@@ -103,7 +53,6 @@ export class NpcSystem {
     world: WorldDef,
     private physics: PhysicsWorld,
     quality: 'low' | 'medium' | 'high',
-    private glbMgr: GLBAssetManager | null = null, // task 111 — GLB police bodies (null = procedural fallback path)
   ) {
     const npcs = quality === 'low' ? world.npcs : world.npcs
     // patrol passed RAW — createNpcStates handles [x,z] tuples properly; pre-spreading
@@ -120,64 +69,12 @@ export class NpcSystem {
         prev: { x: b.x, z: b.z, ry: b.ry },
         target: { x: b.x, z: b.z, ry: b.ry },
         alertShown: false,
-        glb: null, glbLoading: false, animAcc: 0,
       }
       this.visuals.push(v)
       this.brainById.set(b.id, b)
       this.brainsCache.push(b) // v51 — pack-pursuit input (order-stable, rebuilt only here)
-      // task 111 — every authority NPC rolls a police-side GLB rank (SWAT /
-      // Commando / khaki Officer). Fire-and-forget: until the instance lands the
-      // procedural rig renders exactly as before (the pipeline fallback contract).
-      if (this.glbMgr && AUTHORITY_TYPES.has(b.type)) this.kickNpcGlb(v)
     }
     this.group.add(this.bubbles.group)
-  }
-
-  /**
-   * task 111 — load + attach a police-side GLB body for one authority NPC.
-   * The two pack assets are shared through the GLBAssetManager cache (one
-   * download serves all 30+ officers). The instance is parented UNDER the
-   * procedural rig's group, so world transforms, the far-LOD visibility toggle
-   * and teardown all inherit for free; the procedural body hides behind it and
-   * the alert indicator (a rig-group child, like the remotes' name tags) keeps
-   * rendering overheads. Any failure leaves the procedural officer on duty.
-   */
-  private kickNpcGlb(v: NpcVisual) {
-    if (v.glbLoading || v.glb) return
-    const type = v.brain.type
-    const { rank, body } = rollPoliceRank(type)
-    v.glbLoading = true
-    void this.glbMgr!.load(`/models/${body}.glb`).then((asset) => {
-      v.glbLoading = false
-      if (!asset) return // loader logged the reason — procedural officer stays
-      const inst = this.glbMgr!.instantiate(asset)
-      if (!inst) return
-      // the brain may have been superseded by a world rebuild mid-load
-      if (!this.visuals.includes(v) || v.glb) { this.glbMgr!.disposeInstance(inst); return }
-      const look = policeNpcLook(type, rank)
-      applyPoliceNpcLook(inst.group, look, body, rank)
-      inst.group.position.set(0, 0, 0)
-      inst.group.rotation.y = 0
-      // flag BEFORE the body hides — setBodyVisible owns every other child; the
-      // High-Fi body manages its own visibility (v110 remote-path contract)
-      ;(inst.group.userData as { vcGlbBody?: boolean }).vcGlbBody = true
-      v.rig.setBodyVisible(false) // name tags are off for NPCs; the alert sprite survives
-      v.rig.group.add(inst.group)
-      const driver = new GLBAnimDriver(inst.mixer, inst.clips)
-      driver.snap('idle')
-      v.glb = { inst, driver }
-    })
-  }
-
-  /** task 111 — free every NPC GLB instance (per-instance GPU teardown). The
-   *  cached pack assets stay in the manager (the player's police GLB reuses them). */
-  disposeGlb() {
-    for (const v of this.visuals) {
-      if (!v.glb) continue
-      this.glbMgr?.disposeInstance(v.glb.inst)
-      v.glb.inst.group.parent?.remove(v.glb.inst.group)
-      v.glb = null
-    }
   }
 
   /** Local offline simulation (solo, server unreachable) */
@@ -275,31 +172,7 @@ export class NpcSystem {
       const anim = st === 'chase' ? 'run' : st === 'investigate' || st === 'return' ? 'walk' : st === 'capture' ? 'throw' : speed > 0.3 ? 'walk' : 'idle'
       v.rig.group.position.set(x, v.rig.group.position.y * 0 + 0, z)
       v.rig.group.rotation.y = ry
-      // task 111 — High-Fi backend: the GLB child mirrors the rig transform
-      // automatically (it is parented under rig.group) and plays the SAME
-      // brain state through the shared driver (no bone streaming — state names
-      // only). The procedural pose pass is skipped while the body is hidden.
-      if (v.glb) {
-        const loco = (anim === 'throw' ? 'throw' : anim) as LocoState
-        const hSpeed = Math.min(9, speed)
-        // anim LOD: >45m throttles mixer updates to ~15Hz (same policy as remotes)
-        const far = px !== undefined && pz !== undefined &&
-          ((v.target.x - px) ** 2 + (v.target.z - pz) ** 2) > 45 * 45
-        if (far) {
-          v.animAcc += dt
-          if (v.animAcc >= 0.066) {
-            v.glb.driver.play(loco, npcAnimCtx(hSpeed))
-            v.glb.driver.update(v.animAcc)
-            v.animAcc = 0
-          }
-        } else {
-          v.animAcc = 0
-          v.glb.driver.play(loco, npcAnimCtx(hSpeed))
-          v.glb.driver.update(dt)
-        }
-      } else {
-        v.rig.update(dt, anim as 'idle', Math.min(9, speed))
-      }
+      v.rig.update(dt, anim as 'idle', Math.min(9, speed))
       // alert indicator
       const showAlert = st === 'chase' || (st !== 'patrol' && v.brain.alert > 0.25)
       if (showAlert !== v.alertShown) { v.rig.setAlert(showAlert); v.alertShown = showAlert }

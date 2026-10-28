@@ -30,7 +30,13 @@ export default function CookieBanner() {
   const [bigSaved, setBigSaved] = useState(false)
   const [bigBusy, setBigBusy] = useState(false)
 
+  // v112 CARTOON REBUILD — zero GLB assets ship with the game, so there is
+  // nothing to offer: the banner retires itself (the caching infra in
+  // asset-cache.ts stays ready for future heavyweight add-ons).
+  const NOTHING_TO_CACHE = SMALL_ASSET_URLS.length === 0 && BIG_ASSET_URLS.length === 0
+
   useEffect(() => {
+    if (NOTHING_TO_CACHE) return
     // housekeeping regardless of the answer: drop caches from older builds
     void purgeOldAssetCaches()
     if (getConsent() === 'unset') {
@@ -43,7 +49,9 @@ export default function CookieBanner() {
         if (count < SMALL_ASSET_URLS.length) void precacheAssets(SMALL_ASSET_URLS)
       })
     }
-  }, [])
+  }, [NOTHING_TO_CACHE])
+
+  if (NOTHING_TO_CACHE) return null
 
   const accept = async () => {
     setConsent('granted')

@@ -17,62 +17,15 @@ const CACHE_PREFIX = 'vc-assets-'
 
 export const cacheName = () => `${CACHE_PREFIX}${VC_BUILD}`
 
-/** The character models — offered by the banner. task 107: the 18-body
- *  Characters & Animals pack joins the warm-cache offer (~50 MB all-in; the
- *  jungle's wildlife/props stream on first wild visit and cache themselves
- *  through fetchAssetBuffer on the way). */
-export const SMALL_ASSET_URLS = [
-  '/models/votechor-kid.glb',
-  '/models/votechor-female.glb',
-  '/models/votechor-male.glb',
-  '/models/votechor-male-rigged.glb',
-  '/models/votechor-human-male.glb',
-  '/models/votechor-human-female.glb',
-  '/models/votechor-human-child.glb',
-  '/models/adventurer.glb',
-  '/models/beach.glb',
-  '/models/casual-female.glb',
-  '/models/casual2-female.glb',
-  '/models/adventurer-female.glb',
-  '/models/formal-female.glb',
-  '/models/medieval-female.glb',
-  '/models/scifi-female.glb',
-  '/models/soldier-female.glb',
-  '/models/suit-female.glb',
-  '/models/witch-female.glb',
-  '/models/worker-female.glb',
-  '/models/hoodie-man.glb',
-  '/models/farmer-man.glb',
-  '/models/king-man.glb',
-  '/models/punk-man.glb',
-  '/models/spacesuit-man.glb',
-  '/models/suit-man.glb',
-  '/models/swat-man.glb',
-  '/models/worker-man.glb',
-  // task 108 — the DOMESTIC wildlife joins the warm-cache offer: the cow/
-  // bull/donkey/horse/shiba herds graze the city margins + farm belt, so
-  // nearly every session crosses the stream gate that loads them (~14 MB).
-  // The pure-jungle species (fox/deer/stag/wolf) stay on-demand — only wild
-  // visitors ever pay for those.
-  '/models/cow.glb',
-  '/models/bull.glb',
-  '/models/donkey.glb',
-  '/models/horse.glb',
-  '/models/shiba-inu.glb',
-  // task 109/110 — the husky is a CITY dog now (not graveyard on-demand), so it
-  // belongs in the warm cache beside the shiba. The forest pack (2.3 MB all-in,
-  // 38 instanced species across the wild band) joins too — tiny files, huge
-  // scenery win, and the wild loads fully dressed on first visit.
-  '/models/husky.glb',
-  '/models/forest/tree_1.glb', '/models/forest/tree_2.glb', '/models/forest/tree_3.glb',
-  '/models/forest/tree_4.glb', '/models/forest/tree_5.glb', '/models/forest/tree_6.glb',
-  '/models/forest/tree_pine_1.glb', '/models/forest/tree_pine_2.glb', '/models/forest/tree_pine_3.glb',
-  '/models/forest/dead_tree_1.glb', '/models/forest/dead_tree_2.glb', '/models/forest/dead_tree_3.glb',
-  '/models/forest/bush_1.glb', '/models/forest/bush_2.glb', '/models/forest/bush_3.glb', '/models/forest/bush_4.glb',
-] as const
+/** v112 CARTOON REBUILD — the model warm-cache offer is EMPTY: the game ships
+ *  zero GLB assets (players, bots, officers, wildlife and the forest are all
+ *  procedural), so there is nothing to download-and-store anymore. The caching
+ *  infrastructure stays for future heavyweight assets (audio packs, optional
+ *  HD add-ons) — the consent banner hides itself while both lists are empty. */
+export const SMALL_ASSET_URLS: readonly string[] = []
 
-/** The 24 MB textured protester hero — offered as an opt-in second step. */
-export const BIG_ASSET_URLS = ['/models/votechor-male-skinned.glb'] as const
+/** Reserved for an optional heavyweight add-on (none shipped since v112). */
+export const BIG_ASSET_URLS: readonly string[] = []
 
 export type ConsentState = 'granted' | 'declined' | 'unset'
 
@@ -147,8 +100,8 @@ export async function precacheAssets(
 }
 
 /**
- * Cache-first asset fetch — the GLBAssetManager's fast path once consent is
- * granted. Returns null whenever the cache path can't serve (no consent, no
+ * Cache-first asset fetch — the fast path for any heavyweight asset once consent
+ * is granted. Returns null whenever the cache path can't serve (no consent, no
  * Cache API, fetch failure) and the caller falls back to its normal loader.
  */
 export async function fetchAssetBuffer(url: string): Promise<ArrayBuffer | null> {

@@ -35,15 +35,9 @@ import {
   FEED_RADIUS, PET_FOLLOW_SEC, FEED_FOODS, GRAVEYARD, WORLD_DISC, DETECT,
 } from './shared/constants'
 import type { AABB, AnimName, BossNetState, ItemType, WildEventNet } from './shared/types'
-import { useGameStore, registerUIActions, GLB_CHARACTERS_ENABLED, type MatchSummary } from '@/lib/game-store'
+import { useGameStore, registerUIActions, type MatchSummary } from '@/lib/game-store'
 import { drawCircularMinimap, type MinimapRemote } from './minimap'
 import { SuspectSystem } from './suspects'
-import { GLBAssetManager, type GLBInstance } from './glb'
-import { GLBAnimDriver, directionalRun } from './anim'
-import { SecondaryMotion } from './secondary-motion'
-import { FacialRig } from './facial-rig'
-import type { LocoState } from './anim'
-import { resolveAvatarLook, applyAvatarLook, bodyModelOf, effectiveBodyOf, resolveGlbUrl, KID_SCALE, HUMAN_CHILD_SCALE, type BodyModel } from './avatar-look'
 import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors, botCosmeticsFromId } from '@/lib/cosmetics'
 
 /** v51 — soft-escape window: after the LAST chaser drops off, the WANTED badge
@@ -58,11 +52,9 @@ const WANTED_FADE_MS = 5000
  *  per second — this collapses each wave into a single scare. */
 const SCARE_COOLDOWN_MS = 12000
 
-/** A remote protester (human or bot): data always present, rig/GLB attached by budget. */
+/** A remote protester (human or bot): data always present, rig attached by budget. */
 interface RemoteEntry {
   rig: import('./character').CharacterRig | null
-  /** High-Fi GLB model instance (replaces the procedural body; rig keeps the name tag). */
-  glb: { inst: GLBInstance; driver: GLBAnimDriver; sec: import('./secondary-motion').SecondaryMotion | null; facial: import('./facial-rig').FacialRig | null; loading: boolean } | null
   target: { x: number; y: number; z: number; ry: number }
   anim: AnimName
   name: string
@@ -155,14 +147,14 @@ export class Game {
   private vehicles!: VehicleSystem
   private items!: ItemSystem
   private animals!: AnimalSystem
-  /** task 108/109 — GLB habitat wildlife: city dogs (shiba/husky) + street
-   *  cats, city-edge + farm-belt domestic herds, jungle wanderers (fox, deer,
-   *  stag, wolf) + pack props. Streams from the FIRST match frame; panics
-   *  and flees when the player gets close. */
+  /** v112 CARTOON wildlife: city dogs (shiba/husky) at the street corners,
+   *  city-edge + farm-belt domestic herds, jungle wanderers (fox, deer, stag,
+   *  wolf) — all procedural low-poly cartoon beasts, zero GLB. Panics and
+   *  flees when the player gets close. */
   private wildlife!: WildlifeSystem
-  /** task 110 — AmiPolyGon forest pack: instanced trees/pines/dead trees/logs/
-   *  bushes/grass scattered across the wild band, graveyard ring and city
-   *  margins. Pure static ambience — built once, no per-frame update. */
+  /** v112 CARTOON forest: procedural instanced trees/pines/dead trees/logs/
+   *  bushes/grass across the wild band, graveyard ring and city margins.
+   *  Pure static ambience — built once, no per-frame update. */
   private forest!: ForestPack
   private zombies!: ZombieSystem
   private ambience!: JungleAmbience
@@ -231,10 +223,6 @@ export class Game {
   private carryingBallotId: string | null = null
   private remotePlayers = new Map<string, RemoteEntry>()
   private static MAX_RIGS = 24 // rig budget: nearby protesters get full characters, the rest stay as data dots
-  /** task 110 — sub-budget for bots wearing GLB pack bodies: a skinned 62-joint
-   *  rig costs a multiple of the flat procedural one, so only the 14 nearest
-   *  GLB bots get real rigs; the rest render as impostors (the existing LOD). */
-  private static BOT_GLB_RIG_BUDGET = 14
   private crowd: CrowdLod | null = null // instanced impostors for the rig-less majority
   private lastCrowdSync = 0
   private lastFps = 60
@@ -254,14 +242,6 @@ export class Game {
   private squadPanelOffNotified = false // v42 — one gentle reminder when Tab is pressed while the squad panel setting is off
   private lastArrestAttemptAt = 0 // police-role arrest spam gate (client side)
   private lastPlayerStrikeAt = 0 // police-role baton strike (F) spam gate — distinct from the NPC telegraph above
-  // ---- High-Fi GLB player model (Step 2/3/4 integration — auto-fallback to procedural) ----
-  private glbMgr = new GLBAssetManager()
-  private hiFiPalette: { shirt: string; pants: string; skin: string; accent: string } | null = null
-  private hiFiGender: 'male' | 'female' = 'male'
-  /** task 95 — the player's chosen BODY (wardrobe cosmetics.body); police duty = classic. */
-  private bodyModel: BodyModel = 'classic'
-  /** url of the GLB currently attached to the LOCAL player (mid-match body-swap detection). */
-  private hiFiUrl: string | null = null
   private role: 'protector' | 'police' = 'protector' // chosen side (profile.role)
   private suspects: SuspectSystem | null = null // offline police-role arrest targets
   private windupUntil = new Map<string, number>()
@@ -316,37 +296,6 @@ export class Game {
   private async bootUnsafe(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement) {
     this.minimapCanvas = minimap
     this.canvasEl = canvas
-    // GLB asset failures must never be silent — every refused asset leaves a
-    // breadcrumb (QA + field reports: "character fell back to the boxy rig")
-    this.glbMgr.onAssetError = (url, reason) => {
-      console.warn('[VoteChor] GLB asset unavailable:', url, '—', reason)
-      const w = window as unknown as { __vcDiag?: Array<Record<string, unknown>> }
-      ;(w.__vcDiag ??= []).push({ kind: 'glbAssetError', url, reason, t: Date.now() })
-    }
-    // preload the High-Fi hero assets during the MENU so the 24MB skinned model's
-    // download + texture decode never lands on the match-start critical path —
-    // by the time the player clicks PLAY, the cache is usually warm and the swap
-    // is near-instant. Fire-and-forget: any failure just keeps the procedural rig.
-    // task 95: the Runner Kid mascot joins the warm cache (294 KB — trivial).
-    // task 98: the professional human system joins too (~1.1 MB for all three).
-    void this.glbMgr.load('/models/votechor-male-skinned.glb')
-    void this.glbMgr.load('/models/votechor-female.glb')
-    void this.glbMgr.load('/models/votechor-kid.glb')
-    void this.glbMgr.load('/models/votechor-human-male.glb')
-    void this.glbMgr.load('/models/votechor-human-female.glb')
-    void this.glbMgr.load('/models/votechor-human-child.glb')
-    void this.glbMgr.load('/models/adventurer.glb')
-    void this.glbMgr.load('/models/beach.glb')
-    // task 107 — the 18-body Characters & Animals pack joins the warm cache so
-    // any wardrobe pick swaps near-instantly (~2.7 MB each, parallel + cached)
-    for (const url of [
-      '/models/casual-female.glb', '/models/casual2-female.glb', '/models/adventurer-female.glb',
-      '/models/formal-female.glb', '/models/medieval-female.glb', '/models/scifi-female.glb',
-      '/models/soldier-female.glb', '/models/suit-female.glb', '/models/witch-female.glb',
-      '/models/worker-female.glb', '/models/hoodie-man.glb', '/models/farmer-man.glb',
-      '/models/king-man.glb', '/models/punk-man.glb', '/models/spacesuit-man.glb',
-      '/models/suit-man.glb', '/models/swat-man.glb', '/models/worker-man.glb',
-    ]) void this.glbMgr.load(url)
     this.engine = new Engine(canvas)
     // lightning → white HUD flash + delayed thunder roll
     this.engine.sky.onLightning = () => {
@@ -428,9 +377,9 @@ export class Game {
     }
     this.camRig = new ThirdPersonCamera(this.engine.camera, this.physics)
 
-    // task 111 — authority NPCs wear the pack's police-side GLBs (SWAT / Commando /
-    // khaki Officer); the manager is shared so the two pack assets load once
-    this.npcs = new NpcSystem(this.world, this.physics, 'high', this.glbMgr)
+    // v112 CARTOON police: officers render the classic procedural rig (uniform
+    // palette + lathi) — zero GLB, instant boots, smooth on kid devices
+    this.npcs = new NpcSystem(this.world, this.physics, 'high')
     this.npcs.farLod = useGameStore.getState().settings.distanceCulling === true // v50 default ON; the culler fail-safe is the escape hatch
     this.engine.scene.add(this.npcs.group)
     // offline solo: police captures + melee hits come from the local sim
@@ -469,13 +418,13 @@ export class Game {
     })
     this.engine.scene.add(this.animals.group)
 
-    // task 107 — jungle wildlife + pack props: lazily streams the first time the
-    // player nears the wild (wildness gate inside ensureStarted), spawns the 10
-    // GLB species at random jungle spots + 4 abandoned landmarks.
-    this.wildlife = new WildlifeSystem(this.glbMgr, this.physics)
+    // v112 CARTOON wildlife: the 10 procedural species pop in on the first
+    // match frame (synchronous build, zero downloads) — city dogs, both-flank
+    // herds, jungle wanderers + panic-flee.
+    this.wildlife = new WildlifeSystem(this.physics)
     this.engine.scene.add(this.wildlife.group)
-    // task 110 — forest pack: static instanced vegetation (no update loop)
-    this.forest = new ForestPack(this.glbMgr, this.physics)
+    // v112 CARTOON forest: procedural instanced vegetation (no update loop)
+    this.forest = new ForestPack(this.physics)
     this.engine.scene.add(this.forest.group)
 
     // v68 — the Vanodyan Dead + their forest's voice (client-local bots + bed)
@@ -660,11 +609,6 @@ export class Game {
       this.input.keybinds = s.settings.keybinds
       this.input.sensitivity = s.settings.mouseSensitivity
       this.input.invertY = s.settings.invertY
-      // ---- character body (task 95): wardrobe cosmetics.body swaps the GLB LIVE, mid-match too ----
-      if (bodyModelOf(s.profile?.cosmetics) !== bodyModelOf(prev.profile?.cosmetics)) {
-        this.bodyModel = this.resolvedBodyModel()
-        this.applyBodyModel(this.bodyModel)
-      }
       // ---- performance-visibility toggle (live; off = the proven v25 rendering path) ----
       if (s.settings.distanceCulling !== prev.settings.distanceCulling) {
         const on = s.settings.distanceCulling === true
@@ -925,23 +869,11 @@ export class Game {
 
     // fresh player — free the previous rig's GPU resources before rebuilding
     if (this.player) {
-      if (this.player.glb) {
-        this.engine.scene.remove(this.player.glb.inst.group)
-        this.glbMgr.disposeInstance(this.player.glb.inst)
-        this.player.detachGlb()
-      }
       this.engine.scene.remove(this.player.rig.group)
       this.player.rig.dispose()
     }
-    this.hiFiUrl = null
     const cosmetics = profile?.cosmetics
     const gender = cosmetics?.gender === 'female' ? 'female' as const : 'male' as const
-    // High-Fi readiness gate + gender hint — the actual styling now flows through
-    // resolveAvatarLook() at attach time (v83), so no palette duplication here
-    this.hiFiPalette = { shirt: '#888888', pants: '#888888', skin: '#daa88e', accent: '#888888' }
-    this.hiFiGender = gender
-    // task 95 — chosen body (wardrobe cosmetics.body); police duty always marches Classic
-    this.bodyModel = this.resolvedBodyModel()
     this.player = new PlayerController(this.archetype, name, this.world.spawn, this.physics, {
       hat: cosmetics?.hat as string | undefined,
       glasses: cosmetics?.glasses as boolean | undefined,
@@ -1008,8 +940,6 @@ export class Game {
       this.store.notify('Recovered from a graphics glitch — world restored', 'warning')
     }
     this.engine.scene.add(this.player.rig.group)
-    // task 95 — High-Fi GLB body (wardrobe cosmetics.body; silently skips when the asset fails)
-    if (this.bodyModel !== 'classic') void this.tryAttachHiFi()
     this.camRig.yaw = 0 // camera behind player, looking down the road (-z)
 
     // impostor crowd for rig-less remotes — every mode needs it (solo seasons spawn ~99 bots)
@@ -1140,7 +1070,7 @@ export class Game {
     this.clearOnboarding()
     this.npcs.bubbles.clear()
     this.playerBubbles.clear()
-    for (const [id] of this.remotePlayers) this.removeRemote(id) // rigs + GLB instances leave with the match
+    for (const [id] of this.remotePlayers) this.removeRemote(id) // rigs leave with the match
     if (this.suspects) { this.suspects.dispose(); this.engine.scene.remove(this.suspects.group); this.suspects = null }
     this.crowd?.dispose()
     this.crowd = null
@@ -1289,26 +1219,19 @@ export class Game {
     // humans first — always rigged
     for (const [id, r] of humans) if (!r.rig && created < 4) { this.attachRig(id, r); created++ }
     for (const [id, r] of humans) if (!r.rig) this.attachRig(id, r)
-    // bots by distance rank — task 110: bots now wear GLB pack bodies, and a
-    // skinned 62-joint rig costs far more than the flat procedural one, so GLB
-    // bots get their own tighter budget (the far crowd stays on the impostor
-    // LOD). Classic-rig bots (legacy snapshots) keep the original budget.
-    let glbRigged = 0
+    // bots by distance rank — v112 CARTOON: every bot is the lightweight
+    // procedural rig again (GLB bodies retired), so the single classic budget
+    // governs the whole crowd and the far majority stays on the impostor LOD.
     let classicRigged = 0
     for (const [id, r] of bots) {
-      const isGlb = r.glb !== null || (r.cosmetics !== undefined && bodyModelOf(r.cosmetics) !== 'classic')
-      const withinBudget = isGlb
-        ? glbRigged < Game.BOT_GLB_RIG_BUDGET
-        : classicRigged < Math.max(4, Game.MAX_RIGS - humans.length)
+      const withinBudget = classicRigged < Math.max(4, Game.MAX_RIGS - humans.length)
       if (withinBudget) {
         if (!r.rig) {
           if (created < 4) { this.attachRig(id, r); created++ }
           else this.attachRig(id, r)
         }
-        if (isGlb) glbRigged++
-        else classicRigged++
+        classicRigged++
       } else if (r.rig) {
-        this.detachRemoteGlb(r) // budget eviction — GLB goes with the rig
         this.engine.scene.remove(r.rig.group)
         r.rig.dispose()
         r.rig = null
@@ -1356,142 +1279,6 @@ export class Game {
     this.engine.scene.add(rig.group)
     rig.setNameColor(r.name, police ? '#9ecbff' : this.squad.memberIds.has(id) ? '#7ee08a' : '#ffffff')
     r.rig = rig
-    // task 95 — High-Fi GLB body for the remote TOO, from THEIR OWN cosmetics.body
-    // (each player wears the body THEY picked; assets are cached per URL so N remotes
-    // share one download). Fire-and-forget; the procedural body stays until the
-    // instance is ready, then hides behind the name tag. attachRemoteGlb self-gates:
-    // police + 'classic' bodies return without spawning a GLB.
-    if (GLB_CHARACTERS_ENABLED) void this.attachRemoteGlb(id, r)
-  }
-
-  /**
-   * Attach a remote player's chosen High-Fi GLB body. task 95: the model comes from
-   * THEIR cosmetics.body ('protester' → gender-matching GLB with the full wardrobe
-   * pipeline, 'kid' → the Runner Kid mascot with his baked brand outfit); police and
-   * 'classic' bodies stay on the procedural rig. Reuses the shared GLBAssetManager
-   * cache (no duplicate downloads) and never blocks gameplay: any failure leaves the
-   * procedural rig rendering as before.
-   */
-  private async attachRemoteGlb(id: string, r: RemoteEntry) {
-    if (!GLB_CHARACTERS_ENABLED) return // kill-switch — procedural rigs stay
-    if (r.glb || !r.rig) return
-    // task 108 — police players render their police-side GLB (SWAT / Soldier);
-    // every other body on police duty pins Classic (effectiveBodyOf).
-    const model: BodyModel = effectiveBodyOf(bodyModelOf(r.cosmetics), r.role ?? 'protector')
-    if (model === 'classic') return // this protester marches in the procedural rig
-    r.glb = { inst: null as unknown as GLBInstance, driver: null as unknown as GLBAnimDriver, sec: null, facial: null, loading: true }
-    const look = resolveAvatarLook(r.cosmetics, r.archetype, r.role ?? 'protector')
-    const url = resolveGlbUrl(model, look.gender)
-    if (!url) { r.glb = null; return }
-    const asset = await this.glbMgr.load(url)
-    if (!asset) { r.glb = null; return }
-    // entry may have been pruned / rig budget-evicted / body swapped mid-load
-    const stillGlb: BodyModel = effectiveBodyOf(bodyModelOf(r.cosmetics), r.role ?? 'protector')
-    if (this.remotePlayers.get(id) !== r || !r.rig || stillGlb === 'classic') { r.glb = null; return }
-    const inst = this.glbMgr.instantiate(asset)
-    if (!inst) { r.glb = null; return }
-    applyAvatarLook(inst.group, look, model)
-    if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
-    else if (model === 'human-child') inst.group.scale.setScalar(HUMAN_CHILD_SCALE)
-    inst.group.visible = true
-    inst.group.position.set(r.target.x, r.target.y, r.target.z)
-    inst.group.rotation.y = r.target.ry
-    this.engine.scene.add(inst.group)
-    const driver = new GLBAnimDriver(inst.mixer, inst.clips)
-    const sec = new SecondaryMotion(inst.group)
-    const facial = new FacialRig(inst.group)
-    r.rig.setBodyVisible(false) // name tag + alert sprites stay
-    r.glb = { inst, driver, sec, facial: facial.available ? facial : null, loading: false }
-    // catch the GLB up to wherever interpolation is right now
-    inst.group.position.copy(r.rig.group.position)
-    inst.group.rotation.y = r.rig.group.rotation.y
-    driver.snap(r.detained ? 'detained' : (r.anim === 'dazed' ? 'hit' : r.anim === 'run' ? 'run' : r.anim === 'walk' ? 'walk' : 'idle') as LocoState)
-  }
-
-  /** Dispose one remote entry's GLB instance (scene removal + GPU teardown). */
-  private detachRemoteGlb(r: RemoteEntry) {
-    if (!r.glb) return
-    if (r.glb.inst) { r.glb.sec?.dispose(); r.glb.facial?.dispose(); this.engine.scene.remove(r.glb.inst.group); this.glbMgr.disposeInstance(r.glb.inst) }
-    r.glb = null
-    r.rig?.setBodyVisible(true)
-  }
-
-  // ---- High-Fi GLB player model (integration of the GLB pipeline with the player controller) ----
-
-  /**
-   * Load + instantiate the player's CHOSEN GLB body (wardrobe cosmetics.body) and
-   * attach it to the local player. NEVER blocks the match and NEVER throws — any
-   * failure leaves the procedural rig visible (the pipeline's fallback contract).
-   * task 95: 'protester' gets the gender-matching textured asset with the FULL
-   * wardrobe pipeline (tint + per-bone attachments); 'kid' gets the Runner Kid
-   * mascot with his own baked brand outfit (wardrobe pipeline skipped).
-   */
-  private async tryAttachHiFi() {
-    if (!GLB_CHARACTERS_ENABLED) return // kill-switch — procedural rig is the player
-    const p = this.player
-    if (!p || p.glb || !this.hiFiPalette) return
-    const model = this.bodyModel
-    if (model === 'classic') return
-    const look = resolveAvatarLook(this.store.profile?.cosmetics, this.archetype, this.role)
-    const url = resolveGlbUrl(model, look.gender)
-    if (!url) return
-    const asset = await this.glbMgr.load(url)
-    if (!asset) return // loader already logged the reason; procedural stays
-    if (!this.player || this.player !== p || p.glb) return // match ended/changed mid-load
-    const inst = this.glbMgr.instantiate(asset)
-    if (!inst) return
-    applyAvatarLook(inst.group, look, model)
-    if (model === 'kid') inst.group.scale.setScalar(KID_SCALE)
-    else if (model === 'human-child') inst.group.scale.setScalar(HUMAN_CHILD_SCALE)
-    inst.group.visible = true
-    this.engine.scene.add(inst.group)
-    const driver = new GLBAnimDriver(inst.mixer, inst.clips)
-    const sec = new SecondaryMotion(inst.group)
-    const facial = new FacialRig(inst.group)
-    p.attachGlb(inst, driver, sec, facial.available ? facial : null)
-    this.hiFiUrl = url
-  }
-
-  /** Tint the GLB instance to the player's archetype/police palette (clones materials per-instance). */
-  private tintGlb(inst: GLBInstance, pal: { shirt: string; pants: string; skin: string; accent: string }) {
-    void inst; void pal // v83: superseded by applyAvatarLook (wardrobe pipeline) — kept for reference removal in a later pass
-  }
-
-  /** Effective body for THIS match — the kill-switch pins Classic; task 108 lets
-   *  police duty wear the police-side GLBs (SWAT / Soldier) via effectiveBodyOf. */
-  private resolvedBodyModel(): BodyModel {
-    if (!GLB_CHARACTERS_ENABLED) return 'classic'
-    return effectiveBodyOf(bodyModelOf(this.store.profile?.cosmetics), this.role)
-  }
-
-  /**
-   * Live body swap (task 95) — a wardrobe cosmetics.body change re-renders the
-   * player's body immediately, MID-MATCH included: Classic drops the GLB, a GLB
-   * model (re)attaches, and switching protester ↔ kid swaps the asset in place.
-   * Every remote is re-evaluated against THEIR OWN cosmetics.body.
-   */
-  private applyBodyModel(model: BodyModel) {
-    const p = this.player
-    if (p) {
-      const lookGender = this.store.profile?.cosmetics?.gender === 'female' ? 'female' : 'male'
-      const wantUrl = model === 'classic' ? null : resolveGlbUrl(model, lookGender)
-      const attached = p.glb ? this.hiFiUrl : null
-      if (attached !== wantUrl) {
-        if (p.glb) {
-          this.engine.scene.remove(p.glb.inst.group)
-          this.glbMgr.disposeInstance(p.glb.inst)
-          p.detachGlb()
-          this.hiFiUrl = null
-        }
-        if (wantUrl !== null) void this.tryAttachHiFi()
-      }
-    }
-    // remotes: each wears THEIR chosen body — drop GLBs that must not be there
-    for (const [id, r] of this.remotePlayers) {
-      const rm: BodyModel = effectiveBodyOf(bodyModelOf(r.cosmetics), r.role ?? 'protector')
-      if (rm === 'classic') { this.detachRemoteGlb(r); continue }
-      if (!r.glb && r.rig) void this.attachRemoteGlb(id, r)
-    }
   }
 
   /** Wardrobe broadcasts race ahead of the first AOI snapshot — stash them here. */
@@ -1507,7 +1294,7 @@ export class Game {
     // look from the deterministic id roll — real networked cosmetics always win.
     if (p.id.startsWith('bot_')) cosmetics = botCosmeticsFromId(p.id, cosmetics)
     const role = p.role ?? this.pendingRoles.get(p.id)
-    const r: RemoteEntry = { rig: null as import('./character').CharacterRig | null, glb: null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, role, cosmetics, lastSeen: Date.now(), animAcc: 0, vx: 0, vz: 0, lastTargetAt: Date.now(), footPhase: 0 }
+    const r: RemoteEntry = { rig: null as import('./character').CharacterRig | null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, role, cosmetics, lastSeen: Date.now(), animAcc: 0, vx: 0, vz: 0, lastTargetAt: Date.now(), footPhase: 0 }
     this.remotePlayers.set(p.id, r)
     return r
   }
@@ -1515,7 +1302,6 @@ export class Game {
   private removeRemote(id: string) {
     const r = this.remotePlayers.get(id)
     if (r) {
-      this.detachRemoteGlb(r) // frees the GLB instance (mixer + GPU memory)
       if (r.rig) { this.engine.scene.remove(r.rig.group); r.rig.dispose() }
       this.remotePlayers.delete(id)
     }
@@ -2806,13 +2592,12 @@ export class Game {
 
     // street animals + birds — independent bots, frozen with the rest of the sim when paused
     this.animals.update(dt, this.worldTime, this.player.pos, Math.hypot(this.player.vel.x, this.player.vel.z), this.camRig.yaw)
-    // task 108 — habitat wildlife (task 109 reshuffle: city dogs + cats, city-
-    // edge + farm herds, jungle wilds) with panic-flee bots; yaw feeds the
-    // spatial panic voices (moo/bark). Starts on the FIRST frame (no gate —
-    // the old 65 m walk gate starved the city sites).
+    // v112 CARTOON wildlife (v109 grouping: city dogs + street cats, city-
+    // edge + farm herds, jungle wilds) with panic-flee; yaw feeds the spatial
+    // panic voices (moo/bark). Builds synchronously on the FIRST frame.
     this.wildlife.ensureStarted()
     this.wildlife.update(dt, this.player.pos, this.camRig.yaw)
-    // task 110 — forest pack (static; the first call just kicks the async build)
+    // v112 CARTOON forest (static; the first call just builds the instances)
     this.forest.ensureStarted()
 
     // v68 — Vanodyan Deep: cicada/bird/growl ambience tracks wildness, the dead hunt
@@ -3184,10 +2969,9 @@ export class Game {
       while (d > Math.PI) d -= Math.PI * 2
       while (d < -Math.PI) d += Math.PI * 2
       r.rig.group.rotation.y += d * Math.min(1, dt * 8)
-      // velocity-calibrated stride (was hardcoded 9/5): the walk/run clips now
-      // retime to what the remote is ACTUALLY doing — the queued "GLB walk-clip
-      // stride calibration" item. Falls back to the old heuristic when the
-      // velocity estimate is still cold (first samples after spawn).
+      // velocity-calibrated stride (was hardcoded 9/5): walk/run cadence retimes
+      // to what the remote is ACTUALLY doing. Falls back to the old heuristic
+      // when the velocity estimate is still cold (first samples after spawn).
       const hSpeed = rHSpeed > 0.5 ? rHSpeed : r.anim === 'run' ? 9 : r.anim === 'walk' ? 5 : 0
       // ---- anim LOD: distant rigs (>45m) update their pose at ~15Hz instead of 60Hz ----
       const rDist = Math.hypot(r.target.x - this.player.pos.x, r.target.z - this.player.pos.z)
@@ -3201,25 +2985,6 @@ export class Game {
         animDt = dt
       }
       r.rig.update(animDt, r.detained ? 'detained' : r.anim, hSpeed)
-      // High-Fi backend for remotes: the GLB mirrors the interpolated transform and
-      // plays the SAME networked anim state (no bone streaming — state names only)
-      if (r.glb?.driver) {
-        let loco: LocoState = r.detained ? 'detained' : r.anim === 'dazed' ? 'hit' : (r.anim as LocoState)
-        // task 105 — directional runs for remotes too: the displayed heading lerps
-        // toward the networked one, so during turns the velocity-vs-facing angle
-        // picks the strafe/backward clip exactly like the local player
-        if (loco === 'run' && r.rig) loco = directionalRun(r.vx, r.vz, r.rig.group.rotation.y)
-        r.glb.driver.play(loco, {
-          grounded: true, vy: 0, hSpeed,
-          sliding: false, dazed: r.anim === 'dazed', detained: r.detained,
-          landTimer: 0, recoverTimer: 0, jumpsUsed: 0,
-        })
-        r.glb.driver.update(animDt)
-        r.glb.inst.group.position.copy(pos)
-        r.glb.inst.group.rotation.y = r.rig.group.rotation.y
-        r.glb.sec?.update(animDt, { hSpeed, vy: 0, grounded: true })
-        r.glb.facial?.update(animDt, { loco, hSpeed, grounded: true })
-      }
     }
 
     // impostor crowd — cheap silhouettes for rig-less remotes; matrices refreshed at ~10Hz
@@ -3233,8 +2998,6 @@ export class Game {
 
     const playing = store.uiMode === 'playing'
     if (playing) {
-      // facial rig breathes/blink harder as stamina drains (local player)
-      this.player.fatigue = 1 - this.player.stamina / Math.max(1, this.player.maxStamina)
       this.player.render(dt)
       this.npcs.update(dt, 1, this.worldTime, this.player.pos.x, this.player.pos.z, this.camRig.yaw)
       this.updatePoliceTelegraphs()
@@ -4333,7 +4096,7 @@ export class Game {
     this.net.leave()
     this.crowd?.dispose()
     this.crowd = null
-    if (this.npcs) { this.npcs.disposeGlb(); this.engine?.scene.remove(this.npcs.group) } // task 111 — GLB officers go with the world
+    if (this.npcs) { this.engine?.scene.remove(this.npcs.group) } // officers go with the world
     if (this.animals) { this.animals.dispose(); this.engine?.scene.remove(this.animals.group) }
     if (this.wildlife) { this.wildlife.dispose(); this.engine?.scene.remove(this.wildlife.group) }
     if (this.forest) { this.forest.dispose(); this.engine?.scene.remove(this.forest.group) }

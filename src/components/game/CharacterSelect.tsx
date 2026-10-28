@@ -3,22 +3,21 @@
 // VoteChor Wardrobe — pick an archetype, then kit them out across six equipment
 // slots (headgear / face / outfit / footwear / back gear / in-hand) with a live
 // WebGL preview of the actual in-game rig. Server stays authoritative on unlocks.
+// v112 CARTOON REBUILD: the GLB body roster is retired — every protester renders
+// the procedural cartoon rig, so step 3 picks the ARCHETYPE (the character's
+// personality + gameplay perks) and the wardrobe does the rest.
 import { useEffect, useMemo, useState } from 'react'
 import { useGameStore, uiActions, type Profile } from '@/lib/game-store'
 import { ARCHETYPES, ACHIEVEMENTS } from '@/game/shared/constants'
 import {
   HAT_CATALOG, HAIR_CATALOG, FACE_CATALOG, BUILD_CATALOG, OUTFIT_CATALOG, FOOTWEAR_CATALOG, GEAR_CATALOG, HELD_CATALOG,
-  POLICE_OUTFIT_CATALOG, POLICE_HAT_CATALOG, BODY_CATALOG,
-  SKIN_TONES, unlockLabel, anyItemIsUnlocked, itemsForKind, itemFitsGender, genderDefaultFor,
+  POLICE_OUTFIT_CATALOG, POLICE_HAT_CATALOG,
+  SKIN_TONES, unlockLabel, itemsForKind, itemFitsGender, genderDefaultFor,
   type CosmeticItem, type CosmeticKind,
 } from '@/lib/cosmetics'
 import { ArrowLeft, Check, Dices, Gem, Lock, Save, Shield, Siren, Unlock } from 'lucide-react'
 import { motion } from 'framer-motion'
-import {
-  POLICE_BODY_IDS, bodyGenderOf, effectiveBodyOf, GENDER_DEFAULT_BODY, POLICE_DEFAULT_BODY, type BodyModel,
-} from '@/game/avatar-look'
 import CharacterPreview, { type PreviewLook } from './CharacterPreview'
-import type { Archetype } from '@/game/shared/types'
 
 interface SlotSpec {
   kind: CosmeticKind
@@ -49,18 +48,6 @@ const DEFAULTS: Record<CosmeticKind, string> = {
   policeOutfit: 'khaki', policeHat: 'peak', body: 'classic',
 }
 
-/** task 108 — does this body belong to this gender tab AND side? The single
- *  filter behind the step-3 grid, the step-1 cast counts and every auto-swap:
- *  gender-specific bodies only fit their own tab; SWAT / Soldier fit only the
- *  Police side; Classic fits both sides; everything else is a citizen body. */
-const fitsGenderAndSide = (id: string, g: 'male' | 'female', r: 'protector' | 'police') => {
-  const bg = bodyGenderOf(id)
-  if (bg !== 'any' && bg !== g) return false
-  const isPoliceBody = POLICE_BODY_IDS.has(id)
-  if (r === 'police') return id === 'classic' || isPoliceBody
-  return !isPoliceBody
-}
-
 export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const profile = useGameStore((s) => s.profile)
   const setProfile = useGameStore((s) => s.setProfile)
@@ -69,14 +56,10 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const [archetype, setArchetype] = useState(profile?.archetype ?? 'student')
   const [hat, setHat] = useState(profile?.cosmetics?.hat ?? 'none')
   const [hair, setHair] = useState(profile?.cosmetics?.hair ?? 'default')
-  // task 108 — STEP 1 is the gender tab. Initial tab: the saved BODY's own
-  // gender when it pins one (pack file ids), else the saved gender, else
-  // FEMALE (the female-first default from task 107).
-  const [gender, setGender] = useState<'male' | 'female'>(() => {
-    const bg = bodyGenderOf(profile?.cosmetics?.body ?? '')
-    if (bg === 'female' || bg === 'male') return bg
-    return profile?.cosmetics?.gender === 'male' ? 'male' : 'female'
-  })
+  // STEP 1 is the gender tab: it drives the hair/outfit/footwear style books,
+  // the rig silhouette and the default wardrobe picks.
+  const [gender, setGender] = useState<'male' | 'female'>(() =>
+    profile?.cosmetics?.gender === 'male' ? 'male' : 'female')
   const [policeOutfit, setPoliceOutfit] = useState(profile?.cosmetics?.policeOutfit ?? 'khaki')
   const [policeHat, setPoliceHat] = useState(profile?.cosmetics?.policeHat ?? 'peak')
   const [face, setFace] = useState(profile?.cosmetics?.face ?? 'clean')
@@ -88,10 +71,6 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const [glasses, setGlasses] = useState(profile?.cosmetics?.glasses ?? false)
   const [skinTone, setSkinTone] = useState(profile?.cosmetics?.skinTone ?? '')
   const [signText, setSignText] = useState(profile?.cosmetics?.signText ?? '')
-  // task 107 — FEMALE-FIRST: the customize page opens on Casual_Female (the first
-  // card of step 1). Existing profiles keep their saved body; only absent bodies
-  // (new profiles) fall through to the female-first default.
-  const [body, setBody] = useState<string>(profile?.cosmetics?.body ?? 'casual-female')
   const [role, setRole] = useState<'protector' | 'police'>(profile?.role === 'police' ? 'police' : 'protector')
   const [saving, setSaving] = useState(false)
   const [unlockedCodes, setUnlockedCodes] = useState<Set<string>>(new Set())
@@ -123,15 +102,14 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     }
   }, [])
 
-  // task 107 — female-first default for NEW profiles: persist Casual_Female once
-  // so the game, the join payload and every remote see the same body step 1 shows.
-  // Only fires when a real profile exists and cosmetics.body was never saved
-  // (existing picks stay untouched; profile-less guests just see the page default).
+  // v112 CARTOON migration — profiles saved with a retired GLB body id land back
+  // on the classic cartoon rig exactly once, so game + join payload agree.
   useEffect(() => {
-    if (!profile || profile.cosmetics?.body) return
-    uiActions().updateCosmetics({ body: 'casual-female' })
-    setProfile({ ...profile, cosmetics: { ...profile.cosmetics, body: 'casual-female' } })
-    void persist({ body: 'casual-female' })
+    const saved = profile?.cosmetics?.body
+    if (!profile || !saved || saved === 'classic') return
+    uiActions().updateCosmetics({ body: 'classic' })
+    setProfile({ ...profile, cosmetics: { ...profile.cosmetics, body: 'classic' } })
+    void persist({ body: 'classic' })
     // run once per mount — profile loads later must not overwrite a user's choice
   }, [])
 
@@ -157,7 +135,6 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const currentLook = () => ({
     hat, hair, gender, face, build, outfit, footwear, gear, held, glasses,
     policeOutfit, policeHat,
-    ...(body !== 'classic' ? { body } : {}),
     ...(skinTone ? { skinTone } : {}),
     signText: signText.slice(0, 24),
   })
@@ -235,21 +212,17 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     if (nextHair !== hair) setHair(nextHair)
     if (nextOutfit !== outfit) setOutfit(nextOutfit)
     if (nextFootwear !== footwear) setFootwear(nextFootwear)
-    // task 108 — the body follows the tab: a gender-specific body from the other
-    // tab lands on the side-aware default (police → SWAT/Soldier, citizens otherwise).
-    const nextBody = fitsGenderAndSide(body, next, role) ? body
-      : role === 'police' ? POLICE_DEFAULT_BODY[next] : GENDER_DEFAULT_BODY[next]
-    const bodyChanged = nextBody !== body
-    if (bodyChanged) setBody(nextBody)
-    uiActions().updateCosmetics({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear, ...(bodyChanged ? { body: nextBody } : {}) })
-    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear, ...(bodyChanged ? { body: nextBody } : {}) } })
-    void persist({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear, ...(bodyChanged ? { body: nextBody } : {}) })
+    uiActions().updateCosmetics({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear })
+    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear } })
+    void persist({ gender: next, hair: nextHair, outfit: nextOutfit, footwear: nextFootwear })
   }
 
   const chooseArchetype = (id: string) => {
     setArchetype(id)
     uiActions().selectArchetype(id)
     setProfile(profile ? { ...profile, archetype: id } : profile)
+    const a = ARCHETYPES.find((x) => x.id === id)
+    if (a) notify(`${a.name} energy on — ${a.perk}`, 'squad')
     // archetype is a separate API field
     ;(async () => {
       setSaving(true)
@@ -267,24 +240,10 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
   const chooseRole = (next: 'protector' | 'police') => {
     if (next === role) return
     setRole(next)
-    // task 108 — the body follows the side: entering Police lands on the gender's
-    // uniformed body (SWAT / Soldier) when a citizen body was equipped; leaving
-    // Police hands the kit back for the gender's citizen default.
-    const nextBody = fitsGenderAndSide(body, gender, next) ? body
-      : next === 'police' ? POLICE_DEFAULT_BODY[gender] : GENDER_DEFAULT_BODY[gender]
-    const bodyChanged = nextBody !== body
-    if (bodyChanged) {
-      setBody(nextBody)
-      uiActions().updateCosmetics({ body: nextBody })
-    }
-    setProfile(profile
-      ? { ...profile, role: next, cosmetics: { ...profile.cosmetics, ...(bodyChanged ? { body: nextBody } : {}) } }
-      : profile)
+    setProfile(profile ? { ...profile, role: next } : profile)
     try { localStorage.setItem('votechor_role', next) } catch { /* private browsing */ }
     notify(next === 'police'
-      ? (bodyChanged
-        ? `Badge accepted — reporting for duty in the ${nextBody === 'swat-man' ? 'SWAT' : 'Soldier'} kit. Keep the lathi polite.`
-        : 'Badge accepted — you report for duty next match. Keep the lathi polite.')
+      ? 'Badge accepted — you report for duty next match. Keep the lathi polite.'
       : 'Welcome back to the people’s side — the protest missed you.', 'info')
     ;(async () => {
       setSaving(true)
@@ -293,7 +252,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-vc-token': token() ?? '' },
           // the API replaces the stored cosmetics object — post the FULL look
-          body: JSON.stringify({ role: next, ...(bodyChanged ? { cosmetics: { ...currentLook(), body: nextBody } } : {}) }),
+          body: JSON.stringify({ role: next, cosmetics: currentLook() }),
         })
       } catch { /* local-only */ } finally { setSaving(false) }
     })()
@@ -307,40 +266,14 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     void persist({ signText: text })
   }
 
-  /** task 95 — CHARACTER BODY: classic procedural rig vs the High-Fi GLB bodies.
-   *  Persists as cosmetics.body (account-wide) and BROADCASTS with the join payload,
-   *  so other players see the body you picked. Police duty always renders Classic. */
-  const chooseBody = (id: string) => {
-    if (id === body) return
-    setBody(id)
-    uiActions().updateCosmetics({ body: id })
-    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, body: id } })
-    void persist({ body: id })
-    // task 107 — pack bodies share one toast voice, keyed off the catalog label
-    const bLabel = BODY_CATALOG.find((x) => x.id === id)?.label ?? id
-    notify(
-      id === 'classic' ? 'Classic Rig on — your full customized look is front and center'
-      : id === 'protester' ? 'High-Fi body on — your outfit tint + gear ride the GLB'
-      : id === 'human' ? 'Citizen HD on — skinned body, blinking face, real gait'
-      : id === 'human-child' ? 'Junior Citizen on — big head, big sneaker energy'
-      : id === 'adventurer' ? 'Adventurer equipped — boots laced, satchel packed!'
-      : id === 'beach' ? 'Beach mode on — sandals laced, vacation vibes deployed!'
-      : id === 'kid' ? 'Runner Kid equipped — the mascot hits the streets!'
-      : `${bLabel} equipped — 24 pro animations ready!`, 'squad')
-  }
-
   const randomize = () => {
     const pickFree = (catalog: CosmeticItem[]) => {
       const pool = catalog.filter(isUnlocked)
       return pool[Math.floor(Math.random() * pool.length)]?.id ?? catalog[0].id
     }
     const rg = gender === 'female' ? 'male' : 'female'
-    // task 108 — the body follows the rolled gender + the current side
-    const bodyPool = BODY_CATALOG.filter((b) => fitsGenderAndSide(b.id, rg, role))
-    const rbody = bodyPool[Math.floor(Math.random() * bodyPool.length)]?.id ?? GENDER_DEFAULT_BODY[rg]
-    setBody(rbody)
     const rh = pickFree(HAT_CATALOG); setHat(rh)
-    // task 82: hair / outfit / footwear roll from the NEW gender's own book
+    // hair / outfit / footwear roll from the NEW gender's own book
     const rhair = pickFree(itemsForKind('hair', rg)); setHair(rhair)
     const rf = pickFree(FACE_CATALOG); setFace(rf)
     const rb = pickFree(BUILD_CATALOG); setBuild(rb)
@@ -355,42 +288,32 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     const tone = SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)].hex
     setSkinTone(tone)
     setGender(rg)
-    uiActions().updateCosmetics({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone, body: rbody })
-    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone, body: rbody } })
-    void persist({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone, body: rbody })
+    uiActions().updateCosmetics({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone })
+    if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone } })
+    void persist({ hat: rh, hair: rhair, gender: rg, face: rf, build: rb, outfit: ro, footwear: rw, gear: rgr, held: rd, policeOutfit: rpo, policeHat: rph, glasses: rs, skinTone: tone })
     notify('Stylist rolled a fresh fit — democracy never looked better', 'squad')
   }
 
   const police = role === 'police'
-  // task 108 — police duty renders the Classic rig OR the police-side GLBs
-  // (SWAT / Soldier); a citizen body saved on a police profile falls back to Classic.
-  const bodyShown = effectiveBodyOf(body as BodyModel, role)
   const look: PreviewLook = useMemo(() => ({
     archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText: signText.trim(),
     skinTone: skinTone || undefined,
     gender, hair,
     police,
     policeOutfit, policeHat,
-    body: bodyShown,
-  }), [archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText, skinTone, gender, hair, police, policeOutfit, policeHat, bodyShown])
+  }), [archetype, hat, glasses, face, build, outfit, footwear, gear, held, signText, skinTone, gender, hair, police, policeOutfit, policeHat])
 
-  // task 108 — step-3 grid: characters filtered by the step-1 gender tab AND
-  // the step-2 side (SWAT / Soldier live under the Police badge only).
-  const visibleBodies = useMemo(
-    () => BODY_CATALOG.filter((b) => fitsGenderAndSide(b.id, gender, role)),
-    [gender, role],
-  )
   const sel = ARCHETYPES.find((a) => a.id === archetype) ?? ARCHETYPES[0]
   const visibleSlots = police ? [...SLOTS, ...POLICE_SLOTS] : SLOTS
   const activeTab = visibleSlots.find((s) => s.kind === tab) ?? visibleSlots[0]
-  // task 82: hair / outfit / footwear books are gender-specific — the grid shows
+  // hair / outfit / footwear books are gender-specific — the grid shows
   // only the current gender's styles (headgear stays shared by design).
   const activeCatalog = useMemo(
     () => itemsForKind(activeTab.kind, gender),
     [activeTab.kind, gender],
   )
-  const slotValues: Record<CosmeticKind, string> = { hat, hair, face, build, outfit, footwear, gear, held, policeOutfit, policeHat, body }
-  const equippedCount = visibleSlots.filter((s) => slotValues[s.kind] !== DEFAULTS[s.kind]).length + (glasses ? 1 : 0) + (skinTone ? 1 : 0) + (body !== 'classic' ? 1 : 0)
+  const slotValues: Record<CosmeticKind, string> = { hat, hair, face, build, outfit, footwear, gear, held, policeOutfit, policeHat, body: 'classic' }
+  const equippedCount = visibleSlots.filter((s) => slotValues[s.kind] !== DEFAULTS[s.kind]).length + (glasses ? 1 : 0) + (skinTone ? 1 : 0)
 
   return (
     <div className="vc-paper pointer-events-auto fixed inset-0 z-30 flex flex-col overflow-hidden">
@@ -420,18 +343,16 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
 
       <div className="vc-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-5 px-4 py-5">
-          {/* task 108 — STEP 1: the gender tab. It decides which half of the cast
-              step 3 shows (male-only vs female-only) and which uniformed body the
-              police side lands on. */}
+          {/* STEP 1: the gender tab — drives the hair/outfit/footwear books and
+              the rig silhouette (male vs female cartoon cuts). */}
           <section aria-label="Choose your look">
             <div className="mb-2 flex flex-wrap items-baseline gap-2">
               <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">1 · Choose Your Look</h3>
-              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">male cast or female cast — step 3 follows this tab</span>
+              <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">male or female — the wardrobe books follow this tab</span>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               {(['male', 'female'] as const).map((g, gi) => {
                 const active = gender === g
-                const castCount = BODY_CATALOG.filter((b) => fitsGenderAndSide(b.id, g, role)).length
                 return (
                   <motion.button
                     key={g}
@@ -458,17 +379,17 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                       <div>
                         <div className="text-base font-black uppercase tracking-tight text-[#1c1a17]">{g === 'male' ? 'Male' : 'Female'}</div>
                         <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8c1f28]">
-                          {g === 'male' ? 'The men’s cast' : 'The women’s cast'}
+                          {g === 'male' ? 'The men’s cut' : 'The women’s cut'}
                         </div>
                       </div>
                       <span className="ml-auto rounded-full border border-[#1c1a17]/30 bg-[#efe6c8]/70 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-[#1c1a17]/60">
-                        {castCount} bodies
+                        cartoon rig
                       </span>
                     </div>
                     <p className="mt-2 text-[11px] font-semibold leading-snug text-[#1c1a17]/75">
                       {g === 'male'
-                        ? 'Casual Hoodie, Farmer, King, Punk, Spacesuit, Suit, SWAT, Worker, Adventurer & Beach — the men’s GLB cast.'
-                        : 'Casual, Casual 2, Adventurer, Formal, Medieval, SciFi, Soldier, Suit, Witch & Worker — the women’s GLB cast.'}
+                        ? 'Classic cuts, beards, short styles — the men’s own wardrobe book.'
+                        : 'Ponytails, buns, dresses & heels — the women’s own wardrobe book.'}
                     </p>
                   </motion.button>
                 )
@@ -476,9 +397,7 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
             </div>
           </section>
 
-          {/* task 108 — STEP 2: the side. The SWAT / Soldier kits live under the
-              Police badge (pick them in step 3 after choosing Police); Protector
-              shows every citizen body. */}
+          {/* STEP 2: the side. */}
           <section aria-label="Choose your side">
             <div className="mb-2 flex items-baseline gap-2">
               <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">2 · Choose Your Side</h3>
@@ -554,39 +473,33 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                   <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">Arrest powers (E)</span>
                   <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">Officer immunity</span>
                   <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">+40 XP / arrest</span>
-                  <span className="rounded-full border border-[#3d5a80]/50 bg-[#3d5a80]/10 px-2 py-0.5 text-[#3d5a80]">🛡 SWAT · 🪖 Soldier kits</span>
                 </div>
               </motion.button>
             </div>
           </section>
 
-          {/* task 108 — STEP 3: the character cast, filtered by the step-1 gender
-              tab AND the step-2 side. Cards keep the real GLB file names (task 107);
-              the SWAT / Soldier bodies render only under the Police side. Archetype
-              perks live on as the personality strip below the grid. */}
+          {/* STEP 3: the character — the ARCHETYPES (personality + gameplay perks).
+              Every body renders the same cartoon rig; the archetype decides HOW it
+              plays, the wardrobe decides HOW it looks. */}
           <section aria-label="Characters">
             <div className="mb-2 flex flex-wrap items-baseline gap-2">
               <h3 className="text-sm font-black uppercase tracking-widest text-[#1c1a17]">3 · Choose Your Character</h3>
               <span className="text-[10px] font-bold uppercase text-[#1c1a17]/50">
-                {gender === 'male' ? '♂ male cast' : '♀ female cast'} · {police ? '🚓 police side' : '🛡 protector side'} · {visibleBodies.length} bodies · GLB file names · 24 pro animations each
+                {gender === 'male' ? '♂ male cut' : '♀ female cut'} · {police ? '🚓 police side' : '🛡 protector side'} · perks ride every outfit
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-              {visibleBodies.map((b, i) => {
-                const active = b.id === body
-                const badge = b.id === 'classic' ? 'RIG'
-                  : b.id === 'protester' ? 'HI-FI'
-                  : b.id === 'kid' ? 'MASCOT'
-                  : POLICE_BODY_IDS.has(b.id) ? 'POLICE'
-                  : 'HD'
+              {ARCHETYPES.map((a, i) => {
+                const active = a.id === archetype
                 return (
                   <motion.button
-                    key={b.id}
+                    key={a.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: Math.min(i * 0.02, 0.3) }}
-                    onClick={() => chooseBody(b.id)}
+                    transition={{ delay: Math.min(i * 0.03, 0.3) }}
+                    onClick={() => chooseArchetype(a.id)}
                     aria-pressed={active}
+                    title={a.perk}
                     className={`relative rounded-2xl border-2 p-2.5 text-left transition-all duration-150 ${
                       active
                         ? 'border-[#8c1f28] bg-[#f2c14e]/40 shadow-[5px_5px_0_#8c1f28]'
@@ -599,45 +512,16 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
                       </span>
                     )}
                     <div className="flex items-center gap-2">
-                      <span className="text-xl leading-none">{b.emoji}</span>
-                      <span className="text-xs font-black uppercase leading-tight tracking-tight text-[#1c1a17]">{b.label}</span>
-                      <span className={`ml-auto shrink-0 rounded-full border px-1.5 py-px text-[8px] font-black uppercase tracking-wider ${POLICE_BODY_IDS.has(b.id) ? 'border-[#3d5a80]/50 bg-[#3d5a80]/10 text-[#3d5a80]' : 'border-[#2e6e4e]/50 bg-[#2e6e4e]/10 text-[#2e6e4e]'}`}>{badge}</span>
+                      <span className="h-6 w-6 shrink-0 rounded-full border-2 border-[#1c1a17]/40" style={{ background: a.colors.shirt }} />
+                      <span className="text-xs font-black uppercase leading-tight tracking-tight text-[#1c1a17]">{a.name}</span>
+                      <Gem className="ml-auto h-3 w-3 shrink-0 text-[#2e6e4e]" />
                     </div>
                     <div className="mt-1.5 text-[10px] font-semibold leading-snug text-[#1c1a17]/65">
-                      {b.desc}
+                      {a.perk}
                     </div>
                   </motion.button>
                 )
               })}
-            </div>
-            {/* Personality — the archetype perks (gameplay) ride ANY body */}
-            <div className="mt-3 rounded-2xl border-2 border-[#1c1a17]/60 bg-[#efe6c8]/50 p-2.5">
-              <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Personality</span>
-                <span className="text-[9px] font-bold uppercase text-[#1c1a17]/50">archetype perks ride any body — tap to switch</span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {ARCHETYPES.map((a) => {
-                  const active = a.id === archetype
-                  return (
-                    <button
-                      key={a.id}
-                      onClick={() => chooseArchetype(a.id)}
-                      aria-pressed={active}
-                      className={`flex items-center gap-1.5 rounded-xl border-2 px-2 py-1.5 text-left transition-all ${
-                        active
-                          ? 'border-[#8c1f28] bg-[#f2c14e]/60 shadow-[2px_2px_0_#8c1f28]'
-                          : 'border-[#1c1a17]/40 bg-[#f5efdc] hover:-translate-y-0.5'
-                      }`}
-                      title={a.perk}
-                    >
-                      <span className="h-5 w-5 shrink-0 rounded-full border border-[#1c1a17]/40" style={{ background: a.colors.shirt }} />
-                      <span className="text-[10px] font-black uppercase tracking-tight text-[#1c1a17]">{a.name}</span>
-                      <Gem className="h-3 w-3 shrink-0 text-[#2e6e4e]" />
-                    </button>
-                  )
-                })}
-              </div>
             </div>
           </section>
 
@@ -655,23 +539,18 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
               )}
             </div>
             <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-              {/* Preview + body + build + skin tones */}
+              {/* Preview + build + skin tones */}
               <div className="space-y-3">
                 <div className="vc-dots overflow-hidden rounded-xl border-2 border-[#1c1a17]/50 bg-gradient-to-b from-[#cfe0e8] to-[#efe6c8]">
                   <CharacterPreview look={look} className="h-[300px] w-full" />
                 </div>
-                {/* task 107 — the Character Body picker moved to STEP 1 (the big
-                    GLB file-name grid up top). Sidebar stays lean: preview + build
-                    + skin tones; police see their uniform note here. */}
                 <div className="rounded-xl border-2 border-dashed border-[#1c1a17]/30 bg-[#efe6c8]/40 px-3 py-2">
                   <span className="block text-[10px] font-black uppercase tracking-wide text-[#1c1a17]/60">
                     {police
-                      ? '🚓 Police side: the Classic uniform or the SWAT / Soldier kit — picked in step 3'
-                      : 'Character body is picked in step 3 — the preview follows it live'}
+                      ? '🚓 Police side: pick your regulation dress + cap in the tabs below'
+                      : 'Everything you style here renders on your protester in-game'}
                   </span>
                 </div>
-                {/* task 108 — the old sidebar gender picker moved to STEP 1 (the
-                    Male/Female tab up top); the wardrobe Build tab keeps silhouettes. */}
                 <div className="rounded-xl border-2 border-[#1c1a17]/50 p-3">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#8c1f28]">Skin Tone</span>
