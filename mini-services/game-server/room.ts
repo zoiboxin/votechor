@@ -200,7 +200,7 @@ const PLAYERS_BROADCAST_MS = 83 // ~12 Hz
 const RATE_LIMIT_WINDOW_MS = 1000
 const RATE_LIMIT_MAX = 5
 
-const ANIMS: AnimName[] = ['idle', 'walk', 'run', 'jump', 'fall', 'land', 'recover', 'slide', 'dazed', 'detained', 'celebrate', 'throw', 'heal', 'down', 'kick', 'punch', 'dead']
+const ANIMS: AnimName[] = ['idle', 'walk', 'run', 'jump', 'fall', 'land', 'recover', 'slide', 'dazed', 'detained', 'celebrate', 'throw', 'heal', 'down', 'kick', 'punch', 'dead', 'ride'] // v115 — 'ride' = seated scooter (client relays; no server physics change)
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)

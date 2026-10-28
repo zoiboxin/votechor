@@ -11,6 +11,7 @@ const CONTROLS: { keys: string[]; action: string; note?: string }[] = [
   { keys: ['SHIFT'], action: 'Sprint', note: 'Stamina drains. Chai fixes it. Sprint into low props to vault them.' },
   { keys: ['C'], action: 'Slide', note: 'Slide under searchlights. Very cinematic.' },
   { keys: ['E'], action: 'Interact / Rescue', note: 'Checkpoints, ballots, bailing out friends' },
+  { keys: ['E'], action: 'Mount Scooter', note: 'Stand near a parked pastel scooter and press E. W/S throttle · A/D steer · SPACE rings the bell (loud!) · E steps off. Bumping a suspect knocks them over — the patrol hears everything.' },
   { keys: ['Q'], action: 'Throw Item', note: 'Bottles distract patrols. The bottle is fine.' },
   { keys: ['V'], action: 'Shout / Whistle', note: 'Free distraction — nearby patrols walk over to investigate (2.5s cooldown). Great for pulling cops away from a checkpoint.' },
   { keys: ['H'], action: 'Quick Heal', note: 'Eats the smartest food in your pockets: chai +10 HP, samosa +10, snack +5, first-aid +50 when badly hurt' },

@@ -11,6 +11,7 @@ export type SfxName =
   | 'chatter' | 'chant' | 'order'
   | 'bark' | 'meow' | 'chirp' | 'crunch'
   | 'hornHi' | 'hornLo' // v66 — bike (high reedy) / bus-truck (deep dual-tone) horns
+  | 'bell' // v115 — scooter bell: bright double "tring-tring"
   | 'birdJungle' | 'insect' | 'growl' | 'owlHoot' // v68 — Vanodyan Deep ambience
   | 'crowCaw' | 'wolfHowl' // v69 — the Kabristan + the deep ring at dusk
   | 'zombieMoan' | 'scareSting' // v68 — the undead + the moment one spots you
@@ -477,6 +478,13 @@ class AudioManagerImpl {
         break
       }
       case 'horn': this.osc('sawtooth', 310, t, 0.4, 0.14 * v, 290); this.osc('sawtooth', 155, t, 0.4, 0.12 * v, 145); break
+      // v115 — scooter bell: two bright metallic pings 130ms apart, ring-mod-ish
+      case 'bell':
+        this.osc('triangle', 2093, t, 0.16, 0.11 * v, 1900)
+        this.osc('sine', 3136, t, 0.12, 0.05 * v, 2900)
+        this.osc('triangle', 2093, t + 0.14, 0.2, 0.1 * v, 1800)
+        this.osc('sine', 3136, t + 0.14, 0.16, 0.045 * v, 2700)
+        break
       // v66 — vehicle horn family: bikes scream higher, buses/trucks double-blast deep
       case 'hornHi': this.osc('square', 520, t, 0.3, 0.09 * v, 470); this.osc('square', 390, t, 0.3, 0.07 * v, 350); break
       case 'hornLo': this.osc('sawtooth', 200, t, 0.6, 0.16 * v, 180); this.osc('sawtooth', 100, t, 0.6, 0.13 * v, 90); break

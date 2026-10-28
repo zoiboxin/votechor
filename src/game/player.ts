@@ -34,6 +34,9 @@ export class PlayerController {
   // ---- animation state timers (drive land/recover states in the anim controller) ----
   landTimer = 0 // landing absorb window (longer after hard falls)
   recoverTimer = 0 // getup window after dazed/detained release
+  // v115 — mounted on a scooter: the ScooterSystem drives pos/vel/ry and this
+  // controller freezes its own input path; render() pins the seated 'ride' pose.
+  mounted = false
   // ---- fall-out-of-world recovery ----
   private lastSafe = { x: 0, z: 0 }
   private lastSafeAt = 0
@@ -157,6 +160,19 @@ export class PlayerController {
     const arch = archetypeById(archetype)
     if (this.state === 'detained' || this.state === 'frozen') {
       this.vel.x = 0; this.vel.z = 0
+      return
+    }
+    // v115 — the scooter owns movement while mounted; only timers/regen tick here.
+    if (this.mounted) {
+      if (this.state === 'dazed') {
+        this.dazedTimer -= dt
+        if (this.dazedTimer <= 0) {
+          this.state = 'normal'
+          this.health = DAMAGE.dazedRecoverHealth
+        }
+      }
+      this.landTimer = 0
+      this.recoverTimer = 0
       return
     }
     if (this.state === 'dazed') {
@@ -389,17 +405,22 @@ export class PlayerController {
   render(dt: number) {
     const hSpeed = Math.hypot(this.vel.x, this.vel.z)
     // ---- resolve the animation state via the shared state machine ----
-    let loco = pickLoco({
-      grounded: this.grounded,
-      vy: this.vel.y,
-      hSpeed,
-      sliding: this.state === 'sliding',
-      dazed: this.state === 'dazed',
-      detained: this.state === 'detained',
-      landTimer: this.landTimer,
-      recoverTimer: this.recoverTimer,
-      jumpsUsed: this.jumpsUsed,
-    })
+    let loco: LocoState
+    if (this.mounted && this.state === 'normal') {
+      loco = 'ride' // seated scooter pose (v115) — beats every locomotion state
+    } else {
+      loco = pickLoco({
+        grounded: this.grounded,
+        vy: this.vel.y,
+        hSpeed,
+        sliding: this.state === 'sliding',
+        dazed: this.state === 'dazed',
+        detained: this.state === 'detained',
+        landTimer: this.landTimer,
+        recoverTimer: this.recoverTimer,
+        jumpsUsed: this.jumpsUsed,
+      })
+    }
     // task 105 — directional run: while the smoothed heading catches up to a sharp
     // turn, the strafe/backward clips play the lean-in (UE blendspace feel); the
     // helper falls back to 'run' when the model has no directional clips.
@@ -417,6 +438,8 @@ export class PlayerController {
     // procedural backend — the one and only cartoon body
     this.rig.update(dt, this.netAnim, hSpeed)
     this.rig.group.position.copy(this.pos)
+    // v115 — seated drop survives the pos copy (ride pose writes rig.rideDrop)
+    if (this.rig.rideDrop !== 0) this.rig.group.position.y += this.rig.rideDrop
     this.rig.group.rotation.y = this.ry
   }
 

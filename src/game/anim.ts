@@ -16,6 +16,7 @@ export type LocoState =
   | 'slide' | 'hit' | 'detained' | 'recover' | 'celebrate' | 'throw' | 'heal'
   | 'runLeft' | 'runRight' | 'runBack'
   | 'kick' | 'punch' | 'dead'
+  | 'ride' // v115 — seated scooter pose (forced by the mounted controller, not pickLoco)
 
 /**
  * task 105 — directional run variant from the velocity-vs-facing relative angle
@@ -80,6 +81,7 @@ export function mapToAnimName(s: LocoState): AnimName {
     case 'recover': return 'recover'
     case 'hit': return 'dazed'
     case 'runLeft': case 'runRight': case 'runBack': return 'run' // network keeps the plain gait
+    case 'ride': return 'ride' // v115 — relays as its own AnimName so remotes render seated riders
     default: return s
   }
 }
@@ -121,6 +123,9 @@ export const CLIP_FALLBACK: Record<LocoState, string[]> = {
   kick: ['kick_left', 'kick_right', 'punch_left', 'punch_right'],
   punch: ['punch_left', 'punch_right', 'kick_left', 'kick_right'],
   dead: ['death', 'hitrecieve', 'dazed', 'idle'],
+  // v115 — imported packs have no seated clip; procedural rigs pose it directly,
+  // GLB-backed drivers (none ship anymore) would fall back to the plain idle.
+  ride: ['idle'],
 }
 
 /** Clip timeScale calibration: design speeds the exported clips were authored for. */
@@ -154,6 +159,7 @@ const FADE_INTO: Record<LocoState, number> = {
   kick: 0.08,
   punch: 0.08,
   dead: 0.12,
+  ride: 0.2, // v115 — ease onto the scooter seat
 }
 
 export class GLBAnimDriver {

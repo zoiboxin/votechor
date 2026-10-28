@@ -16,6 +16,8 @@ export class ThirdPersonCamera {
   private shakeT = 0
   /** 0..1 normalized focus speed (set by the render loop) — pulls the boom back slightly at sprint. */
   speedNorm = 0
+  /** v115 — 0..1 smoothed scooter-ride boost: extra boom length + height while mounted. */
+  rideBoost = 0
   sensitivityMul = 1
 
   constructor(private camera: THREE.PerspectiveCamera, private physics: PhysicsWorld) {}
@@ -28,12 +30,14 @@ export class ThirdPersonCamera {
     if (!Number.isFinite(target.x + target.y + target.z)) return
     this.yaw -= lookDx
     this.pitch = Math.max(-0.55, Math.min(1.15, this.pitch + lookDy))
+    // v115 — ride boost eases in/out over ~0.4s so mounting never snaps the boom
+    this.rideBoost += ((this.rideWanted ? 1 : 0) - this.rideBoost) * Math.min(1, dt * 5)
     // smooth distance — photo zoom (targetDistance, wheel-owned) + sprint dolly:
     // a ~0.5m pull-back at full sprint reads as speed without touching the FOV kick
-    const wantDistance = this.targetDistance + this.speedNorm * 0.55
+    const wantDistance = this.targetDistance + this.speedNorm * 0.55 + this.rideBoost * 2.3
     this.distance += (wantDistance - this.distance) * Math.min(1, dt * 8)
 
-    const focus = new THREE.Vector3(target.x, target.y + this.offset.y, target.z)
+    const focus = new THREE.Vector3(target.x, target.y + this.offset.y + this.rideBoost * 0.35, target.z)
 
     // desired camera position (behind + above based on yaw/pitch)
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch)
@@ -86,4 +90,6 @@ export class ThirdPersonCamera {
   }
 
   addShake(v: number) { this.shake = Math.min(1.2, this.shake + v) }
+  /** v115 — set each frame by the game while mounted/unmounted. */
+  rideWanted = false
 }

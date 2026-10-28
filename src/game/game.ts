@@ -12,6 +12,7 @@ import { PlayerController } from './player'
 import { CharacterRig } from './character'
 import { CrowdLod, type CrowdEntry } from './crowd'
 import { NpcSystem, VehicleSystem } from './npcs'
+import { ScooterSystem, type DrivableScooter } from './scooters'
 import { ItemSystem } from './items'
 import { AnimalSystem, type AnimalHandle } from './animals'
 import { WildlifeSystem } from './wildlife'
@@ -145,6 +146,7 @@ export class Game {
   private player: PlayerController | null = null
   private npcs!: NpcSystem
   private vehicles!: VehicleSystem
+  private scooters!: ScooterSystem
   private items!: ItemSystem
   private animals!: AnimalSystem
   /** v112 CARTOON wildlife: city dogs (shiba/husky) at the street corners,
@@ -394,6 +396,8 @@ export class Game {
     this.vehicles = new VehicleSystem(this.world, this.engine.renderer)
     this.engine.scene.add(this.vehicles.group)
     this.vehicles.onPlayerHit = (kind, x, z, dmg) => this.handleVehicleHit(kind, x, z, dmg)
+    // v115 — drivable "Hamara Scooter" fleet: parked pastel scooters, E to mount
+    this.scooters = new ScooterSystem(this.physics, this.engine.scene)
     // v66 — traffic honks through the spatial playAt pipeline (bike high, bus deep);
     // the scheduler in VehicleSystem.update only fires for vehicles near the player
     this.vehicles.onHonk = (kind, x, z) => {
@@ -1071,6 +1075,7 @@ export class Game {
     this.npcs.bubbles.clear()
     this.playerBubbles.clear()
     for (const [id] of this.remotePlayers) this.removeRemote(id) // rigs leave with the match
+    this.scooters?.resetAll() // v115 — fleet returns to its bays between matches
     if (this.suspects) { this.suspects.dispose(); this.engine.scene.remove(this.suspects.group); this.suspects = null }
     this.crowd?.dispose()
     this.crowd = null
@@ -1839,7 +1844,11 @@ export class Game {
         }
         break
       }
-      case 'jump': this.pendingOneShot = 'jump'; break
+      case 'jump':
+        // v115 — Space while mounted rings the bell instead of jumping
+        if (this.scooters?.mounted) this.doScooterBell()
+        else this.pendingOneShot = 'jump'
+        break
       case 'slide': this.pendingOneShot = 'slide'; break
       case 'throw': this.doThrow(); break
       // task 105 — combat one-shots (R / X): cosmetic kick/punch with the model's
@@ -1887,6 +1896,44 @@ export class Game {
         this.useInventorySlot(Number(a.slice(4)) - 1)
         break
     }
+  }
+
+  // ================= v115 — scooter interactions =================
+
+  /** Ring the bell — comedy SFX + a noise event the patrol can investigate. */
+  private doScooterBell() {
+    const p = this.player
+    if (!p || p.isDetained || p.isDazed) return
+    if (!this.scooters.ringBell()) return
+    AudioManager.playAt('bell', p.pos.x, p.pos.z, p.pos.x, p.pos.z, this.camRig.yaw, 40)
+    this.fx.popup('tring tring!', '#e8b64c', p.pos.x, 2.2, p.pos.z)
+    if (this.offline) this.npcs.distraction(p.pos.x, p.pos.z, 4)
+    else this.net.noiseEvent(p.pos.x, p.pos.z)
+  }
+
+  private doMount(sc: DrivableScooter) {
+    const p = this.player
+    if (!p || p.isDetained || p.isDazed || this.scooters.mounted) return
+    this.scooters.mount(sc)
+    p.mounted = true
+    p.vel.set(0, 0, 0)
+    AudioManager.play('vault')
+    this.store.notify('🛵 Scooter mounted! W/S drive · A/D steer · Space bell · E dismount', 'info')
+  }
+
+  /** Step off beside the scooter (also used for arrest/daze/crash teardown). */
+  private forceDismount(msg?: string) {
+    const p = this.player
+    if (!p) return
+    const sc = this.scooters.mounted
+    if (sc) {
+      const spot = this.scooters.dismount()
+      p.pos.set(spot.x, this.physics.spawnHeight(spot.x, spot.z), spot.z)
+      AudioManager.play('land')
+    }
+    p.mounted = false
+    p.vel.set(0, 0, 0)
+    if (msg) this.store.notify(msg, 'info')
   }
 
   private doThrow() {
@@ -2523,7 +2570,51 @@ export class Game {
     const oneShot = this.pendingOneShot
     this.pendingOneShot = null
     const boosted = this.worldTime < this.player.speedBoostUntil
-    this.player.applyInput(dt, this.input.state, this.camRig.yaw, this.archetype, oneShot, boosted)
+    // v115 — while mounted the scooter owns locomotion: the controller only runs
+    // its sentinels/timers (mounted branch), then the drive model moves BOTH.
+    if (this.scooters.mounted) {
+      this.player.applyInput(dt, { forward: 0, strafe: 0, jump: false, sprint: false }, this.camRig.yaw, this.archetype, null, false)
+      const sc = this.scooters.mounted
+      if (!Number.isFinite(sc.pos.x + sc.pos.z + sc.speed + sc.ry)) {
+        this.forceDismount('The scooter had a technical snag!') // numeric-glitch insurance
+      } else {
+        const fb = this.scooters.update(dt, this.input.state)
+        this.player.pos.set(sc.pos.x, sc.pos.y, sc.pos.z)
+        this.player.vel.set(Math.sin(sc.ry) * sc.speed, 0, Math.cos(sc.ry) * sc.speed)
+        this.player.ry = sc.ry
+        this.player.grounded = true
+        this.player.distance += Math.abs(fb.speed) * dt
+        if (fb.crash > 0) {
+          AudioManager.play('impact')
+          this.addShake(0.55)
+          this.fx.popup('Dhonk!', '#e2727a', sc.pos.x, 2.0, sc.pos.z)
+          this.player.damage(Math.min(10, Math.round(fb.crash * 0.5)), 'scooter')
+        }
+        // scooter bump — a street suspect gets knocked (server-mode noise brings the patrol)
+        if (Math.abs(fb.speed) > 3 && this.suspects) {
+          const s = this.suspects.nearest(sc.pos.x, sc.pos.z, 1.7)
+          if (s) {
+            const hit = this.suspects.hit(s.id, sc.pos.x, sc.pos.z, Date.now())
+            if (hit) {
+              AudioManager.play('hit')
+              this.fx.popup(`Bump! ${hit.name}`, '#e8b64c', hit.x, 2.0, hit.z)
+              if (!this.offline) this.net.noiseEvent(hit.x, hit.z)
+              else this.npcs.distraction(hit.x, hit.z, 4)
+            }
+          }
+        }
+        if (this.player.isDetained || this.player.isDazed) {
+          this.forceDismount(this.player.isDetained
+            ? 'Arrested mid-ride! The scooter stays as evidence.'
+            : 'The scooter took the hit for you — it’s wrecked for now.')
+        }
+      }
+    } else {
+      this.player.applyInput(dt, this.input.state, this.camRig.yaw, this.archetype, oneShot, boosted)
+    }
+    this.camRig.rideWanted = this.scooters.mounted !== null
+    // v115 — attach/detach pooled scooters under remote riders (anim 'ride')
+    if (this.remotePlayers.size > 0) this.scooters.syncRemotes([...this.remotePlayers.values()])
     this.player.tickRegen(dt) // slow out-of-combat health trickle (food is the real healing)
 
     // world bounds safety
@@ -2677,8 +2768,10 @@ export class Game {
       }
     }
 
-    // item pickup (proximity + E / auto for tokens) — never while in custody
-    const near = this.player.isDetained ? null : this.items.nearestAvailable(this.player.pos.x, this.player.pos.z, this.player.pos.y)
+    // item pickup (proximity + E / auto for tokens) — never while in custody.
+    // v115 — while mounted, pickups are skipped: the dismount hint owns the prompt.
+    const scootering = this.scooters.mounted !== null
+    const near = this.player.isDetained || scootering ? null : this.items.nearestAvailable(this.player.pos.x, this.player.pos.z, this.player.pos.y)
     if (near) {
       const isToken = near.def.type === 'token'
       const inRange = true
@@ -2695,8 +2788,16 @@ export class Game {
     } else {
       // revive / heal teammates / deposit ballots (all server-validated; also frozen in custody)
       let prompt: string | null = null
-      if (this.carryingBallot && this.bossActiveLocal && !this.player.isDetained) prompt = 'E — Deposit ballot'
-      if (this.input.state.interact && this.carryingBallot && !this.player.isDetained) {
+      // v115 — while riding, the dismount hint replaces every other interaction
+      if (scootering) {
+        prompt = 'E — Dismount · Space — Bell'
+        if (this.input.state.interact && !this.interacting) {
+          this.interacting = true
+          this.forceDismount()
+        }
+      }
+      if (this.carryingBallot && this.bossActiveLocal && !this.player.isDetained && !scootering) prompt = 'E — Deposit ballot'
+      if (this.input.state.interact && this.carryingBallot && !this.player.isDetained && !scootering) {
         if (this.offline && this.localBoss) {
           if (Math.hypot(this.player.pos.x - this.localBoss.x, this.player.pos.z - (this.localBoss.z + 2)) < 3.4 && this.carryingBallot) {
             this.carryingBallot = false; this.localBoss.votes++; AudioManager.play('cash')
@@ -2766,6 +2867,21 @@ export class Game {
             : `${hungry.label.replace(/^The /, 'The ')} looks hungry — bring chai or snacks`
         }
       }
+      // v115 — parked scooter mount hint (lowest priority — everything else wins)
+      if (!prompt && !this.player.isDetained && !this.player.isDazed) {
+        const sc = this.scooters.nearestMountable(this.player.pos.x, this.player.pos.z)
+        if (sc) {
+          prompt = 'E — Mount scooter'
+          if (this.input.state.interact && !this.interacting) {
+            this.interacting = true
+            this.doMount(sc)
+          }
+        }
+      }
+      // v115 — global interact-latch release: previously the latch only reset in the
+      // pickup branch, so an arrest/dismount press held across a prompt change kept
+      // `interacting` true forever and swallowed the next E action.
+      if (!this.input.state.interact) this.interacting = false
       if (this.store.hud.interactPrompt !== prompt) this.store.patchHud({ interactPrompt: prompt })
     }
 
@@ -2945,7 +3061,7 @@ export class Game {
       const sinceSample = r.lastTargetAt > 0 ? (remotesNow - r.lastTargetAt) / 1000 : 0
       const ex = Math.max(0, Math.min(0.28, sinceSample))
       const stepping = (r.anim === 'walk' || r.anim === 'run') && !r.detained
-      const estSpeed = Math.min(9.4, Math.hypot(r.vx, r.vz))
+      const estSpeed = Math.min(13, Math.hypot(r.vx, r.vz)) // v115 — raised for scooter riders (top 12.5 m/s)
       const rHSpeed = stepping ? estSpeed : 0
       if (rHSpeed > 1.1) {
         r.footPhase += dt * rHSpeed * 1.35 // mirrors the local controller's cadence

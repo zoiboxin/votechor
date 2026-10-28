@@ -127,7 +127,7 @@ export interface Archetype {
 }
 
 // ---------- Networking ----------
-export type AnimName = 'idle' | 'walk' | 'run' | 'jump' | 'fall' | 'land' | 'recover' | 'slide' | 'dazed' | 'detained' | 'celebrate' | 'throw' | 'heal' | 'down' | 'kick' | 'punch' | 'dead'
+export type AnimName = 'idle' | 'walk' | 'run' | 'jump' | 'fall' | 'land' | 'recover' | 'slide' | 'dazed' | 'detained' | 'celebrate' | 'throw' | 'heal' | 'down' | 'kick' | 'punch' | 'dead' | 'ride'
 
 export interface PlayerNetState {
   id: string

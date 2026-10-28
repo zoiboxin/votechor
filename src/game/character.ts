@@ -583,6 +583,9 @@ export class CharacterRig {
   private alertIndicator: THREE.Sprite | null = null
   private scaleMul: number
   private baseY = 0
+  /** v115 — seated-scooter drop (seat sink + engine buzz), applied by the local
+   *  controller AFTER it copies pos into the group (which would erase a direct write). */
+  rideDrop = 0
   /** v114: kid rigs bounce higher — set from the build/archetype in the ctor. */
   private isKidRig = false
 
@@ -1818,6 +1821,22 @@ export class CharacterRig {
         this.headPivot.rotation.x = 0.1
         break
       }
+      case 'ride': {
+        // v115 — seated scooter pose: hips dropped onto the seat, thighs swept
+        // forward to the footboard, arms reaching the handlebar, slight forward
+        // lean + an engine-buzz wobble that quickens with the real speed.
+        this.torsoPivot.rotation.x += (0.2 - this.torsoPivot.rotation.x) * Math.min(1, dt * 10)
+        set(this.legL, -1.22); set(this.legR, -1.22)
+        this.legL.rotation.z = 0.1; this.legR.rotation.z = -0.1
+        set(this.armL, -0.85); set(this.armR, -0.85)
+        this.armL.rotation.z = 0.24; this.armR.rotation.z = -0.24
+        const buzz = Math.sin(this.phase * (5 + this.speedRatio * 9)) * (0.008 + this.speedRatio * 0.02)
+        // NOTE: the drop rides on `rideDrop` (not group.position.y) — the local
+        // controller copies pos into group AFTER update() and would erase it.
+        this.rideDrop += ((-0.3 + buzz) - this.rideDrop) * Math.min(1, dt * 12)
+        this.headPivot.rotation.x += (-0.08 - this.headPivot.rotation.x) * Math.min(1, dt * 8)
+        break
+      }
       default: { // idle
         this.torsoPivot.rotation.x += (0.03 - this.torsoPivot.rotation.x) * Math.min(1, dt * 6)
         this.headPivot.rotation.x = Math.sin(p * 0.5) * 0.04
@@ -1841,10 +1860,15 @@ export class CharacterRig {
     // ever reset them — after any hit or detention the head stayed FROZEN at the
     // last written angle (the user-visible permanently-tilted head). Every state
     // that does not itself pose the head now eases both axes back to neutral.
-    if (anim !== 'dazed' && anim !== 'down' && anim !== 'fall' && anim !== 'detained' && anim !== 'heal') {
+    if (anim !== 'dazed' && anim !== 'down' && anim !== 'fall' && anim !== 'detained' && anim !== 'heal' && anim !== 'ride') {
       const headEase = Math.min(1, dt * 10)
       if (anim !== 'idle') this.headPivot.rotation.x += (0 - this.headPivot.rotation.x) * headEase
       this.headPivot.rotation.z += (0 - this.headPivot.rotation.z) * headEase
+    }
+    // v115 — rideDrop eases back to 0 in every non-ride state (dismount stands up)
+    if (anim !== 'ride' && this.rideDrop !== 0) {
+      this.rideDrop += (0 - this.rideDrop) * Math.min(1, dt * 12)
+      if (Math.abs(this.rideDrop) < 0.002) this.rideDrop = 0
     }
 
     // v114 — same residual-pose hygiene for the NEW charm channels: torso roll +
