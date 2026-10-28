@@ -221,16 +221,27 @@ export default function CharacterSelect({ onBack }: { onBack: () => void }) {
     setArchetype(id)
     uiActions().selectArchetype(id)
     setProfile(profile ? { ...profile, archetype: id } : profile)
+    // v113: picking the Junior Citizen auto-dresses the rig in the 'kid' build
+    // (chibi frame + big head) so the card, preview and in-game body all agree;
+    // the kid build itself stays a free wardrobe choice for every archetype.
+    if (id === 'junior' && build !== 'kid') {
+      setBuild('kid')
+      uiActions().updateCosmetics({ build: 'kid' })
+      if (profile) setProfile({ ...profile, cosmetics: { ...profile.cosmetics, build: 'kid' } })
+    }
     const a = ARCHETYPES.find((x) => x.id === id)
     if (a) notify(`${a.name} energy on — ${a.perk}`, 'squad')
-    // archetype is a separate API field
+    // archetype is a separate API field. React state lags one tick — the same
+    // r23 bugfix persist() carries: when junior just flipped the build to 'kid',
+    // post the override explicitly or the server stores the PREVIOUS build.
+    const buildOverride = (id === 'junior' && build !== 'kid') ? { build: 'kid' } : {}
     ;(async () => {
       setSaving(true)
       try {
         await fetch('/api/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-vc-token': token() ?? '' },
-          body: JSON.stringify({ archetype: id, cosmetics: currentLook() }),
+          body: JSON.stringify({ archetype: id, cosmetics: { ...currentLook(), ...buildOverride } }),
         })
       } catch { /* local-only */ } finally { setSaving(false) }
     })()

@@ -240,8 +240,9 @@ export function emoteIsUnlocked(emote: string | undefined | null, level: number,
 
 export type CosmeticKind = 'hat' | 'hair' | 'face' | 'build' | 'outfit' | 'footwear' | 'gear' | 'held' | 'policeOutfit' | 'policeHat' | 'body'
 
-/** Body shape preset — drives the rig's torso/limb proportions (v32, expanded v85). */
-export type BodyBuild = 'regular' | 'slim' | 'sturdy' | 'athletic' | 'curvy'
+/** Body shape preset — drives the rig's torso/limb proportions (v32, expanded v85,
+ *  v113 adds the cartoon 'kid': narrow chibi frame + big-head boost in the rig). */
+export type BodyBuild = 'regular' | 'slim' | 'sturdy' | 'athletic' | 'curvy' | 'kid'
 
 export const BUILD_CATALOG: CosmeticItem[] = [
   {
@@ -282,6 +283,14 @@ export const BUILD_CATALOG: CosmeticItem[] = [
     label: 'Curvy Build',
     emoji: '💃',
     desc: 'Hips that lead the parade, waist that stops traffic.',
+    unlock: { type: 'free' },
+  },
+  {
+    id: 'kid',
+    kind: 'build',
+    label: 'Junior Kid',
+    emoji: '🧒',
+    desc: 'Half-size hero, full-size courage. Big head, bigger heart.',
     unlock: { type: 'free' },
   },
 ]
@@ -612,7 +621,7 @@ export function resolveRigCosmetics(c: Record<string, unknown> | undefined | nul
 } {
   const gender = c?.gender === 'female' ? 'female' as const : 'male' as const
   const rawBuild = typeof c?.build === 'string' ? c.build : 'regular'
-  const build: BodyBuild = rawBuild === 'slim' || rawBuild === 'sturdy' || rawBuild === 'athletic' || rawBuild === 'curvy' ? (rawBuild as BodyBuild) : 'regular'
+  const build: BodyBuild = rawBuild === 'slim' || rawBuild === 'sturdy' || rawBuild === 'athletic' || rawBuild === 'curvy' || rawBuild === 'kid' ? (rawBuild as BodyBuild) : 'regular'
   return {
     hat: typeof c?.hat === 'string' ? c.hat : 'none',
     hair: typeof c?.hair === 'string' ? c.hair : (gender === 'female' ? 'ponytail' : 'default'),

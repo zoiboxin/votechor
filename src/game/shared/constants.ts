@@ -211,6 +211,14 @@ export const ARCHETYPES: Archetype[] = [
     colors: { shirt: '#b3854a', pants: '#4f4a3c', skin: '#caa07a', hair: '#2b211a', accent: '#4e7d6b' },
     stats: { speedMul: 1, staminaMul: 1, healthBonus: 0, scale: 1 },
   },
+  {
+    // v113: the kid returns (cartoon rebuild) — chibi proportions come from the
+    // rig's 'kid' handling (big head + 0.8 height cap); stats are honest kid perks.
+    id: 'junior', name: 'Junior Citizen', desc: 'School bag bigger than the protester. Spirit bigger than the school bag.',
+    perk: 'Quick little legs (+5% speed) + recess-energy stamina (+20% regen)',
+    colors: { shirt: '#e8b64c', pants: '#6b4a32', skin: '#d9a06b', hair: '#241a12', accent: '#b54a32' },
+    stats: { speedMul: 1.05, staminaMul: 1.2, healthBonus: 0, scale: 0.8 },
+  },
 ]
 
 export const archetypeById = (id: string): Archetype => ARCHETYPES.find(a => a.id === id) ?? ARCHETYPES[0]

@@ -141,7 +141,7 @@ export interface RigOptions {
   footwear?: string // 'shoes' | 'chappal' | 'glow' · male: 'boots' · female: 'heels' | 'juttis'
   gear?: string     // 'none' | 'backpack' | 'jhola' | 'bannerroll' | 'dhol' | 'umbrella'
   held?: string     // 'none' | 'sign' | 'banner' | 'flag' | 'bat' | 'lathi' | 'shoppingbag' | 'megaphone'
-  build?: string // 'regular' | 'slim' | 'sturdy' | 'athletic' | 'curvy' — body shape (normalized inside the rig)
+  build?: string // 'regular' | 'slim' | 'sturdy' | 'athletic' | 'curvy' | 'kid' — body shape (normalized inside the rig; kid = chibi frame + big head)
 }
 
 function mat(color: string, flat = true): THREE.MeshStandardMaterial {
@@ -318,6 +318,18 @@ function bodyProfile(female: boolean, build: BodyBuild): BodyProfile {
     p.hipTop *= 1.14
     p.hipBottom *= 1.18
     p.legW *= 1.1
+  }
+  if (build === 'kid') {
+    // v113: cartoon kid — a narrow chibi frame on BOTH body plans (the big-head
+    // boost + 0.8 height cap live in the constructor). Shoulders drop, everything
+    // thins out; the archetype's own palette keeps the school-kid look.
+    p.shoulder *= 0.78
+    p.chest *= 0.78
+    p.waist *= 0.8
+    p.hipTop *= 0.8
+    p.hipBottom *= 0.78
+    p.armW *= 0.78
+    p.legW *= 0.8
   }
   return p
 }
@@ -572,7 +584,11 @@ export class CharacterRig {
     // smooth hair with a slight sheen (flat caps read like plastic helmets)
     const hair = new THREE.MeshStandardMaterial({ color: colors.hair, roughness: 0.55, metalness: 0.05 })
     const isFemale = opts.gender === 'female'
-    const build: BodyBuild = opts.build === 'slim' || opts.build === 'sturdy' || opts.build === 'athletic' || opts.build === 'curvy' ? opts.build : 'regular'
+    const build: BodyBuild = opts.build === 'slim' || opts.build === 'sturdy' || opts.build === 'athletic' || opts.build === 'curvy' || opts.build === 'kid' ? opts.build : 'regular'
+    // v113: cartoon kid proportions — the Junior Citizen archetype (or the 'kid'
+    // build) gets a big-head chibi boost (face/hair/hats all live under headPivot,
+    // so one scale reads on every feature) and the whole rig caps at 0.8 height.
+    const isKid = build === 'kid' || opts.archetype === 'junior'
 
     // hierarchy: group -> torsoPivot (contains torso, head, arms) ; legs on group
     this.group.add(this.torsoPivot)
@@ -654,6 +670,7 @@ export class CharacterRig {
     // head
     this.headPivot.position.y = 0.62
     this.torsoPivot.add(this.headPivot)
+    if (isKid) this.headPivot.scale.setScalar(1.3)
     const head = new THREE.Mesh(G.head, skinHead)
     head.position.y = 0.1
     head.castShadow = true
@@ -1535,6 +1552,9 @@ export class CharacterRig {
     }
 
     this.group.scale.setScalar(this.scaleMul)
+    // v113 kid height cap — the Junior archetype already ships scale 0.8; a 'kid'
+    // build worn by a taller archetype (uncle!) still reads as a child.
+    if (isKid) this.group.scale.setScalar(Math.min(this.scaleMul, 0.8))
   }
 
   private makeTextTexture(text: string): THREE.CanvasTexture {
