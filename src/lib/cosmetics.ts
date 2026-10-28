@@ -667,6 +667,37 @@ export function randomFreeCosmetics(rand: () => number = Math.random): Record<st
   return out
 }
 
+/** task 111 — deterministic look for AOI-discovered season bots. Season bots that
+ *  enter a client's view through the 10 Hz AOI broadcast never carry cosmetics
+ *  (payload economy: only the join ack + playerjoined carry them), so without
+ *  this they rendered as flat Classic rigs — 61 of 99 bots in the field. The
+ *  look is a PURE function of the bot id (FNV-1a → mulberry32): every client
+ *  derives the identical gender/body/skin for the same bot, zero payload cost,
+ *  stable across reconnects within the season. Real networked cosmetics always
+ *  win — `base` fields are only FILLED when missing. */
+export function botCosmeticsFromId(id: string, base?: Record<string, string | boolean> | null): Record<string, string | boolean> {
+  let h = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 0x01000193) }
+  let s = h >>> 0
+  const rand = () => {
+    s |= 0; s = (s + 0x6d2b79f5) | 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const genderRoll = rand()
+  const poolRoll = rand()
+  const bodyRoll = rand()
+  const skinRoll = rand()
+  const gender: 'male' | 'female' = base?.gender === 'female' ? 'female' : base?.gender === 'male' ? 'male' : genderRoll < 0.5 ? 'female' : 'male'
+  const pool = poolRoll < 0.88 ? BOT_BODY_POOLS[gender] : BOT_BODY_FLAVOR[gender]
+  const out: Record<string, string | boolean> = { ...base }
+  if (!out.gender) out.gender = gender
+  if (!out.body) out.body = pool[Math.floor(bodyRoll * pool.length)] ?? BOT_BODY_POOLS[gender][0]
+  if (!out.skinTone) out.skinTone = SKIN_TONES[Math.floor(skinRoll * SKIN_TONES.length)].hex
+  return out
+}
+
 /** Rig-facing cosmetics view — defaults resolved so the rig never sees undefined ids.
  *  Hair default is gender-aware: female rigs get the ponytail, male rigs the classic cut. */
 export function resolveRigCosmetics(c: Record<string, unknown> | undefined | null): {

@@ -44,7 +44,7 @@ import { SecondaryMotion } from './secondary-motion'
 import { FacialRig } from './facial-rig'
 import type { LocoState } from './anim'
 import { resolveAvatarLook, applyAvatarLook, bodyModelOf, effectiveBodyOf, resolveGlbUrl, KID_SCALE, HUMAN_CHILD_SCALE, type BodyModel } from './avatar-look'
-import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors } from '@/lib/cosmetics'
+import { emoteIsUnlocked, unlockedEmoteIds, EMOTE_CATALOG, policeUniformColors, botCosmeticsFromId } from '@/lib/cosmetics'
 
 /** v51 — soft-escape window: after the LAST chaser drops off, the WANTED badge
  *  lingers dimmed ("losing them…") for this long before clearing itself. Long
@@ -428,7 +428,9 @@ export class Game {
     }
     this.camRig = new ThirdPersonCamera(this.engine.camera, this.physics)
 
-    this.npcs = new NpcSystem(this.world, this.physics, 'high')
+    // task 111 — authority NPCs wear the pack's police-side GLBs (SWAT / Commando /
+    // khaki Officer); the manager is shared so the two pack assets load once
+    this.npcs = new NpcSystem(this.world, this.physics, 'high', this.glbMgr)
     this.npcs.farLod = useGameStore.getState().settings.distanceCulling === true // v50 default ON; the culler fail-safe is the escape hatch
     this.engine.scene.add(this.npcs.group)
     // offline solo: police captures + melee hits come from the local sim
@@ -1499,7 +1501,11 @@ export class Game {
 
   private addRemote(p: import('./shared/types').PlayerNetState) {
     // data-only entry — the rig budget pass (ensureRemoteRigs) attaches real characters
-    const cosmetics = p.cosmetics ?? this.pendingCosmetics.get(p.id)
+    let cosmetics = p.cosmetics ?? this.pendingCosmetics.get(p.id)
+    // task 111 — season bots discovered through the AOI broadcast carry no cosmetics
+    // (payload economy), which left 61/99 bots on the flat Classic rig. Fill their
+    // look from the deterministic id roll — real networked cosmetics always win.
+    if (p.id.startsWith('bot_')) cosmetics = botCosmeticsFromId(p.id, cosmetics)
     const role = p.role ?? this.pendingRoles.get(p.id)
     const r: RemoteEntry = { rig: null as import('./character').CharacterRig | null, glb: null, target: { x: p.x, y: p.y, z: p.z, ry: p.ry }, anim: p.anim as AnimName, name: p.name, health: p.health, detained: p.detained, archetype: p.archetype, role, cosmetics, lastSeen: Date.now(), animAcc: 0, vx: 0, vz: 0, lastTargetAt: Date.now(), footPhase: 0 }
     this.remotePlayers.set(p.id, r)
@@ -4327,6 +4333,7 @@ export class Game {
     this.net.leave()
     this.crowd?.dispose()
     this.crowd = null
+    if (this.npcs) { this.npcs.disposeGlb(); this.engine?.scene.remove(this.npcs.group) } // task 111 — GLB officers go with the world
     if (this.animals) { this.animals.dispose(); this.engine?.scene.remove(this.animals.group) }
     if (this.wildlife) { this.wildlife.dispose(); this.engine?.scene.remove(this.wildlife.group) }
     if (this.forest) { this.forest.dispose(); this.engine?.scene.remove(this.forest.group) }

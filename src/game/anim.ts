@@ -108,7 +108,10 @@ export const CLIP_FALLBACK: Record<LocoState, string[]> = {
   detained: ['detained', 'idle'],
   recover: ['recover', 'idle'],
   celebrate: ['celebrate', 'wave'],
-  throw: ['throw'],
+  // task 111 — the arrest strike: the pack has no 'Throw' clip, but every pack
+  // body ships Punch/Kick one-shots — the capture window reads as a baton
+  // strike instead of a frozen idle (procedural rigs keep their own throw pose).
+  throw: ['throw', 'punch_left', 'kick_left', 'punch_right', 'kick_right'],
   heal: ['heal'],
   // task 105 — directional gaits + combat one-shots + KO (imported packs ship
   // them; in-house casts resolve the fallback and keep their current look)

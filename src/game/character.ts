@@ -1633,10 +1633,13 @@ export class CharacterRig {
    * Hide the procedural BODY while keeping the name tag + alert sprites rendered —
    * used when a High-Fi GLB model replaces the box body (remote players keep their
    * name tag overhead). Only top-level body pivots are toggled; sprites are skipped.
+   * task 111 — a GLB child flagged vcGlbBody (NPC officers parent their GLB under
+   * the rig group) owns its own visibility and is never toggled from here.
    */
   setBodyVisible(v: boolean) {
     for (const child of this.group.children) {
       if (child === this.nameSprite || child === this.alertIndicator) continue
+      if ((child.userData as { vcGlbBody?: boolean } | undefined)?.vcGlbBody) continue
       child.visible = v
     }
   }

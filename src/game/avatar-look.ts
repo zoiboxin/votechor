@@ -344,6 +344,34 @@ const BEACH_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'skin' }
  *  everything else (clothes, hair, armor, vests, crowns) stays baked. */
 const PACK_MATERIAL_MAP: Record<string, keyof AvatarPalette> = { Skin: 'skin' }
 
+// ---------- task 111 — authority-NPC GLB bodies (SWAT / Commando / Officer) ----------
+/**
+ * The world's patrolling officers used to be flat procedural rigs. They now wear
+ * the pack's police-side GLBs, rolled into three ranks (the user's "swat, commando
+ * and police" mix):
+ *  - 'swat'     Swat_Man baked tactical (visor + vest read SWAT on sight)
+ *  - 'commando' Soldier_Female baked military field kit
+ *  - 'officer'  EITHER model re-tinted to the khaki duty uniform — the pack's
+ *               police-side materials are plain colors (no textures), so the
+ *               uniform re-color is a safe MATERIAL-name tint. Swat_Black (the
+ *               chest rig) goes navy accent, Grey (pants) goes duty brown.
+ * Missing material names are simply never matched (soldier-female has no
+ * Swat_Black/Visor) — one map serves both models.
+ */
+export type PoliceNpcRank = 'swat' | 'commando' | 'officer'
+
+const POLICE_NPC_MATERIAL_MAPS: Record<PoliceNpcRank, Record<string, keyof AvatarPalette> | null> = {
+  swat: null, // baked tactical — skin tone only
+  commando: null, // baked military — skin tone only
+  officer: { Swat: 'shirt', Grey: 'pants', Swat_Black: 'accent' },
+}
+
+/** Rank-aware look application for authority NPCs (same idempotent tint contract
+ *  as applyAvatarLook — pristine per-instance clones, safe to call once). */
+export function applyPoliceNpcLook(group: THREE.Object3D, look: AvatarLook, model: PackBodyId, rank: PoliceNpcRank) {
+  tintGroup(group, look.palette, POLICE_NPC_MATERIAL_MAPS[rank] ?? PACK_MATERIAL_MAP)
+}
+
 function tintGroup(group: THREE.Object3D, pal: AvatarPalette, materialMap?: Record<string, keyof AvatarPalette>) {
   group.traverse((o) => {
     const m = o as THREE.Mesh
